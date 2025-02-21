@@ -35,6 +35,8 @@ The codes of this repo are contributed by:
 
 ### GTSAM
 
+### Livox Driver
+
 ### [gnss_comm](https://github.com/HKUST-Aerial-Robotics/gnss_comm) with its [instuction](https://github.com/HKUST-Aerial-Robotics/gnss_comm#2-build-gnss_comm-library)
 
 ## Make
@@ -47,6 +49,7 @@ git clone https://github.com/Joanna-HE/LIGO..git
 ### compile the package
 ```
 cd ~/catkin_ws/
+source /PATH/TO/LIVOX_DRIVER/DEVEL/.setup.bash
 source /PATH/TO/GNSS_COMM/DEVEL/.setup.bash
 catkin_make
 source ~/catkin_ws/devel/setup.bash
