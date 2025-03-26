@@ -73,13 +73,13 @@ The time difference between LiDAR and IMU is zero, and between LiDAR and GNSS me
 
 ## Prerequisites
 
-### C++14 Compier
-
-### ROS noetic
+We test LIGO on ubuntu 20.04 with ROS noetic and C++17 compier.
 
 ### Eigen 3
 
-### GTSAM
+### GTSAM 4
+
+### opencv4.2.0 and pcl1.10
 
 ### Livox Driver
 
