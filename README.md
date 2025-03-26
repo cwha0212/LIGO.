@@ -73,17 +73,13 @@ The time difference between LiDAR and IMU is zero, and between LiDAR and GNSS me
 
 ## Prerequisites
 
-We test LIGO on ubuntu 20.04 with ROS noetic and C++17 compier.
+We test LIGO on ubuntu 20.04 with ROS noetic, and C++17 compiler & Eigen 3 & GTSAM 4 & opencv 4.2.0 & pcl 1.10  
 
-### Eigen 3
+### Install Boost using command sudo apt-get install libboost-all-dev
 
-### GTSAM 4
+### Install [Livox Driver](https://github.com/Livox-SDK/livox_ros_driver)
 
-### opencv4.2.0 and pcl1.10
-
-### Livox Driver
-
-### [gnss_comm](https://github.com/HKUST-Aerial-Robotics/gnss_comm) with its [instuction](https://github.com/HKUST-Aerial-Robotics/gnss_comm#2-build-gnss_comm-library)
+### Install [gnss_comm](https://github.com/HKUST-Aerial-Robotics/gnss_comm) with its [instuction](https://github.com/HKUST-Aerial-Robotics/gnss_comm#2-build-gnss_comm-library)
 
 ## Make
 
