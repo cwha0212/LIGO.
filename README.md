@@ -30,16 +30,16 @@ The codes of this repo are contributed by:
 
 <div align="center">
     <div align="center">
-        <img src="https://github.com/Joanna-HE/LIGO./blob/main/image/hardware.jpg" width = 75% >
+        <img src="https://github.com/Joanna-HE/LIGO./blob/main/image/hardware.jpg" width = 30% >
     </div>
 </div>
 
-Platform: DJI Matrice 300
-Onboard computer: DJI Manifold 2-c 256G, CPU: Intel i7-8550U
-LiDAR: Livox Mid360 and Livox Avia
-IMU: Built-in IMU of Livox LiDAR
-GNSS receiver: u-blox C099-F9P-2
-GNSS antenna: B4QA4GGGB
+Platform: DJI Matrice 300   
+Onboard computer: DJI Manifold 2-c 256G, CPU: Intel i7-8550U  
+LiDAR: Livox Mid360 and Livox Avia  
+IMU: Built-in IMU of Livox LiDAR  
+GNSS receiver: u-blox C099-F9P-2  
+GNSS antenna: B4QA4GGGB  
 
 ## Recording rates
 
