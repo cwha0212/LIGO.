@@ -30,7 +30,7 @@ The codes of this repo are contributed by:
 
 <div align="center">
     <div align="center">
-        <img src="[https://github.com/Joanna-HE/LIGO./blob/main/image/hardware.jpg]" width = 75% >
+        <img src="https://github.com/Joanna-HE/LIGO./blob/main/image/hardware.jpg" width = 75% >
     </div>
 </div>
 
