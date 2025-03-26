@@ -27,7 +27,13 @@ The codes of this repo are contributed by:
 # Hardware setups for self-collected datasets
 
 ## Setup
-![Hardware](https://github.com/Joanna-HE/LIGO./blob/main/image/hardware.jpg?w=400&h=300)
+
+<div align="center">
+    <div align="center">
+        <img src="[https://github.com/Joanna-HE/LIGO/blob/main/image/Sample.png](https://github.com/Joanna-HE/LIGO./blob/main/image/hardware.jpg)" width = 75% >
+    </div>
+</div>
+
 Platform: DJI Matrice 300
 Onboard computer: DJI Manifold 2-c 256G, CPU: Intel i7-8550U
 LiDAR: Livox Mid360 and Livox Avia
