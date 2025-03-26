@@ -69,6 +69,10 @@ PPS time info: /ublox_driver/time_pulse_info
 PPS: Livox LiDARs can receive pps and gprmc given by the GNSS receiver  
 The time difference between LiDAR and IMU is zero, and between LiDAR and GNSS message is 18.0 s  
 
+## RTK solution
+
+Please follow the *Differential GNSS* section shown in [ublox driver](https://github.com/Joanna-HE/ublox_driver) to get the differential GNSS solution online or offline. The self-collected datasets get the online RTK solution which are saved in the topic '/ublox_driver/receiver_pvt', the value of the flag bit as 2 indicates the fix RTK solution.
+
 # Build
 
 ## Prerequisites
