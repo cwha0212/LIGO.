@@ -28,8 +28,8 @@ The codes of this repo are contributed by:
 
 ## Setup
 
-<div align="center">
-    <div align="center">
+<div align="left">
+    <div align="left">
         <img src="https://github.com/Joanna-HE/LIGO./blob/main/image/hardware.jpg" width = 30% >
     </div>
 </div>
@@ -43,31 +43,31 @@ GNSS antenna: B4QA4GGGB
 
 ## Recording rates
 
-LiDAR: 10Hz
-IMU: 200Hz
-GNSS: 10Hz
-RTK: 10Hz
+LiDAR: 10Hz  
+IMU: 200Hz  
+GNSS: 10Hz  
+RTK: 10Hz  
 
 ## Recording software:
 
-Operating system: Ubuntu 20.04
-IMU and LiDAR driver: Livox driver
-GNSS driver: [ublox driver](https://github.com/Joanna-HE/ublox_driver)
+Operating system: Ubuntu 20.04  
+IMU and LiDAR driver: Livox driver  
+GNSS driver: [ublox driver](https://github.com/Joanna-HE/ublox_driver)  
 
 ## ROS topics recorded
 
-IMU: /livox/imu
-LiDAR: /livox/lidar
-RAW GNSS: /ublox_driver/range_meas
-GNSS EPHEM: /ublox_driver/ephem and /ublox_driver/glo_ephem
-IONO PARAMETER: /ublox_driver/iono_params
-Onboard pos solution of ublox: /ublox_driver/receiver_pvt and /ublox_driver/receiver_lla
-PPS time info: /ublox_driver/time_pulse_info
+IMU: /livox/imu  
+LiDAR: /livox/lidar  
+RAW GNSS: /ublox_driver/range_meas  
+GNSS EPHEM: /ublox_driver/ephem and /ublox_driver/glo_ephem  
+IONO PARAMETER: /ublox_driver/iono_params  
+Onboard pos solution of ublox: /ublox_driver/receiver_pvt and /ublox_driver/receiver_lla  
+PPS time info: /ublox_driver/time_pulse_info  
 
 ## Time synchronization
 
-PPS: Livox LiDARs can receive pps and gprmc given by the GNSS receiver
-The time difference between LiDAR and IMU is zero, and between LiDAR and GNSS message is 18.0 s
+PPS: Livox LiDARs can receive pps and gprmc given by the GNSS receiver  
+The time difference between LiDAR and IMU is zero, and between LiDAR and GNSS message is 18.0 s  
 
 # Build
 
