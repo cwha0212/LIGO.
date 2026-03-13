@@ -34,17 +34,18 @@
  *  POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <nav_msgs/Odometry.h>
+#include <nav_msgs/msg/odometry.hpp>
+#ifdef LIGO_WITH_URBANNAV_MSG
 #include <Urbannav_process/nlosExclusion/GNSS_Raw_Array.h>
 #include <Urbannav_process/nlosExclusion/GNSS_Raw.h>
 #include <Urbannav_process/nlosExclusion/GNSS_Raw_mf.h>
+#endif
 
 #include <gnss_comm/gnss_ros.hpp>
 #include <gnss_comm/gnss_utility.hpp>
-#include <gnss_comm/GnssPVTSolnMsg.h>
 #include <gnss_comm/gnss_spp.hpp>
 
-#include <sensor_msgs/NavSatFix.h>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <mutex>
 #include <Eigen/Eigen>
 #include <Eigen/Core>
@@ -146,15 +147,17 @@ extern double last_gnss_time;
 extern std::mutex m_buf;
 extern GNSS_Tools m_GNSS_Tools;
 extern Eigen::Vector3d m_pose_enu; // pose in enu from initialization
-extern std::deque<nav_msgs::Odometry> GNSSQueue;
+extern std::deque<nav_msgs::msg::Odometry> GNSSQueue;
 
 extern std::vector<Eigen::Vector3d> sat_pos;
 extern std::vector<Eigen::Vector3d> sat_vel;
 
-void rtklibOdomHandler(const nav_msgs::Odometry::ConstPtr& odomIn); //, Eigen::Vector3d &first_lla_pvt, Eigen::Vector3d &first_xyz_ecef_pvt, std::vector<double> &pvt_time, 
+void rtklibOdomHandler(const nav_msgs::msg::Odometry::ConstSharedPtr &odomIn); //, Eigen::Vector3d &first_lla_pvt, Eigen::Vector3d &first_xyz_ecef_pvt, std::vector<double> &pvt_time, 
                         // std::vector<Eigen::Vector3d> &pvt_holder, std::vector<int> &diff_holder, std::vector<int> &float_holder);
+#ifdef LIGO_WITH_URBANNAV_MSG
 void rtklib_gnss_meas_callback(const nlosExclusion::GNSS_Raw_ArrayConstPtr &meas_msg, std::queue<std::vector<ObsPtr>> &gnss_meas_vec);
 bool gnssRawArray2map(nlosExclusion::GNSS_Raw_Array gnss_data, std::map<int, nlosExclusion::GNSS_Raw> &epochGnssMap);
+#endif
 bool calVar(ObsPtr &obs);
 double eleSRNVarCal(double ele, double snr);
 void GtfromTXT_URBAN(const std::string &gt_filepath, std::vector<Eigen::Vector4d> &gt);

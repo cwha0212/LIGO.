@@ -10,7 +10,7 @@
 
 #ifndef GNSS_Tools_HPP
 #define GNSS_Tools_HPP
-#include <Urbannav_process/nlosExclusion/GNSS_Raw_Array.h>
+// Optional: Urbannav (ROS1) message types are not required for core GNSS tools.
 // google implements commandline flags processing.
 // #include <gflags/gflags.h>
 // google loging tools

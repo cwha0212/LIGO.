@@ -35,6 +35,8 @@
  */
 
 #include "parameters.h"
+#include <fstream>
+#include <chrono>
 
 typename curvefitter::TrajectoryManager<4>::Ptr traj_manager = std::make_shared<curvefitter::TrajectoryManager<4>>();
 bool is_first_frame = true;
@@ -109,75 +111,75 @@ MeasureGroup Measures;
 
 ofstream fout_out, fout_rtk, fout_global, fout_ppp; 
 
-void readParameters(ros::NodeHandle &nh)
+void readParameters(rclcpp::Node * node)
 {
   p_pre.reset(new Preprocess());
-//   Init_LI.reset(new LI_Init());
   p_imu.reset(new ImuProcess());
   p_gnss.reset(new GNSSProcess());
   p_nmea.reset(new NMEAProcess());
-  nh.param<bool>("prop_at_freq_of_imu", prop_at_freq_of_imu, 1);
-  nh.param<bool>("check_satu", check_satu, 1);
-  nh.param<int>("init_map_size", init_map_size, 100);
-  nh.param<bool>("space_down_sample", space_down_sample, 1);
-  nh.param<double>("mapping/satu_acc",satu_acc,3.0);
-  nh.param<double>("mapping/satu_gyro",satu_gyro,35.0);
-  nh.param<double>("mapping/acc_norm",acc_norm,1.0);
-  nh.param<float>("mapping/plane_thr", plane_thr, 0.05f);
-  nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
-  nh.param<std::string>("common/lid_topic",lid_topic,"/livox/lidar");
-  nh.param<std::string>("common/imu_topic", imu_topic,"/livox/imu");
-  nh.param<bool>("common/con_frame",con_frame,false);
-  nh.param<int>("common/con_frame_num",con_frame_num,1);
-  nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
-  nh.param<double>("filter_size_map",filter_size_map_min,0.5);
-  nh.param<float>("mapping/det_range",DET_RANGE,300.f);
-  nh.param<double>("mapping/fov_degree",fov_deg,180);
-  nh.param<bool>("mapping/imu_en",imu_en,true);
-  nh.param<bool>("mapping/init_with_imu",init_with_imu,true);
-  nh.param<double>("mapping/imu_time_inte",imu_time_inte,0.005);
-  nh.param<double>("mapping/lidar_meas_cov",laser_point_cov,0.1);
-  nh.param<double>("mapping/acc_cov_input",acc_cov_input,0.1);
-  nh.param<double>("mapping/vel_cov",vel_cov,20);
-  nh.param<double>("mapping/gyr_cov_input",gyr_cov_input,0.1);
-  nh.param<double>("mapping/gyr_cov_output",gyr_cov_output,0.1);
-  nh.param<double>("mapping/acc_cov_output",acc_cov_output,0.1);
-  nh.param<double>("mapping/b_gyr_cov",b_gyr_cov,0.0001);
-  nh.param<double>("mapping/b_acc_cov",b_acc_cov,0.0001);
-  nh.param<double>("mapping/imu_meas_acc_cov",imu_meas_acc_cov,0.1);
-  nh.param<double>("mapping/imu_meas_omg_cov",imu_meas_omg_cov,0.1);
-  nh.param<double>("preprocess/blind", p_pre->blind, 1.0);
-  nh.param<double>("preprocess/det_range", p_pre->det_range, 1.0);
-  nh.param<int>("preprocess/lidar_type", lidar_type, 1);
-  nh.param<int>("gnss/gt_file_type", gt_file_type, 1);
-  nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
-  nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
-  nh.param<int>("preprocess/timestamp_unit", p_pre->time_unit, 1);
-  nh.param<double>("mapping/match_s", match_s, 81);
-  nh.param<std::vector<double>>("mapping/gravity", gravity, std::vector<double>());
-  nh.param<std::vector<double>>("mapping/gravity_init", gravity_init, std::vector<double>());
-  nh.param<std::vector<double>>("mapping/extrinsic_T", extrinT, std::vector<double>());
-  nh.param<std::vector<double>>("nmea/ppp_anc", ppp_anc, std::vector<double>());
-  nh.param<std::vector<double>>("mapping/extrinsic_R", extrinR, std::vector<double>());
-  nh.param<bool>("odometry/publish_odometry_without_downsample", publish_odometry_without_downsample, false);
-  nh.param<bool>("publish/path_en",path_en, true);
-  nh.param<bool>("publish/scan_publish_en",scan_pub_en,1);
-  nh.param<bool>("publish/scan_bodyframe_pub_en",scan_body_pub_en,1);
-  nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
-  nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
-  nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
 
-  nh.param<double>("mapping/lidar_time_inte",lidar_time_inte,0.1);
-//   nh.param<double>("mapping/lidar_meas_cov",laser_point_cov,0.1);
-  nh.param<bool>("mapping/dyn_filter",dyn_filter,1);
-  nh.param<double>("mapping/dyn_filter_resolution",dyn_filter_resolution,0.1);
-  // nh.param<double>("gnss/odo_weight",p_gnss->odo_weight, 0.1);
-  nh.param<double>("gnss/gnss_ekf_noise",gnss_ekf_noise,0.01);
-  nh.param<vector<double>>("gnss/gnss_extrinsic_T", extrinT_gnss, vector<double>());
-  nh.param<vector<double>>("gnss/gnss_extrinsic_R", extrinR_gnss, vector<double>());
-
-  nh.param<float>("mapping/ivox_grid_resolution", ivox_options_.resolution_, 0.2);
-  nh.param<int>("ivox_nearby_type", ivox_nearby_type, 18);
+  auto get_param = [node](const std::string & name, auto default_val) -> decltype(default_val) {
+    node->declare_parameter(name, default_val);
+    return node->get_parameter(name).get_value<decltype(default_val)>();
+  };
+  prop_at_freq_of_imu = get_param("prop_at_freq_of_imu", true);
+  check_satu = get_param("check_satu", true);
+  init_map_size = get_param("init_map_size", 100);
+  space_down_sample = get_param("space_down_sample", true);
+  satu_acc = get_param("mapping.satu_acc", 3.0);
+  satu_gyro = get_param("mapping.satu_gyro", 35.0);
+  acc_norm = get_param("mapping.acc_norm", 1.0);
+  plane_thr = get_param("mapping.plane_thr", 0.05f);
+  p_pre->point_filter_num = get_param("point_filter_num", 2);
+  lid_topic = get_param("common.lid_topic", std::string("/livox/lidar"));
+  imu_topic = get_param("common.imu_topic", std::string("/livox/imu"));
+  con_frame = get_param("common.con_frame", false);
+  con_frame_num = get_param("common.con_frame_num", 1);
+  filter_size_surf_min = get_param("filter_size_surf", 0.5);
+  filter_size_map_min = get_param("filter_size_map", 0.5);
+  DET_RANGE = get_param("mapping.det_range", 300.f);
+  fov_deg = get_param("mapping.fov_degree", 180.0);
+  imu_en = get_param("mapping.imu_en", true);
+  init_with_imu = get_param("mapping.init_with_imu", true);
+  imu_time_inte = get_param("mapping.imu_time_inte", 0.005);
+  laser_point_cov = get_param("mapping.lidar_meas_cov", 0.1);
+  acc_cov_input = get_param("mapping.acc_cov_input", 0.1);
+  vel_cov = get_param("mapping.vel_cov", 20.0);
+  gyr_cov_input = get_param("mapping.gyr_cov_input", 0.1);
+  gyr_cov_output = get_param("mapping.gyr_cov_output", 0.1);
+  acc_cov_output = get_param("mapping.acc_cov_output", 0.1);
+  b_gyr_cov = get_param("mapping.b_gyr_cov", 0.0001);
+  b_acc_cov = get_param("mapping.b_acc_cov", 0.0001);
+  imu_meas_acc_cov = get_param("mapping.imu_meas_acc_cov", 0.1);
+  imu_meas_omg_cov = get_param("mapping.imu_meas_omg_cov", 0.1);
+  p_pre->blind = get_param("preprocess.blind", 1.0);
+  p_pre->det_range = get_param("preprocess.det_range", 1.0);
+  lidar_type = get_param("preprocess.lidar_type", 1);
+  gt_file_type = get_param("gnss.gt_file_type", 1);
+  p_pre->N_SCANS = get_param("preprocess.scan_line", 16);
+  p_pre->SCAN_RATE = get_param("preprocess.scan_rate", 10);
+  p_pre->time_unit = get_param("preprocess.timestamp_unit", 1);
+  match_s = get_param("mapping.match_s", 81.0);
+  gravity = get_param("mapping.gravity", std::vector<double>());
+  gravity_init = get_param("mapping.gravity_init", std::vector<double>());
+  extrinT = get_param("mapping.extrinsic_T", std::vector<double>());
+  ppp_anc = get_param("nmea.ppp_anc", std::vector<double>());
+  extrinR = get_param("mapping.extrinsic_R", std::vector<double>());
+  publish_odometry_without_downsample = get_param("odometry.publish_odometry_without_downsample", false);
+  path_en = get_param("publish.path_en", true);
+  scan_pub_en = get_param("publish.scan_publish_en", true);
+  scan_body_pub_en = get_param("publish.scan_bodyframe_pub_en", true);
+  runtime_pos_log = get_param("runtime_pos_log_enable", false);
+  pcd_save_en = get_param("pcd_save.pcd_save_en", false);
+  pcd_save_interval = get_param("pcd_save.interval", -1);
+  lidar_time_inte = get_param("mapping.lidar_time_inte", 0.1);
+  dyn_filter = get_param("mapping.dyn_filter", true);
+  dyn_filter_resolution = get_param("mapping.dyn_filter_resolution", 0.1);
+  gnss_ekf_noise = get_param("gnss.gnss_ekf_noise", 0.01);
+  extrinT_gnss = get_param("gnss.gnss_extrinsic_T", std::vector<double>());
+  extrinR_gnss = get_param("gnss.gnss_extrinsic_R", std::vector<double>());
+  ivox_options_.resolution_ = get_param("mapping.ivox_grid_resolution", 0.2f);
+  ivox_nearby_type = get_param("ivox_nearby_type", 18);
   if (ivox_nearby_type == 0) {
     ivox_options_.nearby_type_ = IVoxType::NearbyType::CENTER;
   } else if (ivox_nearby_type == 6) {
@@ -187,103 +189,108 @@ void readParameters(ros::NodeHandle &nh)
   } else if (ivox_nearby_type == 26) {
     ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY26;
   } else {
-    LOG(WARNING) << "unknown ivox_nearby_type, use NEARBY18";
     ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY18;
   }
-    p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
-    nh.param<bool>("gnss/gnss_enable", GNSS_ENABLE, false);
-    cout << "gnss enable:" << GNSS_ENABLE << endl;
-    if (GNSS_ENABLE)
-    {
-        nh.param<double>("gnss/psr_dopp_weight",p_gnss->relative_sqrt_info, 10);
-        nh.param<double>("gnss/cp_weight",p_gnss->cp_weight, 0.1);
-        nh.param<bool>("gnss/outlier_rejection", p_gnss->p_assign->outlier_rej, false);
-        nh.param<string>("gnss/gnss_ephem_topic",gnss_ephem_topic,"/ublox_driver/ephem");
-        nh.param<string>("gnss/gnss_glo_ephem_topic",gnss_glo_ephem_topic,"/ublox_driver/glo_ephem");
-        nh.param<string>("gnss/gnss_meas_topic",gnss_meas_topic,"/ublox_driver/range_meas");
-        nh.param<string>("gnss/ephem_file_name",ephem_fname,"BRDM00DLR_S_20221870000_01D_MN.rnx");
-        nh.param<string>("gnss/gt_file_name",gt_fname,"UrbanNav_TST_GT_raw.txt");
-        nh.param<string>("nmea/ppp_file_name",ppp_fname,"TST.pos");
-        nh.param<string>("gnss/gnss_iono_params_topic",gnss_iono_params_topic,"/ublox_driver/iono_params");
-        nh.param<string>("gnss/rtk_pvt_topic",rtk_pvt_topic,"/ublox_driver/receiver_pvt");
-        nh.param<string>("gnss/rtk_lla_topic",rtk_lla_topic,"/ublox_driver/receiver_lla");
-        nh.param<string>("gnss/gnss_tp_info_topic",gnss_tp_info_topic,"/ublox_driver/time_pulse_info");
-        nh.param<vector<double>>("gnss/gnss_iono_default_parameters",default_gnss_iono_params,vector<double>());
-        p_gnss->gravity_init << VEC_FROM_ARRAY(gravity);
-        nh.param<bool>("gnss/gnss_local_online_sync",gnss_local_online_sync,1);
-        if (gnss_local_online_sync)
-        {
-            nh.param<string>("gnss/local_trigger_info_topic",local_trigger_info_topic,"/external_trigger");
-        }
-        else
-        {
-            nh.param<double>("gnss/gnss_local_time_diff",gnss_local_time_diff, 18.0);
-            time_diff_gnss_local = gnss_local_time_diff;
-        }
-        nh.param<double>("gnss/gnss_elevation_thres",p_gnss->p_assign->gnss_elevation_threshold, 30.0);
-        nh.param<double>("gnss/prior_noise",p_gnss->p_assign->prior_noise, 0.010);
-        nh.param<double>("gnss/marg_noise",p_gnss->p_assign->marg_noise, 0.010);
-        nh.param<double>("gnss/b_acc_noise",p_gnss->pre_integration->acc_w, 0.10);
-        nh.param<double>("gnss/b_omg_noise",p_gnss->pre_integration->gyr_w, 0.10);
-        nh.param<double>("gnss/acc_noise",p_gnss->pre_integration->acc_n, 0.10);
-        nh.param<double>("gnss/omg_noise",p_gnss->pre_integration->gyr_n, 0.10);
-        nh.param<double>("gnss/ddt_noise",p_gnss->p_assign->ddt_noise, 0.10);
-        nh.param<double>("gnss/dt_noise",p_gnss->p_assign->dt_noise, 0.10);
-        nh.param<double>("gnss/psr_dopp_noise",p_gnss->p_assign->psr_dopp_noise,0.1);
-        nh.param<double>("gnss/odo_noise",p_gnss->p_assign->odo_noise,0.1);
-        nh.param<double>("gnss/grav_noise",p_gnss->p_assign->grav_noise,0.1);
-        nh.param<double>("gnss/cp_noise",p_gnss->p_assign->cp_noise,0.1);
-        nh.param<double>("gnss/gnss_psr_std_thres",p_gnss->p_assign->gnss_psr_std_threshold, 2.0);
-        nh.param<double>("gnss/gnss_dopp_std_thres",p_gnss->p_assign->gnss_dopp_std_threshold, 2.0);
-        nh.param<double>("gnss/gnss_cp_std_thres",p_gnss->p_assign->gnss_cp_std_threshold, 2.0);
-        p_gnss->p_assign->gnss_cp_std_threshold /= 0.004;
-        nh.param<double>("gnss/gnss_cp_time_thres",p_gnss->gnss_cp_time_threshold, 2.0);
-        nh.param<int>("gnss/gtsam_variable_thres",p_gnss->delete_thred, 200);
-        nh.param<int>("gnss/gtsam_marg_variable_thres",p_gnss->p_assign->marg_thred, 1);
-        nh.param<double>("gnss/outlier_thres",p_gnss->p_assign->outlier_thres, 0.1);
-        nh.param<double>("gnss/outlier_thres_init",p_gnss->p_assign->outlier_thres_init, 0.1);
-        nh.param<double>("gnss/gnss_sample_period",p_gnss->gnss_sample_period, 0.1);
-        nh.param<bool>("gnss/nolidar",nolidar, false); // not ready yet. only for information. when this value is true, ligo becomes a system fusing only IMU and GNSS
-        nh.param<bool>("gnss/ephem_from_rinex",p_gnss->p_assign->ephem_from_rinex, false);
-        nh.param<bool>("gnss/obs_from_rinex",p_gnss->p_assign->obs_from_rinex, false);
-        nh.param<bool>("gnss/pvt_is_gt",p_gnss->p_assign->pvt_is_gt, false);
-        nh.param<int>("gnss/window_size",p_gnss->wind_size, 2);
-        p_gnss->p_assign->initNoises();
-    }
+  p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
+#ifdef LIGO_WITHOUT_GNSS
+  GNSS_ENABLE = false;
+  NMEA_ENABLE = false;
+#else
+  GNSS_ENABLE = get_param("gnss.gnss_enable", false);
+  cout << "gnss enable:" << GNSS_ENABLE << endl;
+  // #region agent log
+  { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"parameters.cpp:197\",\"message\":\"GNSS_ENABLE loaded\",\"data\":{\"value\":" << (GNSS_ENABLE ? "true" : "false") << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H1\"}\n"; }
+  // #endregion
+  if (GNSS_ENABLE)
+  {
+    p_gnss->relative_sqrt_info = get_param("gnss.psr_dopp_weight", 10.0);
+    p_gnss->cp_weight = get_param("gnss.cp_weight", 0.1);
+    p_gnss->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
+    gnss_ephem_topic = get_param("gnss.gnss_ephem_topic", std::string("/ublox_driver/ephem"));
+    gnss_glo_ephem_topic = get_param("gnss.gnss_glo_ephem_topic", std::string("/ublox_driver/glo_ephem"));
+    gnss_meas_topic = get_param("gnss.gnss_meas_topic", std::string("/ublox_driver/range_meas"));
+    ephem_fname = get_param("gnss.ephem_file_name", std::string("BRDM00DLR_S_20221870000_01D_MN.rnx"));
+    gt_fname = get_param("gnss.gt_file_name", std::string("UrbanNav_TST_GT_raw.txt"));
+    ppp_fname = get_param("nmea.ppp_file_name", std::string("TST.pos"));
+    gnss_iono_params_topic = get_param("gnss.gnss_iono_params_topic", std::string("/ublox_driver/iono_params"));
+    rtk_pvt_topic = get_param("gnss.rtk_pvt_topic", std::string("/ublox_driver/receiver_pvt"));
+    rtk_lla_topic = get_param("gnss.rtk_lla_topic", std::string("/ublox_driver/receiver_lla"));
+    gnss_tp_info_topic = get_param("gnss.gnss_tp_info_topic", std::string("/ublox_driver/time_pulse_info"));
+    default_gnss_iono_params = get_param("gnss.gnss_iono_default_parameters", std::vector<double>(8, 0.0));
+    p_gnss->gravity_init << VEC_FROM_ARRAY(gravity);
+    gnss_local_online_sync = get_param("gnss.gnss_local_online_sync", true);
+    if (gnss_local_online_sync)
+      local_trigger_info_topic = get_param("gnss.local_trigger_info_topic", std::string("/external_trigger"));
     else
     {
-        nh.param<string>("gnss/rtk_pvt_topic",rtk_pvt_topic,"/ublox_driver/receiver_pvt");
+      gnss_local_time_diff = get_param("gnss.gnss_local_time_diff", 18.0);
+      time_diff_gnss_local = gnss_local_time_diff;
     }
-    nh.param<bool>("nmea/nmea_enable", NMEA_ENABLE, false);
-    cout << "nmea enable:" << NMEA_ENABLE << endl;
-    if (NMEA_ENABLE)
-    {
-        nh.param<bool>("gnss/outlier_rejection", p_nmea->p_assign->outlier_rej, false);
-        nh.param<double>("nmea/nmea_weight",p_nmea->nmea_weight, 0.1);
-        nh.param<string>("nmea/posit_odo_topic",nmea_meas_topic,"/mavros/local_position/odom");
-        p_nmea->gravity_init << VEC_FROM_ARRAY(gravity);
-        nh.param<double>("nmea/nmea_local_time_diff",time_diff_nmea_local, 0.0);
-        nh.param<double>("gnss/prior_noise",p_nmea->p_assign->prior_noise, 0.010);
-        nh.param<double>("gnss/marg_noise",p_nmea->p_assign->marg_noise, 0.010);
-        nh.param<double>("gnss/b_acc_noise",p_nmea->pre_integration->acc_w, 0.10);
-        nh.param<double>("gnss/b_omg_noise",p_nmea->pre_integration->gyr_w, 0.10);
-        nh.param<double>("gnss/acc_noise",p_nmea->pre_integration->acc_n, 0.10);
-        nh.param<double>("gnss/omg_noise",p_nmea->pre_integration->gyr_n, 0.10);
-        nh.param<double>("nmea/rot_noise",p_nmea->p_assign->rot_noise,1.0);
-        nh.param<double>("nmea/vel_noise",p_nmea->p_assign->vel_noise,1.0);
-        nh.param<double>("gnss/odo_noise",p_nmea->p_assign->odo_noise,0.1);
-        nh.param<double>("gnss/grav_noise",p_nmea->p_assign->grav_noise,0.1);
-        nh.param<double>("nmea/pos_noise",p_nmea->p_assign->pos_noise,0.1);
-        nh.param<int>("gnss/gtsam_variable_thres",p_nmea->delete_thred, 200);
-        nh.param<int>("gnss/gtsam_marg_variable_thres",p_nmea->p_assign->marg_thred, 1);
-        nh.param<double>("gnss/outlier_thres",p_nmea->p_assign->outlier_thres, 0.1);
-        nh.param<double>("gnss/outlier_thres_init",p_nmea->p_assign->outlier_thres_init, 0.1);
-        nh.param<double>("gnss/gnss_sample_period",p_nmea->nmea_sample_period, 0.1);
-        nh.param<double>("nmea/ppp_std_thres",p_nmea->p_assign->ppp_std_threshold, 20.0);
-        nh.param<bool>("gnss/nolidar",nolidar, false);
-        nh.param<int>("gnss/window_size",p_nmea->wind_size, 2);
-        p_nmea->p_assign->initNoises();
-    }
+    p_gnss->p_assign->gnss_elevation_threshold = get_param("gnss.gnss_elevation_thres", 30.0);
+    p_gnss->p_assign->prior_noise = get_param("gnss.prior_noise", 0.010);
+    p_gnss->p_assign->marg_noise = get_param("gnss.marg_noise", 0.010);
+    p_gnss->pre_integration->acc_w = get_param("gnss.b_acc_noise", 0.10);
+    p_gnss->pre_integration->gyr_w = get_param("gnss.b_omg_noise", 0.10);
+    p_gnss->pre_integration->acc_n = get_param("gnss.acc_noise", 0.10);
+    p_gnss->pre_integration->gyr_n = get_param("gnss.omg_noise", 0.10);
+    p_gnss->p_assign->ddt_noise = get_param("gnss.ddt_noise", 0.10);
+    p_gnss->p_assign->dt_noise = get_param("gnss.dt_noise", 0.10);
+    p_gnss->p_assign->psr_dopp_noise = get_param("gnss.psr_dopp_noise", 0.1);
+    p_gnss->p_assign->odo_noise = get_param("gnss.odo_noise", 0.1);
+    p_gnss->p_assign->grav_noise = get_param("gnss.grav_noise", 0.1);
+    p_gnss->p_assign->cp_noise = get_param("gnss.cp_noise", 0.1);
+    p_gnss->p_assign->gnss_psr_std_threshold = get_param("gnss.gnss_psr_std_thres", 2.0);
+    p_gnss->p_assign->gnss_dopp_std_threshold = get_param("gnss.gnss_dopp_std_thres", 2.0);
+    p_gnss->p_assign->gnss_cp_std_threshold = get_param("gnss.gnss_cp_std_thres", 2.0);
+    p_gnss->p_assign->gnss_cp_std_threshold /= 0.004;
+    p_gnss->gnss_cp_time_threshold = get_param("gnss.gnss_cp_time_thres", 2.0);
+    p_gnss->delete_thred = get_param("gnss.gtsam_variable_thres", 200);
+    p_gnss->p_assign->marg_thred = get_param("gnss.gtsam_marg_variable_thres", 1);
+    p_gnss->p_assign->outlier_thres = get_param("gnss.outlier_thres", 0.1);
+    p_gnss->p_assign->outlier_thres_init = get_param("gnss.outlier_thres_init", 0.1);
+    p_gnss->gnss_sample_period = get_param("gnss.gnss_sample_period", 0.1);
+    nolidar = get_param("gnss.nolidar", false);
+    p_gnss->p_assign->ephem_from_rinex = get_param("gnss.ephem_from_rinex", false);
+    p_gnss->p_assign->obs_from_rinex = get_param("gnss.obs_from_rinex", false);
+    p_gnss->p_assign->pvt_is_gt = get_param("gnss.pvt_is_gt", false);
+    p_gnss->wind_size = get_param("gnss.window_size", 2);
+    p_gnss->p_assign->initNoises();
+  }
+  else
+  {
+    rtk_pvt_topic = get_param("gnss.rtk_pvt_topic", std::string("/ublox_driver/receiver_pvt"));
+  }
+  NMEA_ENABLE = get_param("nmea.nmea_enable", false);
+  cout << "nmea enable:" << NMEA_ENABLE << endl;
+  if (NMEA_ENABLE)
+  {
+    p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
+    p_nmea->nmea_weight = get_param("nmea.nmea_weight", 0.1);
+    nmea_meas_topic = get_param("nmea.posit_odo_topic", std::string("/mavros/local_position/odom"));
+    p_nmea->gravity_init << VEC_FROM_ARRAY(gravity);
+    time_diff_nmea_local = get_param("nmea.nmea_local_time_diff", 0.0);
+    p_nmea->p_assign->prior_noise = get_param("gnss.prior_noise", 0.010);
+    p_nmea->p_assign->marg_noise = get_param("gnss.marg_noise", 0.010);
+    p_nmea->pre_integration->acc_w = get_param("gnss.b_acc_noise", 0.10);
+    p_nmea->pre_integration->gyr_w = get_param("gnss.b_omg_noise", 0.10);
+    p_nmea->pre_integration->acc_n = get_param("gnss.acc_noise", 0.10);
+    p_nmea->pre_integration->gyr_n = get_param("gnss.omg_noise", 0.10);
+    p_nmea->p_assign->rot_noise = get_param("nmea.rot_noise", 1.0);
+    p_nmea->p_assign->vel_noise = get_param("nmea.vel_noise", 1.0);
+    p_nmea->p_assign->odo_noise = get_param("gnss.odo_noise", 0.1);
+    p_nmea->p_assign->grav_noise = get_param("gnss.grav_noise", 0.1);
+    p_nmea->p_assign->pos_noise = get_param("nmea.pos_noise", 0.1);
+    p_nmea->delete_thred = get_param("gnss.gtsam_variable_thres", 200);
+    p_nmea->p_assign->marg_thred = get_param("gnss.gtsam_marg_variable_thres", 1);
+    p_nmea->p_assign->outlier_thres = get_param("gnss.outlier_thres", 0.1);
+    p_nmea->p_assign->outlier_thres_init = get_param("gnss.outlier_thres_init", 0.1);
+    p_nmea->nmea_sample_period = get_param("gnss.gnss_sample_period", 0.1);
+    p_nmea->p_assign->ppp_std_threshold = get_param("nmea.ppp_std_thres", 20.0);
+    nolidar = get_param("gnss.nolidar", false);
+    p_nmea->wind_size = get_param("gnss.window_size", 2);
+    p_nmea->p_assign->initNoises();
+  }
+#endif
 }
 
 Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &rot) 
@@ -310,6 +317,7 @@ Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &rot)
 void open_file()
 {
     fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),ios::out);
+#ifndef LIGO_WITHOUT_GNSS
     if (GNSS_ENABLE)
     {
         fout_rtk.open(DEBUG_FILE_DIR("pos_rtk.txt"),ios::out);
@@ -322,6 +330,7 @@ void open_file()
         fout_ppp.setf(ios::fixed, ios::floatfield);
         fout_ppp.precision(6);
     }
+#endif
     if (fout_out)
         cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
     else
@@ -331,6 +340,7 @@ void open_file()
 
 void cout_state_to_file(Eigen::Vector3d &pos_lla)
 {
+#ifndef LIGO_WITHOUT_GNSS
     {
         Eigen::Vector3d pos_enu, pos_ecef;
         if (!nolidar)
@@ -358,10 +368,12 @@ void cout_state_to_file(Eigen::Vector3d &pos_lla)
         est_poses.push_back(pos_enu);
         time_frame.push_back(time_predict_last_const);
     }
+#endif
 }
 
 void cout_state_to_file_nmea()
 {
+#ifndef LIGO_WITHOUT_GNSS
     {
         Eigen::Vector3d pos_enu;
         if (!nolidar)
@@ -383,6 +395,7 @@ void cout_state_to_file_nmea()
         est_poses.push_back(pos_enu);
         time_frame.push_back(time_predict_last_const);
     }
+#endif
 }
 
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output)

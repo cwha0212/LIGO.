@@ -1,0 +1,108 @@
+/**:
+  ros__parameters:
+    common:
+      lid_topic:  "/livox/lidar"
+      imu_topic:  "/livox/imu"
+      con_frame: false
+      con_frame_num: 1
+      scan_rate: 10
+
+    preprocess:
+      # PointCloud2 for Septentrio+Livox rosbag (not CustomMsg)
+      lidar_type: 2
+      scan_line: 6
+      timestamp_unit: 1
+      blind: 0.50
+      det_range: 1000.0
+
+    mapping:
+      imu_en: true
+      imu_time_inte: 0.005
+      lidar_time_inte: 0.1
+      satu_acc: 3.0
+      satu_gyro: 35.0
+      acc_norm: 1.0
+      lidar_meas_cov: 0.01
+      acc_cov_output: 500.0
+      gyr_cov_output: 1000.0
+      b_acc_cov: 0.0001
+      b_gyr_cov: 0.0001
+      imu_meas_acc_cov: 0.1
+      imu_meas_omg_cov: 0.1
+      plane_thr: 0.1
+      match_s: 81.0
+      ivox_grid_resolution: 1.0
+      gravity: [0.0, 0.0, -9.81]
+      init_with_imu: true
+      gravity_init: [0.0, 9.810, 0.0]
+      extrinsic_T: [-0.011, -0.02329, 0.04412]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+
+    gnss:
+      gnss_enable: false
+      ephem_from_rinex: false
+      ephem_file_name: " "
+      obs_from_rinex: false
+      pvt_is_gt: true
+      gt_file_name: " "
+      gt_file_type: 1
+      outlier_rejection: true
+      psr_dopp_weight: 1.0
+      cp_weight: 10.0
+      gnss_meas_topic: "/ublox_driver/range_meas"
+      gnss_ephem_topic: "/ublox_driver/ephem"
+      gnss_glo_ephem_topic: "/ublox_driver/glo_ephem"
+      gnss_iono_params_topic: "/ublox_driver/iono_params"
+      gnss_tp_info_topic: "/ublox_driver/time_pulse_info"
+      rtk_pvt_topic: "/ublox_driver/receiver_pvt"
+      rtk_lla_topic: "/ublox_driver/receiver_lla"
+      gnss_elevation_thres: 30.0
+      gnss_psr_std_thres: 30.0
+      gnss_dopp_std_thres: 30.0
+      gnss_cp_std_thres: 30.0
+      gnss_cp_time_thres: 100.0
+      gtsam_variable_thres: 30
+      gtsam_marg_variable_thres: 1
+      gnss_sample_period: 0.1
+      outlier_thres: 1.0
+      outlier_thres_init: 10.0
+      window_size: 10
+      prior_noise: 1000.0
+      marg_noise: 0.1
+      odo_noise: 0.1
+      grav_noise: 0.1
+      psr_dopp_noise: 1.0
+      cp_noise: 0.1
+      gnss_ekf_noise: 0.01
+      gnss_local_online_sync: false
+      local_trigger_info_topic: "/external_trigger"
+      gnss_local_time_diff: 18.0
+      gnss_iono_default_parameters: [0.1118E-07,  0.2235E-07, -0.4172E-06,  0.6557E-06, 0.1249E+06, -0.4424E+06,  0.1507E+07, -0.2621E+06]
+      gnss_extrinsic_T: [0.011, 0.03155, 0.02365]
+      gnss_extrinsic_R: [ 1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0 ]
+
+    nmea:
+      nmea_enable: true
+      posit_odo_topic: "/ligo_gnss_odom"
+      ppp_std_thres: 20.0   # position variance gate (diag [0],[7],[14]); 5 was too strict for Septentrio height variance
+      pos_noise: 1.0
+      nmea_weight: 200.0
+      nmea_local_time_diff: 0.0
+      ppp_file_name: ""
+      ppp_anc: [3959058.559396, -87615.730649, 4983325.235812]
+
+    odometry:
+      publish_odometry_without_downsample: false
+
+    publish:
+      path_en: true
+      scan_publish_en: true
+      scan_bodyframe_pub_en: false
+
+    pcd_save:
+      pcd_save_en: false
+      interval: -1

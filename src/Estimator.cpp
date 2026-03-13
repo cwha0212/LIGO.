@@ -36,6 +36,7 @@
 
 // #include <../include/IKFoM/IKFoM_toolkit/esekfom/esekfom.hpp>
 #include "Estimator.h"
+#include <gtsam/geometry/Rot3.h>
 
 PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
 std::vector<int> time_seq;
@@ -259,6 +260,7 @@ void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ek
 
 void h_model_GNSS_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data)
 {
+#ifndef LIGO_WITHOUT_GNSS
 	Eigen::Matrix3d res_R = s.rot.transpose() * p_gnss->state_const_.rot;
 	Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
 	ekfom_data.h_GNSS.setIdentity();
@@ -320,10 +322,12 @@ void h_model_GNSS_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d
 	// double max_err = error_1 > error_2? error_1 : error_2;
 	// max_err = max_err > error_3? max_err : error_3;
 	ekfom_data.M_Noise = gnss_ekf_noise; // > max_err? gnss_ekf_noise : max_err;
+#endif
 }
 
 void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data)
 {
+#ifndef LIGO_WITHOUT_GNSS
 	Eigen::Matrix3d res_R = s.rot.transpose() * p_nmea->state_const_.rot;
 	Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
 	ekfom_data.h_NMEA.setIdentity();
@@ -351,7 +355,7 @@ void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d
 	// ekfom_data.z_GNSS(1) = p_gnss->odo_weight2 * (p_gnss->state_const_.pos(1) - s.pos(1)); // 
 	// ekfom_data.z_GNSS(2) = p_gnss->odo_weight3 * (p_gnss->state_const_.pos(2) - s.pos(2)); // 
 	ekfom_data.z_NMEA.block<3, 1>(3, 0) = res_r;
-	// vect3 so3_deg = s.omg * s.time_diff(0);
+	ekfom_data.M_Noise = gnss_ekf_noise;
 	// Eigen::Matrix3d rot_const = MTK::SO3<double>::exp(so3_deg);
 	// Eigen::Matrix3d res_R = rot_const.transpose() * s.rot.transpose() * p_nmea->state_const_.rot;
 	// Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
@@ -369,7 +373,7 @@ void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d
 	// ekfom_data.z_NMEA.block<3, 1>(0, 0) = p_nmea->state_const_.pos - s.pos - s.vel * s.time_diff - 0.5 * s.acc * s.time_diff * s.time_diff; // 
 	// ekfom_data.z_NMEA.block<3, 1>(6, 0) = p_nmea->state_const_.vel - s.vel - s.acc * s.time_diff; // 
 	// ekfom_data.z_NMEA.block<3, 1>(3, 0) = res_r; // s.rot.transpose() * p_gnss->state_.rot; //  
-	ekfom_data.M_Noise = gnss_ekf_noise;
+#endif
 }
 
 void pointBodyToWorld(PointType const * const pi, PointType * const po)

@@ -35,22 +35,26 @@
  */
 
 // #include <so3_math.h>
-#include <nav_msgs/Odometry.h>
-#include <nav_msgs/Path.h>
-#include <visualization_msgs/Marker.h>
+#include <rclcpp/rclcpp.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
-#include <tf/transform_datatypes.h>
-#include <tf/transform_broadcaster.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include "li_initialization.h"
 #include <malloc.h>
-// #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
-// #include <ros/console.h>
+#include <fstream>
+#include <chrono>
+#include <chrono>
 
 
 #define PUBFRAME_PERIOD     (20)
@@ -63,7 +67,7 @@ int time_log_counter = 0;
 
 bool init_map = false, flg_first_scan = true;
 std::vector<ObsPtr> gnss_cur;
-nav_msgs::OdometryPtr nmea_cur;
+nav_msgs::msg::Odometry::SharedPtr nmea_cur;
 Eigen::Vector3d first_pvt_anc, first_lla_anc;
 Eigen::Vector3d first_pvt_used, first_lla_used;
 
@@ -78,14 +82,14 @@ pcl::VoxelGrid<PointType> downSizeFilterSurf;
 
 V3D euler_cur;
 
-nav_msgs::Path path;
-nav_msgs::Odometry odomAftMapped;
-geometry_msgs::PoseStamped msg_body_pose;
+nav_msgs::msg::Path path;
+nav_msgs::msg::Odometry odomAftMapped;
+geometry_msgs::msg::PoseStamped msg_body_pose;
 
 void SigHandle(int sig)
 {
     flg_exit = true;
-    ROS_WARN("catch sig %d", sig);
+    RCLCPP_WARN(rclcpp::get_logger("ligo"), "catch sig %d", sig);
     sig_buffer.notify_all();
 }
 
@@ -135,22 +139,23 @@ void MapIncremental() {
     ivox_->AddPoints(points_to_add);
 }
 
-void publish_init_map(const ros::Publisher & pubLaserCloudFullRes)
+void publish_init_map(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pubLaserCloudFullRes)
 {
     int size_init_map = init_feats_world->size();
 
-    sensor_msgs::PointCloud2 laserCloudmsg;
+    sensor_msgs::msg::PointCloud2 laserCloudmsg;
                 
     pcl::toROSMsg(*init_feats_world, laserCloudmsg);
         
-    laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time);
+    laserCloudmsg.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
+    laserCloudmsg.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     laserCloudmsg.header.frame_id = "camera_init";
-    pubLaserCloudFullRes.publish(laserCloudmsg);
+    pubLaserCloudFullRes->publish(laserCloudmsg);
 }
 
 PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI(500000, 1));
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
-void publish_frame_world(const ros::Publisher & pubLaserCloudFullRes)
+void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pubLaserCloudFullRes)
 {
     if (scan_pub_en)
     {
@@ -169,12 +174,13 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFullRes)
             laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity; // feats_down_world->points[i].y; // updatedmap[i / 3](2); //feats_down_world->points[i].z; // 
             }
         }
-        sensor_msgs::PointCloud2 laserCloudmsg;
+        sensor_msgs::msg::PointCloud2 laserCloudmsg;
         pcl::toROSMsg(*laserCloudWorld, laserCloudmsg);
         
-        laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time); // (map_time); // 
+        laserCloudmsg.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
+        laserCloudmsg.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
         laserCloudmsg.header.frame_id = "camera_init";
-        pubLaserCloudFullRes.publish(laserCloudmsg);
+        pubLaserCloudFullRes->publish(laserCloudmsg);
         // publish_count -= PUBFRAME_PERIOD;
     }
     
@@ -211,7 +217,7 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFullRes)
     }
 }
 
-void publish_frame_body(const ros::Publisher & pubLaserCloudFull_body)
+void publish_frame_body(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pubLaserCloudFull_body)
 {
     int size = feats_undistort->points.size();
     PointCloudXYZI::Ptr laserCloudIMUBody(new PointCloudXYZI(size, 1));
@@ -222,11 +228,12 @@ void publish_frame_body(const ros::Publisher & pubLaserCloudFull_body)
                             &laserCloudIMUBody->points[i]);
     }
 
-    sensor_msgs::PointCloud2 laserCloudmsg;
+    sensor_msgs::msg::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*laserCloudIMUBody, laserCloudmsg);
-    laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time);
+    laserCloudmsg.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
+    laserCloudmsg.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     laserCloudmsg.header.frame_id = "body";
-    pubLaserCloudFull_body.publish(laserCloudmsg);
+    pubLaserCloudFull_body->publish(laserCloudmsg);
 }
 
 template<typename T>
@@ -244,63 +251,59 @@ void set_posestamp(T & out)
     }
 }
 
-void publish_odometry(const ros::Publisher & pubOdomAftMapped)
+void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr & pubOdomAftMapped, tf2_ros::TransformBroadcaster & br)
 {
     odomAftMapped.header.frame_id = "camera_init";
     odomAftMapped.child_frame_id = "aft_mapped";
     if (publish_odometry_without_downsample)
     {
-        odomAftMapped.header.stamp = ros::Time().fromSec(time_current);
+        odomAftMapped.header.stamp.sec = static_cast<int32_t>(std::floor(time_current));
+        odomAftMapped.header.stamp.nanosec = static_cast<uint32_t>(std::round((time_current - std::floor(time_current)) * 1e9));
     }
     else
     {
-        odomAftMapped.header.stamp = ros::Time().fromSec(lidar_end_time);
+        odomAftMapped.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
+        odomAftMapped.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     }
     set_posestamp(odomAftMapped.pose.pose);
     
-    pubOdomAftMapped.publish(odomAftMapped);
+    pubOdomAftMapped->publish(odomAftMapped);
 
-    static tf::TransformBroadcaster br;
-    tf::Transform                   transform;
-    tf::Quaternion                  q;
-    transform.setOrigin(tf::Vector3(odomAftMapped.pose.pose.position.x, \
-                                    odomAftMapped.pose.pose.position.y, \
-                                    odomAftMapped.pose.pose.position.z));
-    q.setW(odomAftMapped.pose.pose.orientation.w);
-    q.setX(odomAftMapped.pose.pose.orientation.x);
-    q.setY(odomAftMapped.pose.pose.orientation.y);
-    q.setZ(odomAftMapped.pose.pose.orientation.z);
-    transform.setRotation( q );
-    br.sendTransform( tf::StampedTransform( transform, odomAftMapped.header.stamp, "camera_init", "aft_mapped" ) );
+    geometry_msgs::msg::TransformStamped transform;
+    transform.header = odomAftMapped.header;
+    transform.child_frame_id = "aft_mapped";
+    transform.transform.translation.x = odomAftMapped.pose.pose.position.x;
+    transform.transform.translation.y = odomAftMapped.pose.pose.position.y;
+    transform.transform.translation.z = odomAftMapped.pose.pose.position.z;
+    transform.transform.rotation = odomAftMapped.pose.pose.orientation;
+    br.sendTransform(transform);
 }
 
-void publish_path(const ros::Publisher pubPath)
+void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
 {
     set_posestamp(msg_body_pose.pose);
-    // msg_body_pose.header.stamp = ros::Time::now();
-    msg_body_pose.header.stamp = ros::Time().fromSec(lidar_end_time);
+    msg_body_pose.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
+    msg_body_pose.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     msg_body_pose.header.frame_id = "camera_init";
     static int jjj = 0;
     jjj++;
-    // if (jjj % 2 == 0) // if path is too large, the rvis will crash
     {
         path.poses.emplace_back(msg_body_pose);
-        pubPath.publish(path);
+        pubPath->publish(path);
     }
 }        
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "laserMapping");
-    ros::NodeHandle nh("~");
-    ros::AsyncSpinner spinner(0);
-    spinner.start();
-    readParameters(nh);
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared<rclcpp::Node>("laserMapping");
+    readParameters(node.get());
     cout<<"lidar_type: "<<lidar_type<<endl;
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
-    ivox_last_ = std::make_shared<IVoxType>(ivox_options_); //(*ivox_);
+    ivox_last_ = std::make_shared<IVoxType>(ivox_options_);
     
-    path.header.stamp    = ros::Time().fromSec(lidar_end_time);
+    path.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
+    path.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     path.header.frame_id ="camera_init";
 
     /*** variables definition for counting ***/
@@ -316,6 +319,7 @@ int main(int argc, char** argv)
 
     p_imu->lidar_type = p_pre->lidar_type = lidar_type;
     p_imu->imu_en = imu_en;
+#ifndef LIGO_WITHOUT_GNSS
     if (GNSS_ENABLE)
     {
         std::copy(default_gnss_iono_params.begin(), default_gnss_iono_params.end(), 
@@ -338,6 +342,7 @@ int main(int argc, char** argv)
         p_nmea->nolidar = nolidar; // edit
         p_nmea->pre_integration->setnoise();
     }
+#endif
     if (NMEA_ENABLE)
     {
         kf_output.init_dyn_share_modified_3h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output, h_model_NMEA_output);
@@ -352,34 +357,44 @@ int main(int argc, char** argv)
     Eigen::Matrix<double, 24, 24> Q_output = process_noise_cov_output();
     open_file();
 
-    /*** ROS subscribe initialization ***/
-    ros::Subscriber sub_pcl = p_pre->lidar_type == AVIA ? \
-        nh.subscribe(lid_topic, 200000, livox_pcl_cbk) : \
-        nh.subscribe(lid_topic, 200000, standard_pcl_cbk);
-    ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
+    /*** ROS2 subscribe initialization ***/
+    rclcpp::QoS qos_lidar(200000);
+    rclcpp::SubscriptionBase::SharedPtr sub_pcl;
+    if (p_pre->lidar_type == AVIA)
+        sub_pcl = node->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, qos_lidar, livox_pcl_cbk);
+    else
+        sub_pcl = node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, qos_lidar, standard_pcl_cbk);
+    auto sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, qos_lidar, imu_cbk);
 
-    ros::Subscriber sub_ephem, sub_glo_ephem, sub_gnss_meas, sub_gnss_iono_params, sub_nmea_meas;
-    ros::Subscriber sub_gnss_time_pluse_info, sub_local_trigger_info;
-    ros::Subscriber sub_rtk_pvt_info, sub_rtk_lla_info;
+#ifndef LIGO_WITHOUT_GNSS
+    rclcpp::SubscriptionBase::SharedPtr sub_ephem, sub_glo_ephem, sub_gnss_meas, sub_gnss_iono_params;
+    rclcpp::SubscriptionBase::SharedPtr sub_gnss_time_pluse_info, sub_local_trigger_info;
+    rclcpp::SubscriptionBase::SharedPtr sub_rtk_pvt_info, sub_rtk_lla_info;
+    rclcpp::SubscriptionBase::SharedPtr sub_nmea_meas;
     if (GNSS_ENABLE)
     {
-        sub_ephem = nh.subscribe(gnss_ephem_topic, 10000, gnss_ephem_callback);
-        sub_glo_ephem = nh.subscribe(gnss_glo_ephem_topic, 10000, gnss_glo_ephem_callback);
+        // #region agent log
+        { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_subscriptions\",\"message\":\"GNSS subscriptions created\",\"data\":{\"active\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H5\"}\n"; }
+        // #endregion
+        rclcpp::QoS qos_gnss(10000);
+        sub_ephem = node->create_subscription<gnss_comm::msg::GnssEphemMsg>(gnss_ephem_topic, qos_gnss, gnss_ephem_callback);
+        sub_glo_ephem = node->create_subscription<gnss_comm::msg::GnssGloEphemMsg>(gnss_glo_ephem_topic, qos_gnss, gnss_glo_ephem_callback);
+        #ifdef LIGO_WITH_URBANNAV_MSG
         if (p_gnss->p_assign->obs_from_rinex)
         {
-            sub_gnss_meas = nh.subscribe("/gnss_preprocessor_node/GNSSPsrCarRov1", 200, gnss_meas_callback_urbannav);
-            sub_rtk_pvt_info = nh.subscribe("/gnss_preprocessor_node/ECEFSolutionRTK", 500, rtklibOdomHandler); 
+            sub_gnss_meas = node->create_subscription<nlosExclusion::GNSS_Raw_Array>("/gnss_preprocessor_node/GNSSPsrCarRov1", 200, gnss_meas_callback_urbannav);
+            sub_rtk_pvt_info = node->create_subscription<gnss_comm::msg::GnssPVTSolnMsg>("/gnss_preprocessor_node/ECEFSolutionRTK", 500, rtklibOdomHandler);
         }
         else
+        #endif
         {
-            sub_gnss_meas = nh.subscribe(gnss_meas_topic, 10000, gnss_meas_callback);
-            
-            sub_rtk_lla_info = nh.subscribe(rtk_lla_topic, 1000, rtk_lla_callback);
+            sub_gnss_meas = node->create_subscription<gnss_comm::msg::GnssMeasMsg>(gnss_meas_topic, qos_gnss, gnss_meas_callback);
+            sub_rtk_lla_info = node->create_subscription<sensor_msgs::msg::NavSatFix>(rtk_lla_topic, 1000, rtk_lla_callback);
         }
 
         if (p_gnss->p_assign->pvt_is_gt)
         {
-            sub_rtk_pvt_info = nh.subscribe(rtk_pvt_topic, 1000, rtk_pvt_callback);
+            sub_rtk_pvt_info = node->create_subscription<gnss_comm::msg::GnssPVTSolnMsg>(rtk_pvt_topic, 1000, rtk_pvt_callback);
         }
         else
         {
@@ -414,14 +429,12 @@ int main(int argc, char** argv)
                 }
             }
         }
-        sub_gnss_iono_params = nh.subscribe(gnss_iono_params_topic, 10000, gnss_iono_params_callback);
+        sub_gnss_iono_params = node->create_subscription<gnss_comm::msg::StampedFloat64Array>(gnss_iono_params_topic, qos_gnss, gnss_iono_params_callback);
 
         if (gnss_local_online_sync)
         {
-            sub_gnss_time_pluse_info = nh.subscribe(gnss_tp_info_topic, 100, 
-                gnss_tp_info_callback);
-            sub_local_trigger_info = nh.subscribe(local_trigger_info_topic, 100, 
-                local_trigger_info_callback);
+            sub_gnss_time_pluse_info = node->create_subscription<gnss_comm::msg::GnssTimePulseInfoMsg>(gnss_tp_info_topic, 100, gnss_tp_info_callback);
+            sub_local_trigger_info = node->create_subscription<ligo::msg::LocalSensorExternalTrigger>(local_trigger_info_topic, 100, local_trigger_info_callback);
         }
         else
         {
@@ -434,9 +447,10 @@ int main(int argc, char** argv)
     {
         if (!NMEA_ENABLE)
         {
-            sub_rtk_pvt_info = nh.subscribe(rtk_pvt_topic, 100, rtk_pvt_callback);
+            sub_rtk_pvt_info = node->create_subscription<gnss_comm::msg::GnssPVTSolnMsg>(rtk_pvt_topic, 100, rtk_pvt_callback);
         }
     }
+#endif
     #ifdef process_ppp
     if (NMEA_ENABLE)
     {
@@ -485,69 +499,71 @@ int main(int argc, char** argv)
     if (NMEA_ENABLE)
     {
 
-        first_pvt_anc = p_gnss->first_xyz_ecef_pvt;
-        first_lla_anc = p_gnss->first_lla_pvt;
-        if (p_gnss->p_assign->pvt_is_gt)
+        if (GNSS_ENABLE)
         {
-            first_pvt_anc << VEC_FROM_ARRAY(ppp_anc);
-            first_lla_anc = ecef2geo(first_pvt_anc);
+            first_pvt_anc = p_gnss->first_xyz_ecef_pvt;
+            first_lla_anc = p_gnss->first_lla_pvt;
         }
-        // first_pvt_anc << 3959058.559396,-87615.730649,4983325.235812; //  -2152900.934855,4380649.467661,4091851.462459; // bri 
-        // -2414309.951157,5388624.811131,2403467.959772; // main2 // -2169505.899002,4385241.855870,4078231.236204; // out // 
-        first_pvt_used = ppp_ecef[0].segment<3>(1);
-        first_lla_used = ecef2geo(first_pvt_used);
-        for (int i = 0; i < ppp_sol.size(); i++)
-        {   
-            // Eigen::Vector3d ppp_enu = ecef2enu(p_gnss->first_lla_pvt, ppp_ecef[i].segment<3>(1) - p_gnss->first_xyz_ecef_pvt);
-            // Eigen::Vector3d ppp_enu = ecef2enu(first_lla, ppp_ecef[i].segment<3>(1) - first_pvt);
-            nav_msgs::Odometry gps_odom;
-            gps_odom.header.stamp = ros::Time().fromSec(ppp_sol[i][0]);
-            // gps_odom->header.frame_id = "map";
-            gps_odom.pose.pose.position.x = ppp_sol[i][1]; //[1];
-            gps_odom.pose.pose.position.y = ppp_sol[i][2]; //[2];
-            gps_odom.pose.pose.position.z = ppp_sol[i][3]; //[3];
-            gps_odom.pose.covariance[0] = ppp_sol[i][4]; //[4];
-            gps_odom.pose.covariance[1] = ppp_sol[i][5]; //[4];
-            gps_odom.pose.covariance[2] = ppp_sol[i][6]; //[4];
-            nmea_meas_buf.push(nav_msgs::OdometryPtr(new nav_msgs::Odometry(gps_odom)));
+        if (ppp_ecef.size() > 0)
+        {
+            if (GNSS_ENABLE && p_gnss->p_assign->pvt_is_gt)
+            {
+                first_pvt_anc << VEC_FROM_ARRAY(ppp_anc);
+                first_lla_anc = ecef2geo(first_pvt_anc);
+            }
+            first_pvt_used = ppp_ecef[0].segment<3>(1);
+            first_lla_used = ecef2geo(first_pvt_used);
+            for (int i = 0; i < ppp_sol.size(); i++)
+            {
+                nav_msgs::msg::Odometry gps_odom;
+                {
+                    const double t = ppp_sol[i][0];
+                    const int32_t sec = static_cast<int32_t>(std::floor(t));
+                    const uint32_t nanosec = static_cast<uint32_t>(std::round((t - std::floor(t)) * 1e9));
+                    gps_odom.header.stamp.sec = sec;
+                    gps_odom.header.stamp.nanosec = nanosec;
+                }
+                gps_odom.pose.pose.position.x = ppp_sol[i][1];
+                gps_odom.pose.pose.position.y = ppp_sol[i][2];
+                gps_odom.pose.pose.position.z = ppp_sol[i][3];
+                gps_odom.pose.covariance[0] = ppp_sol[i][4];
+                gps_odom.pose.covariance[1] = ppp_sol[i][5];
+                gps_odom.pose.covariance[2] = ppp_sol[i][6];
+                nmea_meas_buf.push(std::make_shared<nav_msgs::msg::Odometry>(gps_odom));
+            }
         }
     }
     #endif
     if (NMEA_ENABLE)
     {
-        // sub_nmea_meas = nh.subscribe(nmea_meas_topic, 10000, nmea_meas_callback);
-        // sub_nmea_meas = nh.subscribe(nmea_meas_topic, 10000, gpsHandler);
+        rclcpp::QoS qos_nmea(10000);
+        sub_nmea_meas = node->create_subscription<nav_msgs::msg::Odometry>(
+            nmea_meas_topic, qos_nmea, nmea_meas_callback);
+        RCLCPP_INFO(node->get_logger(), "NMEA subscription active: %s", nmea_meas_topic.c_str());
     }
 
-    ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered", 1000);
-    ros::Publisher pubLaserCloudFullRes_body = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered_body", 1000);
-    ros::Publisher pubLaserCloudEffect  = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_effected", 1000);
-    ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>
-            ("/Laser_map", 1000);
-    ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
-            ("/aft_mapped_to_init", 1000);
-    ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
-            ("/path", 1000);
-    ros::Publisher plane_pub = nh.advertise<visualization_msgs::Marker>
-            ("/planner_normal", 1000);
-    // ros::Publisher pub_gnss_lla = nh.advertise<sensor_msgs::NavSatFix>("gnss_fused_lla", 1000);
-    
-//------------------------------------------------------------------------------------------------------
+    rclcpp::QoS qos_pub(1000);
+    auto pubLaserCloudFullRes = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", qos_pub);
+    auto pubLaserCloudFullRes_body = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", qos_pub);
+    auto pubLaserCloudEffect = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", qos_pub);
+    auto pubLaserCloudMap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/Laser_map", qos_pub);
+    auto pubOdomAftMapped = node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_to_init", qos_pub);
+    auto pubPath = node->create_publisher<nav_msgs::msg::Path>("/path", qos_pub);
+    auto plane_pub = node->create_publisher<visualization_msgs::msg::Marker>("/planner_normal", qos_pub);
+
     signal(SIGINT, SigHandle);
-    ros::Rate loop_rate(500);
-    bool status = ros::ok();
+    tf2_ros::TransformBroadcaster tf_br(node);
+    rclcpp::Rate loop_rate(500);
+    bool status = rclcpp::ok();
     while (status)
     {
         if (flg_exit) break;
-        ros::spinOnce();
+        rclcpp::spin_some(node);
         if(sync_packages(Measures, p_gnss->gnss_msg, p_nmea->nmea_msg)) 
         {
             if (flg_reset)
             {
-                ROS_WARN("reset when rosbag play back");
+                RCLCPP_WARN(node->get_logger(), "reset when rosbag play back");
                 p_imu->Reset();
                 feats_undistort.reset(new PointCloudXYZI());
                 {
@@ -578,7 +594,7 @@ int main(int argc, char** argv)
                 flg_first_scan = false;
                 if (first_imu_time < 1)
                 {
-                    first_imu_time = imu_next.header.stamp.toSec();
+                    first_imu_time = rclcpp::Time(imu_next.header.stamp).seconds();
                     // printf("first imu time: %f acceleration: %f%f%f\n", first_imu_time, imu_next.linear_acceleration.x, imu_next.linear_acceleration.y, imu_next.linear_acceleration.z);
                 }
                 time_current = 0.0;
@@ -590,7 +606,7 @@ int main(int argc, char** argv)
 
                     if (!nolidar && !imu_deque.empty())
                     {
-                        while (Measures.lidar_beg_time > imu_next.header.stamp.toSec()) // if it is needed for the new map?
+                        while (Measures.lidar_beg_time > rclcpp::Time(imu_next.header.stamp).seconds()) // if it is needed for the new map?
                         {
                             imu_deque.pop_front();
                             if (imu_deque.empty())
@@ -730,12 +746,14 @@ int main(int argc, char** argv)
                 /**** point by point update ****/
                 if (time_seq.size() > 0) // || (!GNSS_ENABLE && !NMEA_ENABLE) )
                 {
+#ifndef LIGO_WITHOUT_GNSS
                     if (GNSS_ENABLE)  
                     {p_gnss->p_assign->process_feat_num += time_seq.size();
                     p_gnss->nolidar_cur = false;}
                     if (NMEA_ENABLE)  
                     {p_nmea->p_assign->process_feat_num += time_seq.size();
                     p_nmea->nolidar_cur = false;}
+#endif
                 double pcl_beg_time = Measures.lidar_beg_time;
                 idx = -1;
                 for (k = 0; k < time_seq.size(); k++)
@@ -752,7 +770,7 @@ int main(int argc, char** argv)
                     {
                         if(imu_en && !imu_deque.empty())
                         {
-                            while (time_current > imu_next.header.stamp.toSec())
+                            while (time_current > rclcpp::Time(imu_next.header.stamp).seconds())
                             {
                                 imu_deque.pop_front();
                                 if (imu_deque.empty()) break;
@@ -766,16 +784,20 @@ int main(int argc, char** argv)
                         if (GNSS_ENABLE)
                         {
                             // std::vector<Eigen::Vector3d>().swap(p_gnss->norm_vec_holder);
+#ifndef LIGO_WITHOUT_GNSS
                             p_gnss->p_assign->process_feat_num = 0;
                             p_gnss->norm_vec_num = 0;
+#endif
                             // acc_avr_norm = acc_avr * G_m_s2 / acc_norm;
                             // p_gnss->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
                             // p_gnss->pre_integration->setacc0gyr0(acc_avr_norm, angvel_avr);
                         }
                         if (NMEA_ENABLE)
                         {
+#ifndef LIGO_WITHOUT_GNSS
                             p_nmea->p_assign->process_feat_num = 0;
                             p_nmea->norm_vec_num = 0;
+#endif
                         }
                         is_first_frame = false;
                         time_update_last = time_current;
@@ -783,8 +805,8 @@ int main(int argc, char** argv)
                     }
                     if(imu_en && !imu_deque.empty())
                     {
-                        bool last_imu = imu_next.header.stamp.toSec() == imu_deque.front()->header.stamp.toSec();
-                        while (imu_next.header.stamp.toSec() < time_predict_last_const && !imu_deque.empty())
+                        bool last_imu = rclcpp::Time(imu_next.header.stamp).seconds() == rclcpp::Time(imu_deque.front()->header.stamp).seconds();
+                        while (rclcpp::Time(imu_next.header.stamp).seconds() < time_predict_last_const && !imu_deque.empty())
                         {
                             if (!last_imu)
                             {
@@ -801,9 +823,10 @@ int main(int argc, char** argv)
                             }
                             if (imu_deque.empty()) break;
                         }
-                        bool imu_comes = time_current >= imu_next.header.stamp.toSec();
+                        bool imu_comes = time_current >= rclcpp::Time(imu_next.header.stamp).seconds();
                         while (imu_comes) 
                         {
+#ifndef LIGO_WITHOUT_GNSS
                             if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
                             {   
                                 gnss_cur = p_gnss->gnss_msg.front();
@@ -821,7 +844,7 @@ int main(int argc, char** argv)
                                     }
                                 }
                                 if (p_gnss->gnss_msg.empty()) break;
-                                while ((imu_next.header.stamp.toSec() >= time2sec(gnss_cur[0]->time) - time_diff_gnss_local) && (time2sec(gnss_cur[0]->time) - time_diff_gnss_local >= time_predict_last_const))
+                                while ((rclcpp::Time(imu_next.header.stamp).seconds() >= time2sec(gnss_cur[0]->time) - time_diff_gnss_local) && (time2sec(gnss_cur[0]->time) - time_diff_gnss_local >= time_predict_last_const))
                                 {
                                     double dt = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_predict_last_const;
                                     double dt_cov = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_update_last;
@@ -837,6 +860,9 @@ int main(int argc, char** argv)
                                         // p_gnss->processIMUOutput(dt, kf_output.x_.acc, kf_output.x_.omg);
                                         time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
                                         time_update_last = time_predict_last_const;
+                                        // #region agent log
+                                        { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
+                                        // #endregion
                                         p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                         p_gnss->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                         // p_gnss->sqrt_lidar *= 0.002;
@@ -856,6 +882,9 @@ int main(int argc, char** argv)
                                         {
                                             state_output out_state = kf_output.x_;
                                             kf_output.update_iterated_dyn_share_GNSS();
+                                            // #region agent log
+                                            { double _pd = (out_state.pos - kf_output.x_.pos).norm(); std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_effect\",\"message\":\"GNSS update applied\",\"data\":{\"update_gnss\":true,\"pos_delta_norm\":" << _pd << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_EFFECT\"}\n"; }
+                                            // #endregion
                                             Eigen::Vector3d pos_enu;
                                             if (!runtime_pos_log) cout_state_to_file(pos_enu);
                                             // sensor_msgs::NavSatFix gnss_lla_msg;
@@ -921,6 +950,9 @@ int main(int argc, char** argv)
                                         // state_out.rot.normalize();
                                         // state_out.pos = state_out.pos;
                                         // state_out.vel = state_out.vel;
+                                        // #region agent log
+                                        { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
+                                        // #endregion
                                         p_gnss->processGNSS(gnss_cur, state_out);
                                         if (p_gnss->gnss_ready)
                                         {
@@ -947,10 +979,12 @@ int main(int argc, char** argv)
                                     }
                                 }
                             }
+#endif
+#ifndef LIGO_WITHOUT_GNSS
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {   
                                 nmea_cur = p_nmea->nmea_msg.front();
-                                while (nmea_cur->header.stamp.toSec() - time_diff_nmea_local < time_predict_last_const)
+                                while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
                                 {
                                     p_nmea->nmea_msg.pop();
                                     if(!p_nmea->nmea_msg.empty())
@@ -963,10 +997,10 @@ int main(int argc, char** argv)
                                     }
                                 }
                                 if (p_nmea->nmea_msg.empty()) break;
-                                while ((imu_next.header.stamp.toSec() >= nmea_cur->header.stamp.toSec() - time_diff_nmea_local) && (nmea_cur->header.stamp.toSec() - time_diff_nmea_local >= time_predict_last_const))
+                                while ((rclcpp::Time(imu_next.header.stamp).seconds() >= rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local) && (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local >= time_predict_last_const))
                                 {
-                                    double dt = nmea_cur->header.stamp.toSec() - time_diff_nmea_local - time_predict_last_const;
-                                    double dt_cov = nmea_cur->header.stamp.toSec() - time_diff_nmea_local - time_update_last;
+                                    double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
+                                    double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
 
                                     if (p_nmea->nmea_ready)
                                     {
@@ -975,8 +1009,11 @@ int main(int argc, char** argv)
                                             kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                         }
                                         kf_output.predict(dt, Q_output, input_in, true, false);
-                                        time_predict_last_const = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                         time_update_last = time_predict_last_const;
+                                        // #region agent log
+                                        { static int _call = 0; _call++; if (_call <= 5 || _call % 100 == 0) { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-c94fba.log", std::ios::app); _f << "{\"sessionId\":\"c94fba\",\"location\":\"laserMapping.cpp:before processNMEA\",\"message\":\"calling processNMEA\",\"data\":{\"call\":" << _call << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H5\"}\n"; } }
+                                        // #endregion
                                         p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                         p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                         // p_gnss->sqrt_lidar *= 0.002;
@@ -1007,7 +1044,7 @@ int main(int argc, char** argv)
                                         
                                         kf_output.predict(dt, Q_output, input_in, true, false);
 
-                                        time_predict_last_const = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                         time_update_last = time_predict_last_const;
                                         state_out = kf_output.x_;
                                         // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
@@ -1026,6 +1063,7 @@ int main(int argc, char** argv)
                                     }
                                 }
                             }
+#endif
                             if (flg_reset)
                             {
                                 break;
@@ -1034,13 +1072,13 @@ int main(int argc, char** argv)
                             acc_avr   <<imu_next.linear_acceleration.x, imu_next.linear_acceleration.y, imu_next.linear_acceleration.z;
 
                             /*** covariance update ***/
-                            double dt = imu_next.header.stamp.toSec() - time_predict_last_const;
-                            time_predict_last_const = imu_next.header.stamp.toSec(); 
-                            double dt_cov = imu_next.header.stamp.toSec() - time_update_last; 
+                            double dt = rclcpp::Time(imu_next.header.stamp).seconds() - time_predict_last_const;
+                            time_predict_last_const = rclcpp::Time(imu_next.header.stamp).seconds(); 
+                            double dt_cov = rclcpp::Time(imu_next.header.stamp).seconds() - time_update_last; 
 
                             if (dt_cov > 0.0)
                             {
-                                time_update_last = imu_next.header.stamp.toSec();
+                                time_update_last = rclcpp::Time(imu_next.header.stamp).seconds();
 
                                 kf_output.predict(dt_cov, Q_output, input_in, false, true);
                             }
@@ -1050,13 +1088,14 @@ int main(int argc, char** argv)
                             if (imu_deque.empty()) break;
                             imu_last = imu_next;
                             imu_next = *(imu_deque.front());
-                            imu_comes = time_current >= imu_next.header.stamp.toSec();
+                            imu_comes = time_current >= rclcpp::Time(imu_next.header.stamp).seconds();
                         }
                     }
                     if (flg_reset)
                     {
                         break;
                     }
+#ifndef LIGO_WITHOUT_GNSS
                     if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
                     {
                         gnss_cur = p_gnss->gnss_msg.front();
@@ -1092,6 +1131,9 @@ int main(int argc, char** argv)
 
                                 time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
                                 time_update_last = time_predict_last_const;
+                                // #region agent log
+                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
+                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                 p_gnss->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                 // p_gnss->sqrt_lidar *= 0.002;
@@ -1111,6 +1153,9 @@ int main(int argc, char** argv)
                                 {
                                     state_output out_state = kf_output.x_;
                                     kf_output.update_iterated_dyn_share_GNSS();
+                                    // #region agent log
+                                    { double _pd = (out_state.pos - kf_output.x_.pos).norm(); std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_effect\",\"message\":\"GNSS update applied\",\"data\":{\"update_gnss\":true,\"pos_delta_norm\":" << _pd << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_EFFECT\"}\n"; }
+                                    // #endregion
                                     // reset_cov_output(kf_output.P_);
                                     Eigen::Vector3d pos_enu;
                                     if (!runtime_pos_log) cout_state_to_file(pos_enu);
@@ -1169,6 +1214,9 @@ int main(int argc, char** argv)
                                 // state_out.rot.normalize();
                                 // state_out.pos = state_out.pos;
                                 // state_out.vel = state_out.vel;
+                                // #region agent log
+                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
+                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, state_out);
                                 if (p_gnss->gnss_ready)
                                 {
@@ -1195,10 +1243,12 @@ int main(int argc, char** argv)
                             }
                         }
                     }
+#endif
+#ifndef LIGO_WITHOUT_GNSS
                     if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                     {
                         nmea_cur = p_nmea->nmea_msg.front();
-                        while ( nmea_cur->header.stamp.toSec() - time_diff_nmea_local < time_predict_last_const)
+                        while ( rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
                         {
                             p_nmea->nmea_msg.pop();
                             if(!p_nmea->nmea_msg.empty())
@@ -1211,10 +1261,10 @@ int main(int argc, char** argv)
                             }
                         }
                         if (p_nmea->nmea_msg.empty()) break;
-                        while (time_current >= nmea_cur->header.stamp.toSec() - time_diff_nmea_local && nmea_cur->header.stamp.toSec() - time_diff_nmea_local >= time_predict_last_const)
+                        while (time_current >= rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local && rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local >= time_predict_last_const)
                         {
-                            double dt = nmea_cur->header.stamp.toSec() - time_diff_nmea_local - time_predict_last_const;
-                            double dt_cov = nmea_cur->header.stamp.toSec() - time_diff_nmea_local - time_update_last;
+                            double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
+                            double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
                             if (p_nmea->nmea_ready)
                             {
                                 if (dt_cov > 0.0)
@@ -1223,7 +1273,7 @@ int main(int argc, char** argv)
                                 }
                                 kf_output.predict(dt, Q_output, input_in, true, false);
 
-                                time_predict_last_const = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 time_update_last = time_predict_last_const;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
@@ -1253,7 +1303,7 @@ int main(int argc, char** argv)
                                     kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                 }
                                 kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 time_update_last = time_predict_last_const;
                                 state_out = kf_output.x_;
                                 // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
@@ -1272,6 +1322,7 @@ int main(int argc, char** argv)
                             }
                         }
                     }
+#endif
                     if (flg_reset)
                     {
                         break;
@@ -1293,7 +1344,7 @@ int main(int argc, char** argv)
                     time_predict_last_const = time_current;
                     if (feats_down_size < 1)
                     {
-                        ROS_WARN("No point, skip this scan!\n");
+                        RCLCPP_WARN(node->get_logger(), "No point, skip this scan!\n");
                         idx += time_seq[k];
                         continue;
                     }
@@ -1315,7 +1366,7 @@ int main(int argc, char** argv)
                     {
                         /******* Publish odometry *******/
 
-                        publish_odometry(pubOdomAftMapped);
+                        publish_odometry(pubOdomAftMapped, tf_br);
                         if (runtime_pos_log)
                         {
                             euler_cur = SO3ToEuler(kf_output.x_.rot);
@@ -1347,32 +1398,36 @@ int main(int argc, char** argv)
                 }
                 else
                 {
+#ifndef LIGO_WITHOUT_GNSS
                     if (GNSS_ENABLE)  p_gnss->nolidar_cur = true;
                     if (NMEA_ENABLE)  p_nmea->nolidar_cur = true;
+#endif
                     if (!imu_deque.empty())
                     { 
                         imu_last = imu_next;
                         imu_next = *(imu_deque.front());
 
-                    while (imu_next.header.stamp.toSec() > time_current && ((imu_next.header.stamp.toSec() < imu_first_time + lidar_time_inte && nolidar) || (imu_next.header.stamp.toSec() < Measures.lidar_beg_time + lidar_time_inte && !nolidar)))
+                    while (rclcpp::Time(imu_next.header.stamp).seconds() > time_current && ((rclcpp::Time(imu_next.header.stamp).seconds() < imu_first_time + lidar_time_inte && nolidar) || (rclcpp::Time(imu_next.header.stamp).seconds() < Measures.lidar_beg_time + lidar_time_inte && !nolidar)))
                     { // >= ?
                         if (is_first_frame)
                         {
+#ifndef LIGO_WITHOUT_GNSS
                             if (!nolidar && GNSS_ENABLE) //std::vector<Eigen::Vector3d>().swap(p_gnss->norm_vec_holder);
                             {p_gnss->p_assign->process_feat_num = 0;
                             p_gnss->norm_vec_num = 0;}
                             if (!nolidar && NMEA_ENABLE) //std::vector<Eigen::Vector3d>().swap(p_gnss->norm_vec_holder);
                             {p_nmea->p_assign->process_feat_num = 0;
                             p_nmea->norm_vec_num = 0;}
+#endif
 
                             if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
                             {
                                 gnss_cur = p_gnss->gnss_msg.front();
                                 double front_gnss_ts = time2sec(gnss_cur[0]->time); // take time
                                 time_current = front_gnss_ts - time_diff_gnss_local;
-                                while (imu_next.header.stamp.toSec() < time_current) // 0.05
+                                while (rclcpp::Time(imu_next.header.stamp).seconds() < time_current) // 0.05
                                 {
-                                    ROS_WARN("throw IMU, only should happen at the beginning 2510");
+                                    RCLCPP_WARN(node->get_logger(), "throw IMU, only should happen at the beginning 2510");
                                     imu_deque.pop_front();
                                     if (imu_deque.empty()) break;
                                     imu_last = imu_next;
@@ -1383,11 +1438,11 @@ int main(int argc, char** argv)
                             else if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
-                                double front_nmea_ts = nmea_cur->header.stamp.toSec(); // take time
+                                double front_nmea_ts = rclcpp::Time(nmea_cur->header.stamp).seconds(); // take time
                                 time_current = front_nmea_ts - time_diff_nmea_local;
-                                while (imu_next.header.stamp.toSec() < time_current) // 0.05
+                                while (rclcpp::Time(imu_next.header.stamp).seconds() < time_current) // 0.05
                                 {
-                                    ROS_WARN("throw IMU, only should happen at the beginning 2510");
+                                    RCLCPP_WARN(node->get_logger(), "throw IMU, only should happen at the beginning 2510");
                                     imu_deque.pop_front();
                                     if (imu_deque.empty()) break;
                                     imu_last = imu_next;
@@ -1399,7 +1454,7 @@ int main(int argc, char** argv)
                             {
                                 if (nolidar)
                                 {
-                                    while (imu_next.header.stamp.toSec() < imu_first_time + lidar_time_inte)
+                                    while (rclcpp::Time(imu_next.header.stamp).seconds() < imu_first_time + lidar_time_inte)
                                     {
                                         // meas.imu.emplace_back(imu_deque.front()); should add to initialization
                                         imu_deque.pop_front();
@@ -1411,7 +1466,7 @@ int main(int argc, char** argv)
                                 }
                                 else
                                 {
-                                    while (imu_next.header.stamp.toSec() < Measures.lidar_beg_time + lidar_time_inte)
+                                    while (rclcpp::Time(imu_next.header.stamp).seconds() < Measures.lidar_beg_time + lidar_time_inte)
                                     {
                                         // meas.imu.emplace_back(imu_deque.front()); should add to initialization
                                         imu_deque.pop_front();
@@ -1426,11 +1481,12 @@ int main(int argc, char** argv)
                             if (nolidar) kf_output.x_.omg = angvel_avr;
                                             
                             acc_avr   <<imu_last.linear_acceleration.x, imu_last.linear_acceleration.y, imu_last.linear_acceleration.z;
-                            time_current = imu_next.header.stamp.toSec();
+                            time_current = rclcpp::Time(imu_next.header.stamp).seconds();
 
                             time_update_last = time_current;
                             time_predict_last_const = time_current;
                             acc_avr_norm = acc_avr * G_m_s2 / acc_norm;
+#ifndef LIGO_WITHOUT_GNSS
                             if (GNSS_ENABLE)
                             {
                             p_gnss->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
@@ -1441,15 +1497,16 @@ int main(int argc, char** argv)
                             p_nmea->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
                             p_nmea->pre_integration->setacc0gyr0(acc_avr_norm, angvel_avr); 
                             }
-
+#endif
                             {
                                 is_first_frame = false;
                             }
                         }
-                        time_current = imu_next.header.stamp.toSec();
+                        time_current = rclcpp::Time(imu_next.header.stamp).seconds();
 
                         if (!is_first_frame)
                         {
+#ifndef LIGO_WITHOUT_GNSS
                         if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
                         {
                             gnss_cur = p_gnss->gnss_msg.front();
@@ -1482,6 +1539,9 @@ int main(int argc, char** argv)
                                 p_gnss->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); //acc_avr_norm, angvel_avr); 
                                 // change to state_const.omg and state_const.acc? 
                                 time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
+                                // #region agent log
+                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
+                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                 if (!nolidar)
                                 {
@@ -1504,6 +1564,9 @@ int main(int argc, char** argv)
                                     {
                                         state_output out_state = kf_output.x_;
                                         kf_output.update_iterated_dyn_share_GNSS();
+                                        // #region agent log
+                                        { double _pd = (out_state.pos - kf_output.x_.pos).norm(); std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_effect\",\"message\":\"GNSS update applied\",\"data\":{\"update_gnss\":true,\"pos_delta_norm\":" << _pd << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_EFFECT\"}\n"; }
+                                        // #endregion
                                         // reset_cov_output(kf_output.P_);
                                         if ((out_state.pos - kf_output.x_.pos).norm() > 0.1 && pose_graph_key_pose.size() > 4)
                                         {                                    
@@ -1565,6 +1628,9 @@ int main(int argc, char** argv)
                                 }
                                 // kf_output.predict(dt, Q_output, input_in, true, false);
                                 time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
+                                // #region agent log
+                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
+                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                 if (p_gnss->gnss_ready)
                                 {
@@ -1607,10 +1673,12 @@ int main(int argc, char** argv)
                             }
                         }
                         }
+#endif
+#ifndef LIGO_WITHOUT_GNSS
                         if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                         {
                             nmea_cur = p_nmea->nmea_msg.front();
-                            while ( nmea_cur->header.stamp.toSec() - time_diff_nmea_local < time_predict_last_const)
+                            while ( rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
                             {
                                 p_nmea->nmea_msg.pop();
                                 if(!p_nmea->nmea_msg.empty())
@@ -1623,21 +1691,21 @@ int main(int argc, char** argv)
                                 }
                             }
                             if (p_nmea->nmea_msg.empty()) break;
-                        while ((time_current > nmea_cur->header.stamp.toSec() - time_diff_nmea_local) && (nmea_cur->header.stamp.toSec() - time_diff_nmea_local >= time_predict_last_const))
+                        while ((time_current > rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local) && (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local >= time_predict_last_const))
                         {
-                            double dt = nmea_cur->header.stamp.toSec() - time_diff_nmea_local - time_predict_last_const;
-                            double dt_cov = nmea_cur->header.stamp.toSec() - time_diff_nmea_local - time_update_last;
+                            double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
+                            double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
 
                             if (p_nmea->nmea_ready)
                             {
                                 if (dt_cov > 0.0)
                                 {
                                     // kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 }
                                 // kf_output.predict(dt, Q_output, input_in, true, false);
                                 p_nmea->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); //acc_avr_norm, angvel_avr); 
-                                time_predict_last_const = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 if (!nolidar)
                                 {
@@ -1669,10 +1737,10 @@ int main(int argc, char** argv)
                                 if (dt_cov > 0.0)
                                 {
                                     kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 }
                                 kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = nmea_cur->header.stamp.toSec() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 if (p_nmea->nmea_ready)
                                 {
@@ -1704,6 +1772,7 @@ int main(int argc, char** argv)
                             }
                         }
                         }
+#endif
                         if (flg_reset)
                         {
                             break;
@@ -1717,8 +1786,10 @@ int main(int argc, char** argv)
                                 time_update_last = time_current;
                             }
                             // kf_output.predict(dt, Q_output, input_in, true, false);
+#ifndef LIGO_WITHOUT_GNSS
                             if (GNSS_ENABLE)   p_gnss->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); // acc_avr_norm, angvel_avr); // 
                             if (NMEA_ENABLE)   p_nmea->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); // acc_avr_norm, angvel_avr); // 
+#endif
                         }
 
                         time_predict_last_const = time_current;
@@ -1748,7 +1819,7 @@ int main(int argc, char** argv)
             /******* Publish odometry downsample *******/
             if (!publish_odometry_without_downsample)
             {
-                publish_odometry(pubOdomAftMapped);
+                publish_odometry(pubOdomAftMapped, tf_br);
             }
 
             /*** add the feature points to map ***/
@@ -1775,8 +1846,12 @@ int main(int argc, char** argv)
                 {
                     {
                         {
+#ifndef LIGO_WITHOUT_GNSS
                             Eigen::Matrix3d R_enu_local_;
                             Eigen::Vector3d pos_r = kf_output.x_.rot * p_gnss->Tex_imu_r + kf_output.x_.pos; // .normalized()
+#else
+                            Eigen::Vector3d pos_r = kf_output.x_.pos;
+#endif
                             time_frame.push_back(lidar_end_time); //(time_predict_last_const);
                             est_poses.push_back(pos_r);
                         }
@@ -1787,7 +1862,7 @@ int main(int argc, char** argv)
                 }
             }
         }
-        status = ros::ok();
+        status = rclcpp::ok();
         loop_rate.sleep();
     }
     fout_out.close();
@@ -1803,6 +1878,7 @@ int main(int argc, char** argv)
     }
     // if (GNSS_ENABLE || NMEA_ENABLE)
     {
+#ifndef LIGO_WITHOUT_GNSS
         Eigen::Matrix3d enu_rot = ecef2rotation(first_pvt_used);
         for (int i = 0; i < time_frame.size(); i++)
         {
@@ -1821,14 +1897,21 @@ int main(int argc, char** argv)
             // printf("time: %f, pos: %f %f %f\n", ppp_ecef[0][0] + 18.0, est_poses[i](0), est_poses[i](1), est_poses[i](2));
             // Eigen::Vector3d euler_ext = SO3ToEuler(local_rots[i]);
         }
+#else
+        // When LIGO_WITHOUT_GNSS, fout_global is not opened in open_file(); skip
+#endif
+#ifndef LIGO_WITHOUT_GNSS
         fout_global.close();
+#endif
     }
 
+#ifndef LIGO_WITHOUT_GNSS
     for (int i = 0; i < p_gnss->pvt_time.size(); i++)
     {
         fout_rtk << setw(20) << p_gnss->pvt_time[i] - p_gnss->pvt_time[0] << " " << p_gnss->pvt_holder[i].transpose() << " " << p_gnss->diff_holder[i] << " " << p_gnss->float_holder[i] << endl; // "\n";
     }
     fout_rtk.close();
+#endif
     #ifdef process_ppp
     for (int i = 0; i < ppp_ecef.size(); i++)
     {

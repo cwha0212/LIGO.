@@ -108,8 +108,8 @@ class GnssPsrDoppFactorPos : public gtsam::NoiseModelFactor5<gtsam::Vector6, gts
         }
 
         gtsam::Vector evaluateError(const gtsam::Vector6 &pos_vel_bias, const gtsam::Vector4 &dt, const gtsam::Vector1 &ddt, const gtsam::Vector3 &ext_p, const gtsam::Rot3 &ext_R, //const gtsam::Vector3 &anc, 
-            boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none, boost::optional<gtsam::Matrix&> H3 = boost::none, 
-            boost::optional<gtsam::Matrix&> H4 = boost::none, boost::optional<gtsam::Matrix&> H5 = boost::none) const //, boost::optional<gtsam::Matrix&> H7 = boost::none) const
+            gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone, gtsam::OptionalMatrixType H3 = OptionalNone, 
+            gtsam::OptionalMatrixType H4 = OptionalNone, gtsam::OptionalMatrixType H5 = OptionalNone) const override //, boost::optional<gtsam::Matrix&> H7 = boost::none) const
         {
             Eigen::Vector3d ref_ecef = ext_p;
 

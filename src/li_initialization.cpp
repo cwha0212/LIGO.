@@ -35,6 +35,9 @@
  */
 
 #include "li_initialization.h"
+#include <rclcpp/rclcpp.hpp>
+#include <fstream>
+#include <chrono>
 bool data_accum_finished = false, data_accum_start = false, online_calib_finish = false, refine_print = false;
 int frame_num_init = 0;
 double time_lag_IMU_wtr_lidar = 0.0, move_start_time = 0.0, online_calib_starts_time = 0.0; //, mean_acc_norm = 9.81;
@@ -44,7 +47,7 @@ double timediff_imu_wrt_lidar = 0.0;
 bool timediff_set_flg = false;
 V3D gravity_lio = V3D::Zero();
 mutex mtx_buffer;
-sensor_msgs::Imu imu_last, imu_next;
+sensor_msgs::msg::Imu imu_last, imu_next;
 // sensor_msgs::Imu::ConstPtr imu_last_ptr;
 PointCloudXYZI::Ptr  ptr_con(new PointCloudXYZI());
 double s_plot[MAXN], s_plot3[MAXN];
@@ -60,47 +63,50 @@ std::mutex m_time;
 bool lidar_pushed = false, imu_pushed = false;
 std::deque<PointCloudXYZI::Ptr>  lidar_buffer;
 std::deque<double>               time_buffer;
-std::deque<sensor_msgs::Imu::Ptr> imu_deque;
+std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_deque;
 std::queue<std::vector<ObsPtr>> gnss_meas_buf;
-std::queue<nav_msgs::OdometryPtr> nmea_meas_buf;
+std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_buf;
 
-void gnss_ephem_callback(const GnssEphemMsgConstPtr &ephem_msg)
+#ifndef LIGO_WITHOUT_GNSS
+void gnss_ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr &ephem_msg)
 {
-    EphemPtr ephem = msg2ephem(ephem_msg);
+    EphemPtr ephem = msg2ephem(*ephem_msg);
     p_gnss->p_assign->inputEphem(ephem);
 }
 
-void gnss_glo_ephem_callback(const GnssGloEphemMsgConstPtr &glo_ephem_msg)
+void gnss_glo_ephem_callback(const gnss_comm::msg::GnssGloEphemMsg::ConstSharedPtr &glo_ephem_msg)
 {
-    GloEphemPtr glo_ephem = msg2glo_ephem(glo_ephem_msg);
+    GloEphemPtr glo_ephem = msg2glo_ephem(*glo_ephem_msg);
     p_gnss->p_assign->inputEphem(glo_ephem);
 }
 
-void gnss_iono_params_callback(const StampedFloat64ArrayConstPtr &iono_msg)
+void gnss_iono_params_callback(const gnss_comm::msg::StampedFloat64Array::ConstSharedPtr &iono_msg)
 {
-    double ts = iono_msg->header.stamp.toSec();
+    double ts = rclcpp::Time(iono_msg->header.stamp).seconds();
     std::vector<double> iono_params;
     std::copy(iono_msg->data.begin(), iono_msg->data.end(), std::back_inserter(iono_params));
     assert(iono_params.size() == 8);
     p_gnss->inputIonoParams(ts, iono_params);
 }
 
-void rtk_pvt_callback(const GnssPVTSolnMsgConstPtr &groundt_pvt)
+void rtk_pvt_callback(const gnss_comm::msg::GnssPVTSolnMsg::ConstSharedPtr &groundt_pvt)
 {
     double ts = time2sec(gst2time(groundt_pvt->time.week, groundt_pvt->time.tow));
     p_gnss->inputpvt(ts, groundt_pvt->latitude, groundt_pvt->longitude, groundt_pvt->altitude, groundt_pvt->carr_soln, groundt_pvt->diff_soln);
 }
 
-void rtk_lla_callback(const sensor_msgs::NavSatFixConstPtr &lla_msg)
+void rtk_lla_callback(const sensor_msgs::msg::NavSatFix::ConstSharedPtr &lla_msg)
 {
-    double ts = lla_msg->header.stamp.toSec();
+    double ts = rclcpp::Time(lla_msg->header.stamp).seconds();
     p_gnss->inputlla(ts, lla_msg->latitude, lla_msg->longitude, lla_msg->altitude);
 }
 
-void gnss_meas_callback(const GnssMeasMsgConstPtr &meas_msg)
+void gnss_meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPtr &meas_msg)
 {
-    std::vector<ObsPtr> gnss_meas = msg2meas(meas_msg);
-    
+    std::vector<ObsPtr> gnss_meas = msg2meas(*meas_msg);
+    // #region agent log
+    { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"li_initialization.cpp:gnss_meas_callback\",\"message\":\"gnss_meas_callback invoked\",\"data\":{\"time_diff_valid\":" << (time_diff_valid ? "true" : "false") << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H2\"}\n"; }
+    // #endregion
     latest_gnss_time = time2sec(gnss_meas[0]->time);
     // printf("gnss time: %f\n", latest_gnss_time);
 
@@ -109,57 +115,27 @@ void gnss_meas_callback(const GnssMeasMsgConstPtr &meas_msg)
 
     // mtx_buffer.lock();
     gnss_meas_buf.push(std::move(gnss_meas)); // ?
+    // #region agent log
+    { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"li_initialization.cpp:gnss_meas_callback\",\"message\":\"gnss_meas_buf push\",\"data\":{\"pushed\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H2\"}\n"; }
+    // #endregion
     // mtx_buffer.unlock();
     // sig_buffer.notify_all(); // notify_one()?
 }
 
+#ifdef LIGO_WITH_URBANNAV_MSG
 void gnss_meas_callback_urbannav(const nlosExclusion::GNSS_Raw_ArrayConstPtr &meas_msg)
 {
     rtklib_gnss_meas_callback(meas_msg, gnss_meas_buf);
 }
+#endif
 
-void nmea_meas_callback(const nav_msgs::OdometryConstPtr &meas_msg)
-{    
-    nav_msgs::OdometryPtr nmea_meas(new nav_msgs::Odometry(*meas_msg));
-    last_nmea_time = nmea_meas->header.stamp.toSec();
-    nmea_meas_buf.push(std::move(nmea_meas)); // ?
-}
-
-void gpsHandler(const sensor_msgs::NavSatFixConstPtr& gpsMsg)
-{
-    if (gpsMsg->status.status != 0)
-        return;
-
-    Eigen::Vector3d trans_local_;
-    if (!first_gps) {
-        first_gps = true;
-        Eigen::Vector3d geo;
-        geo << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
-        first_gps_lla = geo;
-        first_gps_ecef = geo2ecef(geo);
-    }
-    Eigen::Vector3d cur_ecef = geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
-    trans_local_ = ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);
-
-    nav_msgs::Odometry gps_odom;
-    gps_odom.header.stamp = gpsMsg->header.stamp;
-    // gps_odom->header.frame_id = "map";
-    gps_odom.pose.pose.position.x = trans_local_[0];
-    gps_odom.pose.pose.position.y = trans_local_[1];
-    gps_odom.pose.pose.position.z = trans_local_[2];
-    // gps_odom->pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(0.0, 0.0, 0.0);
-    // pubGpsOdom.publish(gps_odom);
-    // gpsQueue.push_back(gps_odom);
-    nmea_meas_buf.push(nav_msgs::OdometryPtr(new nav_msgs::Odometry(gps_odom)));
-}
-
-void local_trigger_info_callback(const ligo::LocalSensorExternalTriggerConstPtr &trigger_msg) // pps time sync
+void local_trigger_info_callback(const ligo::msg::LocalSensorExternalTrigger::ConstSharedPtr &trigger_msg) // pps time sync
 {
     std::lock_guard<std::mutex> lg(m_time);
 
     if (next_pulse_time_valid)
     {
-        time_diff_gnss_local = next_pulse_time - trigger_msg->header.stamp.toSec();
+        time_diff_gnss_local = next_pulse_time - rclcpp::Time(trigger_msg->header.stamp).seconds();
         p_gnss->inputGNSSTimeDiff(time_diff_gnss_local);
         if (!time_diff_valid)       // just get calibrated
             std::cout << "time difference between GNSS and LI-Sensor got calibrated: "
@@ -168,7 +144,7 @@ void local_trigger_info_callback(const ligo::LocalSensorExternalTriggerConstPtr 
     }
 }
 
-void gnss_tp_info_callback(const GnssTimePulseInfoMsgConstPtr &tp_msg) // time stamp of GNSS signal
+void gnss_tp_info_callback(const gnss_comm::msg::GnssTimePulseInfoMsg::ConstSharedPtr &tp_msg) // time stamp of GNSS signal
 {
     gtime_t tp_time = gpst2time(tp_msg->time.week, tp_msg->time.tow);
     if (tp_msg->utc_based || tp_msg->time_sys == SYS_GLO)
@@ -188,19 +164,55 @@ void gnss_tp_info_callback(const GnssTimePulseInfoMsgConstPtr &tp_msg) // time s
     next_pulse_time = gnss_ts;
     next_pulse_time_valid = true;
 }
+#endif
 
-void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg) 
+void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg)
 {
-    // mtx_buffer.lock();
+    nav_msgs::msg::Odometry::SharedPtr nmea_meas = std::make_shared<nav_msgs::msg::Odometry>(*meas_msg);
+    last_nmea_time = rclcpp::Time(nmea_meas->header.stamp).seconds();
+    nmea_meas_buf.push(std::move(nmea_meas)); // ?
+}
+
+void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
+{
+#ifndef LIGO_WITHOUT_GNSS
+    if (gpsMsg->status.status != 0)
+        return;
+
+    Eigen::Vector3d trans_local_;
+    if (!first_gps) {
+        first_gps = true;
+        Eigen::Vector3d geo;
+        geo << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
+        first_gps_lla = geo;
+        first_gps_ecef = geo2ecef(geo);
+    }
+    Eigen::Vector3d cur_ecef = geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
+    trans_local_ = ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);
+
+    nav_msgs::msg::Odometry gps_odom;
+    gps_odom.header.stamp = gpsMsg->header.stamp;
+    // gps_odom->header.frame_id = "map";
+    gps_odom.pose.pose.position.x = trans_local_[0];
+    gps_odom.pose.pose.position.y = trans_local_[1];
+    gps_odom.pose.pose.position.z = trans_local_[2];
+    // gps_odom->pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(0.0, 0.0, 0.0);
+    // pubGpsOdom.publish(gps_odom);
+    // gpsQueue.push_back(gps_odom);
+    nmea_meas_buf.push(std::make_shared<nav_msgs::msg::Odometry>(gps_odom));
+#endif
+}
+
+void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
     scan_count ++;
-    // double preprocess_start_time = omp_get_wtime();
-    if (msg->header.stamp.toSec() < last_timestamp_lidar)
+    if (rclcpp::Time(msg->header.stamp).seconds() < last_timestamp_lidar)
     {
-        ROS_ERROR("lidar loop back, clear buffer");
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "lidar loop back, clear buffer");
         return;
     }
 
-    last_timestamp_lidar = msg->header.stamp.toSec();
+    last_timestamp_lidar = rclcpp::Time(msg->header.stamp).seconds();
 
     {
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI(20000,1));
@@ -237,7 +249,7 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
         if (ptr->points.size() > 0)
         {
             lidar_buffer.emplace_back(ptr);
-            time_buffer.emplace_back(msg->header.stamp.toSec());
+            time_buffer.emplace_back(rclcpp::Time(msg->header.stamp).seconds());
         }
     }
     }
@@ -246,14 +258,12 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
     // sig_buffer.notify_all();
 }
 
-void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) 
+void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
 {
-    // mtx_buffer.lock();
-    // double preprocess_start_time = omp_get_wtime();
     scan_count ++;
-    if (msg->header.stamp.toSec() < last_timestamp_lidar)
+    if (rclcpp::Time(msg->header.stamp).seconds() < last_timestamp_lidar)
     {
-        ROS_ERROR("lidar loop back, clear buffer");
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "lidar loop back, clear buffer");
 
         // mtx_buffer.unlock();
         // sig_buffer.notify_all();
@@ -261,7 +271,7 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
         // lidar_buffer.shrink_to_fit();
     }
 
-    last_timestamp_lidar = msg->header.stamp.toSec();    
+    last_timestamp_lidar = rclcpp::Time(msg->header.stamp).seconds();    
 
     {
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI(10000,1));
@@ -297,7 +307,7 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
         if (ptr->points.size() > 0)
         {
             lidar_buffer.emplace_back(ptr);
-            time_buffer.emplace_back(msg->header.stamp.toSec());
+            time_buffer.emplace_back(rclcpp::Time(msg->header.stamp).seconds());
         }
     }
     }
@@ -306,21 +316,20 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
     // sig_buffer.notify_all();
 }
 
-void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) 
+void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in) 
 {
-    // mtx_buffer.lock();
+    sensor_msgs::msg::Imu::SharedPtr msg = std::make_shared<sensor_msgs::msg::Imu>(*msg_in);
 
-    // publish_count ++;
-    sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
+    double t = rclcpp::Time(msg->header.stamp).seconds() - timediff_imu_wrt_lidar - time_lag_IMU_wtr_lidar;
+    msg->header.stamp.sec = static_cast<int32_t>(std::floor(t));
+    msg->header.stamp.nanosec = static_cast<uint32_t>(std::round((t - std::floor(t)) * 1e9));
 
-    msg->header.stamp = ros::Time().fromSec(msg->header.stamp.toSec() - timediff_imu_wrt_lidar - time_lag_IMU_wtr_lidar);
-
-    double timestamp = msg->header.stamp.toSec();
+    double timestamp = rclcpp::Time(msg->header.stamp).seconds();
     // printf("time_diff%f, %f, %f\n", last_timestamp_imu - timestamp, last_timestamp_imu, timestamp);
 
     if (timestamp < last_timestamp_imu)
     {
-        ROS_ERROR("imu loop back, clear deque");
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "imu loop back, clear deque");
         // imu_deque.shrink_to_fit();
         // cout << "check time:" << timestamp << ";" << last_timestamp_imu << endl;
         // printf("time_diff%f, %f, %f\n", last_timestamp_imu - timestamp, last_timestamp_imu, timestamp);
@@ -336,7 +345,7 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     // sig_buffer.notify_all();
 }
 
-bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, queue<nav_msgs::OdometryPtr> &nmea_msg)
+bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg)
 {
     if (nolidar)
     {
@@ -349,7 +358,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
             }
             else
             {
-                // double imu_time = imu_deque.front()->header.stamp.toSec();
+                // double imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds();
                 // double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
                 // if (last_timestamp_imu < front_gnss_ts - time_diff_gnss_local)
                 // {
@@ -360,7 +369,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                     // imu_last = *(imu_deque.front());
                     // imu_deque.pop_front();
                     // if(imu_deque.empty()) break;
-                    // imu_time = imu_deque.front()->header.stamp.toSec(); // can be changed
+                    // imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
                     // imu_next = *(imu_deque.front());
                 // }
                 // else
@@ -398,7 +407,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
             return false;
         }
         
-        imu_first_time = imu_deque.front()->header.stamp.toSec(); // 
+        imu_first_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // 
 
         if ((latest_gnss_time < time_diff_gnss_local + imu_first_time + lidar_time_inte) && GNSS_ENABLE)
         {
@@ -423,10 +432,10 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
 
         if (!imu_pushed)
         { 
-            double imu_time = imu_deque.front()->header.stamp.toSec();
+            double imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds();
             // imu_first_time = imu_time;
 
-            double imu_last_time = imu_deque.back()->header.stamp.toSec();
+            double imu_last_time = rclcpp::Time(imu_deque.back()->header.stamp).seconds();
             if (imu_last_time - imu_first_time < lidar_time_inte)
             {
                 return false;
@@ -442,7 +451,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                     imu_last = imu_next;
                     imu_deque.pop_front();
                     if(imu_deque.empty()) break;
-                    imu_time = imu_deque.front()->header.stamp.toSec(); // can be changed
+                    imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
                     imu_next = *(imu_deque.front());
                 }
                 if (!gnss_meas_buf.empty())
@@ -461,12 +470,12 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                 }
                 if (!nmea_meas_buf.empty())
                 {
-                    double front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); // take time
+                    double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
                     while (front_nmea_ts < imu_first_time + lidar_time_inte + time_diff_nmea_local)
                     {
                         nmea_meas_buf.pop();
                         if(nmea_meas_buf.empty()) break;
-                        front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); // take time
+                        front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
                     }
                     if (meas.imu.empty())
                     {
@@ -481,6 +490,9 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
         {
             if (!gnss_meas_buf.empty()) // or can wait for a short time?
             {
+                // #region agent log
+                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"li_initialization.cpp:sync_packages\",\"message\":\"sync_packages GNSS block\",\"data\":{\"gnss_meas_buf_size\":" << gnss_meas_buf.size() << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H3\"}\n"; }
+                // #endregion
                 // double back_gnss_ts = time2sec(gnss_meas_buf.back()[0]->time);
                 
                 // if (back_gnss_ts - imu_first_time < time_diff_gnss_local + lidar_time_inte)
@@ -498,6 +510,9 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
 
                 if (!gnss_msg.empty())
                 {
+                    // #region agent log
+                    { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"li_initialization.cpp:sync_packages\",\"message\":\"gnss_msg filled\",\"data\":{\"gnss_msg_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H3\"}\n"; }
+                    // #endregion
                     imu_pushed = false;
                     return true;
                 }
@@ -520,13 +535,13 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
         {
             if (!nmea_meas_buf.empty()) // or can wait for a short time?
             {
-                double front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); // take time
+                double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
                 while (front_nmea_ts - imu_first_time < time_diff_nmea_local + lidar_time_inte) 
                 {
                     nmea_msg.push(nmea_meas_buf.front());
                     nmea_meas_buf.pop();
                     if (nmea_meas_buf.empty()) break;
-                    front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec();
+                    front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
                 }
 
                 if (!nmea_msg.empty())
@@ -593,7 +608,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                     double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
                     while (front_gnss_ts < meas.lidar_beg_time + time_diff_gnss_local) // 0.05
                     {
-                        ROS_WARN("throw gnss, only should happen at the beginning 542");
+                        RCLCPP_WARN(rclcpp::get_logger("ligo"), "throw gnss, only should happen at the beginning 542");
                         gnss_meas_buf.pop();
                         if (gnss_meas_buf.empty()) break;
                         front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
@@ -634,13 +649,13 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
             {
                 if (!nmea_meas_buf.empty()) // or can wait for a short time?
                 {
-                    double front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec();
+                    double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
                     while (front_nmea_ts < meas.lidar_beg_time + time_diff_nmea_local) // 0.05
                     {
-                        ROS_WARN("throw nmea, only should happen at the beginning 542");
+                        RCLCPP_WARN(rclcpp::get_logger("ligo"), "throw nmea, only should happen at the beginning 542");
                         nmea_meas_buf.pop();
                         if (nmea_meas_buf.empty()) break;
-                        front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec();
+                        front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
                     }
                     if (!nmea_meas_buf.empty())
                     {
@@ -649,7 +664,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                         nmea_msg.push(nmea_meas_buf.front());
                         nmea_meas_buf.pop();
                         if (nmea_meas_buf.empty()) break;
-                        front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec();
+                        front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
                     }
                     if (!nmea_msg.empty())
                     {
@@ -747,7 +762,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
         /*** push imu data, and pop from imu buffer ***/
         if (p_imu->imu_need_init_)
         {
-            double imu_time = imu_deque.front()->header.stamp.toSec();
+            double imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds();
             imu_next = *(imu_deque.front());
             meas.imu.shrink_to_fit();
             while (imu_time < lidar_end_time)
@@ -756,7 +771,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                 imu_last = imu_next;
                 imu_deque.pop_front();
                 if(imu_deque.empty()) break;
-                imu_time = imu_deque.front()->header.stamp.toSec(); // can be changed
+                imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
                 imu_next = *(imu_deque.front());
             }
             if (GNSS_ENABLE)
@@ -776,12 +791,12 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
             {
                 if (!nmea_meas_buf.empty())
                 {
-                    double front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); 
+                    double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); 
                     while (front_nmea_ts < lidar_end_time + time_diff_nmea_local)
                     {
                         nmea_meas_buf.pop();
                         if(nmea_meas_buf.empty()) break;
-                        front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); // take time
+                        front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
                     }
                 }
             }
@@ -794,7 +809,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
         /*** push imu data, and pop from imu buffer ***/
         if (p_imu->imu_need_init_)
         {
-            double imu_time = imu_deque.front()->header.stamp.toSec();
+            double imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds();
             meas.imu.shrink_to_fit();
 
             imu_next = *(imu_deque.front());
@@ -804,7 +819,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                 imu_last = imu_next;
                 imu_deque.pop_front();
                 if(imu_deque.empty()) break;
-                imu_time = imu_deque.front()->header.stamp.toSec(); // can be changed
+                imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
                 imu_next = *(imu_deque.front());
             }
 
@@ -826,12 +841,12 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
             {
                 if (!nmea_meas_buf.empty())
                 {
-                    double front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); // take time
+                    double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
                     while (front_nmea_ts < meas.lidar_beg_time + lidar_time_inte + time_diff_nmea_local)
                     {
                         nmea_meas_buf.pop();
                         if(nmea_meas_buf.empty()) break;
-                        front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); // take time
+                        front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
                     }
                 }
             }
@@ -866,13 +881,13 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
     {
         if (!nmea_meas_buf.empty()) // or can wait for a short time?
         {
-            double front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec(); // take time
+            double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
             while ((!lose_lid && (front_nmea_ts < lidar_end_time + time_diff_nmea_local)) || (lose_lid && (front_nmea_ts < meas.lidar_beg_time + time_diff_nmea_local + lidar_time_inte) )) 
             {
                 nmea_msg.push(nmea_meas_buf.front());
                 nmea_meas_buf.pop();
                 if (nmea_meas_buf.empty()) break;
-                front_nmea_ts = nmea_meas_buf.front()->header.stamp.toSec();
+                front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
             }
             if (!nmea_msg.empty())
             {

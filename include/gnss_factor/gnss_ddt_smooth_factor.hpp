@@ -58,7 +58,7 @@ class DdtSmoothFactor : public gtsam::NoiseModelFactor2<gtsam::Vector1, gtsam::V
         gtsam::NoiseModelFactor2<gtsam::Vector1, gtsam::Vector1>(model, i, j) {
         }
         virtual ~DdtSmoothFactor() {}
-        gtsam::Vector evaluateError(const gtsam::Vector1 &ddti, const gtsam::Vector1 &ddtj, boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none) const
+        gtsam::Vector evaluateError(const gtsam::Vector1 &ddti, const gtsam::Vector1 &ddtj, gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone) const override
         {
             if (H1) //(*H1) = (gtsam::Matrix(1,1)<<-1.0).finished();
             {

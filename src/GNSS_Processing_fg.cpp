@@ -35,6 +35,7 @@
  */
 
 #include "GNSS_Processing_fg.h"
+#include <rclcpp/rclcpp.hpp>
 
 GNSSProcess::GNSSProcess()
     : diff_t_gnss_local(0.0)
@@ -47,7 +48,7 @@ GNSSProcess::~GNSSProcess() {}
 
 void GNSSProcess::Reset() 
 {
-  ROS_WARN("Reset GNSSProcess");
+  RCLCPP_WARN(rclcpp::get_logger("ligo"), "Reset GNSSProcess");
   std::map<sat_first, std::map<uint32_t, double[6]>> empty_map_c;
   sat2cp.swap(empty_map_c);
   // sat2time_index.swap(empty_map_i);
@@ -212,7 +213,7 @@ void GNSSProcess::processGNSS(const std::vector<ObsPtr> &gnss_meas, state_output
     gnss_ready = GNSSLIAlign();
     if (gnss_ready)
     {
-      ROS_INFO("GNSS Initialization is done");
+      RCLCPP_INFO(rclcpp::get_logger("ligo"), "GNSS Initialization is done");
       state_const_ = state;
       // state_const_last = state;
     }

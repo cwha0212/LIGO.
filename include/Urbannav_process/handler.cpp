@@ -43,7 +43,7 @@ double last_gnss_time = 0;
 std::mutex m_buf;
 GNSS_Tools m_GNSS_Tools;
 Eigen::Vector3d m_pose_enu; // pose in enu from initialization
-std::deque<nav_msgs::Odometry> GNSSQueue;
+std::deque<nav_msgs::msg::Odometry> GNSSQueue;
 std::vector<Eigen::Vector3d> sat_pos;
 std::vector<Eigen::Vector3d> sat_vel;
 
@@ -107,6 +107,7 @@ double eleSRNVarCal(double ele, double snr)
 // }
 
 /* transform the gnss raw data to map format */
+#ifdef LIGO_WITH_URBANNAV_MSG
 bool gnssRawArray2map(nlosExclusion::GNSS_Raw_Array gnss_data, std::map<int, nlosExclusion::GNSS_Raw> &epochGnssMap)
 {
     for(int i = 0; i < gnss_data.GNSS_Raws.size(); i++)
@@ -116,8 +117,9 @@ bool gnssRawArray2map(nlosExclusion::GNSS_Raw_Array gnss_data, std::map<int, nlo
     }
     return true;
 }    
+#endif
 /* subscribe the odometry from RTKLIB in ECEF*/
-void rtklibOdomHandler(const nav_msgs::Odometry::ConstPtr& odomIn) {//, Eigen::Vector3d &first_lla_pvt, Eigen::Vector3d &first_xyz_ecef_pvt, std::vector<double> &pvt_time, 
+void rtklibOdomHandler(const nav_msgs::msg::Odometry::ConstSharedPtr &odomIn) {//, Eigen::Vector3d &first_lla_pvt, Eigen::Vector3d &first_xyz_ecef_pvt, std::vector<double> &pvt_time, 
                         // std::vector<Eigen::Vector3d> &pvt_holder, std::vector<int> &diff_holder, std::vector<int> &float_holder) { // 
     if(RTKinLocal)
     {
@@ -134,7 +136,7 @@ void rtklibOdomHandler(const nav_msgs::Odometry::ConstPtr& odomIn) {//, Eigen::V
             // fabs(fabs(ENU(1)) - fabs(m_pose_enu(1))) > 300 ||
             // fabs(fabs(ENU(2)) - fabs(m_pose_enu(2))) > 300) return;
 
-        nav_msgs::Odometry gnssOdom;
+        nav_msgs::msg::Odometry gnssOdom;
         gnssOdom.header.stamp = odomIn->header.stamp;
         gnssOdom.pose.pose.position.x = ECEF(0); // ENU(0);
         gnssOdom.pose.pose.position.y = ECEF(1); // ENU(1);
@@ -184,6 +186,8 @@ void rtklibOdomHandler(const nav_msgs::Odometry::ConstPtr& odomIn) {//, Eigen::V
         // pub_path_rtk_ini.publish(rtk_ini_enu_path);
     }
 }
+
+#ifdef LIGO_WITH_URBANNAV_MSG
 
 /* subscribe the gnss range/doppler measurements from rover */
 void rtklib_gnss_meas_callback(const nlosExclusion::GNSS_Raw_ArrayConstPtr &meas_msg, std::queue<std::vector<ObsPtr>> &gnss_meas_vec) //
@@ -336,6 +340,7 @@ void rtklib_gnss_meas_callback(const nlosExclusion::GNSS_Raw_ArrayConstPtr &meas
     
     m_buf.unlock();
 }
+#endif
 
 void GtfromTXT_URBAN(const std::string &gt_filepath, std::vector<Eigen::Vector4d> &gt)
 {

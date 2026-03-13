@@ -148,9 +148,9 @@ class GnssLioFactor : public gtsam::NoiseModelFactor6<gtsam::Rot3, gtsam::Vector
         }
 
         gtsam::Vector evaluateError(const gtsam::Rot3 &rot_ext, const gtsam::Vector3 &pos_ext, const gtsam::Rot3 &rot1, const gtsam::Vector6 &pos_vel_bias1, const gtsam::Vector12 &others_, const gtsam::Vector3 &grav_, 
-        boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none, 
-        boost::optional<gtsam::Matrix&> H3 = boost::none, boost::optional<gtsam::Matrix&> H4 = boost::none, 
-        boost::optional<gtsam::Matrix&> H5 = boost::none, boost::optional<gtsam::Matrix&> H6 = boost::none) const
+        gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone, 
+        gtsam::OptionalMatrixType H3 = OptionalNone, gtsam::OptionalMatrixType H4 = OptionalNone, 
+        gtsam::OptionalMatrixType H5 = OptionalNone, gtsam::OptionalMatrixType H6 = OptionalNone) const override
         {
 
             // Eigen::Matrix3d d = rot1.transpose() * rot2.matrix();

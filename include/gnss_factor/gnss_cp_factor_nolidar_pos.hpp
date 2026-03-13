@@ -65,7 +65,7 @@ class GnssCpFactorNolidarPos : public gtsam::NoiseModelFactor2<gtsam::Vector12, 
         virtual ~GnssCpFactorNolidarPos() {}
         
         gtsam::Vector evaluateError(const gtsam::Vector12 &pos1, const gtsam::Vector12 &pos2, 
-            boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none) const
+            gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone) const override
         {
             const Eigen::Vector3d local_pos1 = rot1 * Tex_imu_r + pos1.segment<3>(0);
             const Eigen::Vector3d local_pos2 = rot2 * Tex_imu_r + pos2.segment<3>(0);

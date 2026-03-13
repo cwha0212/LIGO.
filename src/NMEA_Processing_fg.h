@@ -36,7 +36,7 @@
 
 #pragma once
 // #include <mavros_msgs/GPSRAW.h>
-#include <nav_msgs/Odometry.h>
+#include <nav_msgs/msg/odometry.hpp>
 #include "NMEA_Assignment.h"
 
 #include <pcl/io/pcd_io.h>
@@ -54,7 +54,7 @@ class NMEAProcess
   ~NMEAProcess();
   
   void Reset();
-  void processNMEA(const nav_msgs::OdometryPtr &gnss_meas, state_output &state);
+  void processNMEA(const nav_msgs::msg::Odometry::SharedPtr &gnss_meas, state_output &state);
   bool NMEALIAlign();
   void TrajAlign(Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>&local_traj, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>&enu_traj, Eigen::Vector3d &pos, Eigen::Matrix3d &rot);
   // bool TrajAlign(Eigen::Vector3d &pos, Eigen::Matrix3d &rot);
@@ -64,7 +64,7 @@ class NMEAProcess
   bool AddFactor(gtsam::Rot3 rel_rot_, gtsam::Point3 rel_pos_, gtsam::Vector3 rel_v_, Eigen::Vector3d state_gravity, double delta_t, double time_current,
                 Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot);
   // std::vector<ObsPtr> gnss_meas_buf[WINDOW_SIZE+1]; //
-  std::vector<nav_msgs::OdometryPtr> nmea_meas_; //[WINDOW_SIZE+1]; //
+  std::vector<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_; //[WINDOW_SIZE+1]; //
   // std::vector<EphemBasePtr> gnss_ephem_buf[WINDOW_SIZE+1]; // 
   // Eigen::Matrix3d rot_window[WINDOW_SIZE+1]; //
   Eigen::Matrix3d rot_window[WINDOW_SIZE+1]; //
@@ -74,7 +74,7 @@ class NMEAProcess
   // Eigen::Vector3d vel_window[WINDOW_SIZE+1]; //
   Eigen::Vector3d Tex_imu_r;
   Eigen::Matrix3d Rex_imu_r;
-  std::queue<nav_msgs::OdometryPtr> nmea_msg;
+  std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_msg;
 
   bool invalid_lidar = false;
   // double dt[4];

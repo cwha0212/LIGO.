@@ -35,19 +35,22 @@
  */
 
 #pragma once
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
 #include <Eigen/Eigen>
 #include <Eigen/Core>
 #include <cstring>
 #include "preprocess.h"
+#ifdef LIGO_WITHOUT_GNSS
+#include "ligo_gnss_nmea_stub.h"
+#else
 #include "GNSS_Processing_fg.h"
 #include "NMEA_Processing_fg.h"
-#include "IMU_Processing.h"
-// #include "LI_init/LI_init.h"
 #include "Urbannav_process/handler.h"
-#include <sensor_msgs/NavSatFix.h>
-#include <livox_ros_driver/CustomMsg.h>
-#include <sensor_msgs/PointCloud2.h>
+#endif
+#include "IMU_Processing.h"
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <mutex>
 #include <omp.h>
 #include <math.h>
@@ -58,9 +61,9 @@
 #include <ivox/ivox3d.h>
 #include <Python.h>
 #include <condition_variable>
-#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/msg/imu.hpp>
 #include <pcl/common/transforms.h>
-#include <geometry_msgs/Vector3.h>
+#include <geometry_msgs/msg/vector3.hpp>
 #include <Curvefitter/curvefitter.hpp>
 
 using IVoxType = faster_lio::IVox<3, faster_lio::IVoxNodeType::DEFAULT, PointType>;
@@ -136,7 +139,7 @@ extern std::vector<Eigen::Matrix3d> local_rots;
 extern std::vector<double> time_frame;
 
 extern ofstream fout_out, fout_rtk, fout_global, fout_ppp;
-void readParameters(ros::NodeHandle &n);
+void readParameters(rclcpp::Node * node);
 void open_file();
 Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &orient);
 void cout_state_to_file(Eigen::Vector3d &pos_enu);

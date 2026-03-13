@@ -95,9 +95,9 @@ class GnssCpFactorNoR : public gtsam::NoiseModelFactor6<gtsam::Vector3, gtsam::R
 
         gtsam::Vector evaluateError(const gtsam::Vector3 &ext_p, const gtsam::Rot3 &ext_R, const gtsam::Vector6 &pos1, const gtsam::Vector6 &pos2, 
             const gtsam::Vector4 &dt1, const gtsam::Vector4 &dt2, 
-            boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none, 
-            boost::optional<gtsam::Matrix&> H3 = boost::none, boost::optional<gtsam::Matrix&> H4 = boost::none,
-            boost::optional<gtsam::Matrix&> H5 = boost::none, boost::optional<gtsam::Matrix&> H6 = boost::none) const
+            gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone, 
+            gtsam::OptionalMatrixType H3 = OptionalNone, gtsam::OptionalMatrixType H4 = OptionalNone,
+            gtsam::OptionalMatrixType H5 = OptionalNone, gtsam::OptionalMatrixType H6 = OptionalNone) const override
         {
             Eigen::Vector3d ref_ecef = ext_p;
 

@@ -37,7 +37,15 @@
 #pragma once
 
 #include <common_lib.h>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <ligo/msg/local_sensor_external_trigger.hpp>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
 #include "Estimator.h"
+#ifndef LIGO_WITHOUT_GNSS
+#include "Urbannav_process/handler.h"
+#endif
 #define MAXN                (720000)
 
 extern bool data_accum_finished, data_accum_start, online_calib_finish, refine_print;
@@ -54,14 +62,14 @@ extern int scan_count_point;
 extern int frame_ct, wait_num;
 extern std::deque<PointCloudXYZI::Ptr>  lidar_buffer;
 extern std::deque<double>               time_buffer;
-extern std::deque<sensor_msgs::Imu::Ptr> imu_deque;
+extern std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_deque;
 extern std::queue<std::vector<ObsPtr>> gnss_meas_buf;
-extern std::queue<nav_msgs::OdometryPtr> nmea_meas_buf;
+extern std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_buf;
 extern std::mutex m_time;
 extern bool lidar_pushed, imu_pushed;
 extern double imu_first_time;
 extern bool lose_lid;
-extern sensor_msgs::Imu imu_last, imu_next;
+extern sensor_msgs::msg::Imu imu_last, imu_next;
 extern PointCloudXYZI::Ptr  ptr_con;
 extern double s_plot[MAXN], s_plot3[MAXN];
 extern bool first_gps;
@@ -69,23 +77,24 @@ extern Eigen::Vector3d first_gps_lla;
 extern Eigen::Vector3d first_gps_ecef;
 // extern sensor_msgs::Imu::ConstPtr imu_last_ptr;
 
-void gnss_ephem_callback(const GnssEphemMsgConstPtr &ephem_msg);
-void gnss_glo_ephem_callback(const GnssGloEphemMsgConstPtr &glo_ephem_msg);
-void gnss_iono_params_callback(const StampedFloat64ArrayConstPtr &iono_msg);
-void rtk_pvt_callback(const GnssPVTSolnMsgConstPtr &groundt_pvt);
-void rtk_lla_callback(const sensor_msgs::NavSatFixConstPtr &lla_msg);
-void gnss_meas_callback(const GnssMeasMsgConstPtr &meas_msg);
+#ifndef LIGO_WITHOUT_GNSS
+void gnss_ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr &ephem_msg);
+void gnss_glo_ephem_callback(const gnss_comm::msg::GnssGloEphemMsg::ConstSharedPtr &glo_ephem_msg);
+void gnss_iono_params_callback(const gnss_comm::msg::StampedFloat64Array::ConstSharedPtr &iono_msg);
+void rtk_pvt_callback(const gnss_comm::msg::GnssPVTSolnMsg::ConstSharedPtr &groundt_pvt);
+void rtk_lla_callback(const sensor_msgs::msg::NavSatFix::ConstSharedPtr &lla_msg);
+void gnss_meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPtr &meas_msg);
+#ifdef LIGO_WITH_URBANNAV_MSG
 void gnss_meas_callback_urbannav(const nlosExclusion::GNSS_Raw_ArrayConstPtr &meas_msg);
-void local_trigger_info_callback(const ligo::LocalSensorExternalTriggerConstPtr &trigger_msg);
-void gnss_tp_info_callback(const GnssTimePulseInfoMsgConstPtr &tp_msg);
-void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg); 
-void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg); 
-void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in); 
-// void LI_Init_set();
-bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, queue<nav_msgs::OdometryPtr> &nmea_msg);
-
-// bool sync_packages_nmea(MeasureGroup &meas, queue<nav_msgs::Odometry> &nmea_msg);
-void nmea_meas_callback(const nav_msgs::OdometryConstPtr &meas_msg);
-void gpsHandler(const sensor_msgs::NavSatFixConstPtr& gpsMsg);
+#endif
+void gnss_tp_info_callback(const gnss_comm::msg::GnssTimePulseInfoMsg::ConstSharedPtr &tp_msg);
+void local_trigger_info_callback(const ligo::msg::LocalSensorExternalTrigger::ConstSharedPtr &trigger_msg);
+#endif
+void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg);
+void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in);
+bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg);
+void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg);
+void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg);
 
 // #endif

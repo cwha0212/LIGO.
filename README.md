@@ -75,7 +75,39 @@ Please follow the *Differential GNSS* section shown in [ublox driver](https://gi
 
 # Build
 
-## Prerequisites
+## ROS 2 (Humble/Jazzy)
+
+### Prerequisites
+- ROS 2 (tested with Humble/Jazzy)
+- C++17, Eigen3, PCL, GTSAM, Ceres, Sophus, OpenCV
+- **livox_ros_driver2** (ROS 2 Livox driver)
+- **gnss_comm**: GNSS support requires a ROS 2–compatible gnss_comm in the same workspace (e.g. build from [gnss_comm](https://github.com/HKUST-Aerial-Robotics/gnss_comm) and port to ROS 2, or use a community port).
+
+### Build
+```bash
+cd /path/to/your_ros2_ws/src
+# clone this package (e.g. as LIGO./ or rename to ligo)
+cd ..
+source /opt/ros/<distro>/setup.bash
+# If using gnss_comm: source /path/to/gnss_comm/install/setup.bash
+colcon build --packages-select ligo
+source install/setup.bash
+```
+
+### Run
+```bash
+ros2 launch ligo mapping_avia.launch.py
+```
+Or run the node with a config file:
+```bash
+ros2 run ligo ligo_mapping --ros-args -p __params:=/path/to/config/avia.yaml
+```
+
+Config YAML uses the same structure as ROS 1; parameter names use dots (e.g. `common.lid_topic`).
+
+---
+
+## ROS 1 (Noetic)
 
 We test LIGO on ubuntu 20.04 with ROS noetic, and C++17 compiler & Eigen 3 & GTSAM 4 & opencv 4.2.0 & pcl 1.10  
 

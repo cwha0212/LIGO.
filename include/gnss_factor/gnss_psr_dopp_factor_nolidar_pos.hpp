@@ -75,7 +75,7 @@ class GnssPsrDoppFactorNolidarPos : public gtsam::NoiseModelFactor3<gtsam::Vecto
         }
         virtual ~GnssPsrDoppFactorNolidarPos() {}
         gtsam::Vector evaluateError(const gtsam::Vector12 &pos_vel_bias, const gtsam::Vector4 &dt, const gtsam::Vector1 &ddt,
-            boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none, boost::optional<gtsam::Matrix&> H3 = boost::none) const
+            gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone, gtsam::OptionalMatrixType H3 = OptionalNone) const override
         {          
             const Eigen::Vector3d local_pos = rot * Tex_imu_r + pos_vel_bias.segment<3>(0);
             const Eigen::Vector3d local_vel = pos_vel_bias.segment<3>(3) + rot * hat_omg_T;

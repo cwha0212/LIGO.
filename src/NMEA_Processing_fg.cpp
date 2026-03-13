@@ -35,6 +35,9 @@
  */
 
 #include "NMEA_Processing_fg.h"
+#include <rclcpp/rclcpp.hpp>
+#include <fstream>
+#include <chrono>
 
 NMEAProcess::NMEAProcess()
 {
@@ -46,7 +49,7 @@ NMEAProcess::~NMEAProcess() {}
 
 void NMEAProcess::Reset() 
 {
-  ROS_WARN("Reset NMEAProcess");
+  RCLCPP_WARN(rclcpp::get_logger("ligo"), "Reset NMEAProcess");
   p_assign->change_ext = 1;
   p_assign->gtSAMgraph.resize(0); 
   p_assign->initialEstimate.clear();
@@ -91,11 +94,12 @@ Eigen::Vector3d NMEAProcess::local2enu(Eigen::Matrix3d R_enu_local_, Eigen::Vect
   return enu_pos;
 }
 
-void NMEAProcess::processNMEA(const nav_msgs::OdometryPtr &nmea_meas, state_output &state)
+void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_meas, state_output &state)
 {
   if (!nmea_ready)
   {
-    if (nmea_meas->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[1] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[2] > p_assign->ppp_std_threshold)
+    // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
+    if (nmea_meas->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[7] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[14] > p_assign->ppp_std_threshold)
     {
       return;
     }
@@ -111,7 +115,7 @@ void NMEAProcess::processNMEA(const nav_msgs::OdometryPtr &nmea_meas, state_outp
     nmea_ready = NMEALIAlign();
     if (nmea_ready)
     {
-      ROS_INFO("NMEA Initialization is done");
+      RCLCPP_INFO(rclcpp::get_logger("ligo"), "NMEA Initialization is done");
       state_const_ = state;
     }
   }
@@ -166,6 +170,7 @@ void NMEAProcess::runISAM2opt(void) //
       p_assign->initialEstimate.clear();
       p_assign->isam.update();
     }
+    p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
   }
   else
   {
@@ -173,8 +178,8 @@ void NMEAProcess::runISAM2opt(void) //
     p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
     p_assign->initialEstimate.clear();
     p_assign->isam.update();
+    p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
   }
-  p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
   
   if (nolidar) // || invalid_lidar)
   {
@@ -247,7 +252,7 @@ bool NMEAProcess::NMEALIAlign()
   
   for (uint32_t i = 0; i < wind_size; i++)
   {
-    if (nmea_meas_[i+1]->header.stamp.toSec() - nmea_meas_[i]->header.stamp.toSec() > 15 * nmea_sample_period) // need IMU to prop
+    if (rclcpp::Time(nmea_meas_[i+1]->header.stamp).seconds() - rclcpp::Time(nmea_meas_[i]->header.stamp).seconds() > 15 * nmea_sample_period) // need IMU to prop
     {
       // if (frame_count == wind_size + 1)
       // {
@@ -316,19 +321,20 @@ bool NMEAProcess::NMEALIAlign()
   yaw_enu_local = 0.0;
   SetInit();
   frame_num = 1; // frame_count;
-  // last_nmea_time = nmea_meas_[wind_size]->header.stamp.toSec();
-  last_nmea_time = nmea_meas_[wind_size]->header.stamp.toSec();
+  // last_nmea_time = rclcpp::Time(nmea_meas_[wind_size]->header.stamp).seconds();
+  last_nmea_time = rclcpp::Time(nmea_meas_[wind_size]->header.stamp).seconds();
   runISAM2opt();
   return true;
 }
 
 bool NMEAProcess::Evaluate(state_output &state)
 {
-  if (nmea_meas_[0]->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[1] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[2] > p_assign->ppp_std_threshold)
+  // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
+  if (nmea_meas_[0]->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[7] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[14] > p_assign->ppp_std_threshold)
   {
     return false;
   }
-  double time_current = nmea_meas_[0]->header.stamp.toSec();
+  double time_current = rclcpp::Time(nmea_meas_[0]->header.stamp).seconds();
   double delta_t = time_current - last_nmea_time;
 
   gtsam::Rot3 rel_rot; // = gtsam::Rot3(pre_integration->delta_q);
@@ -424,6 +430,7 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
                 Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot)
 {
   invalid_lidar = false;
+  bool weight_lid_zero = false;
   if (!nolidar)
   {
     invalid_lidar = nolidar_cur;
@@ -431,6 +438,7 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     if (p_assign->process_feat_num < 10) 
     {
       weight_lid = 0;
+      weight_lid_zero = true;
     }
     else
     {
@@ -462,15 +470,36 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
   if (!nolidar)
   {
     bool no_weight = false;
-    // if (invalid_lidar)
-    // {
-    //   p_assign->gtSAMgraph.add(ligo::NmeaLioGravRelFactor(P(0), R(0), A(0), R(frame_num), A(frame_num), gravity_init, state_gravity, ba, bg, rot, sqrt_lidar, p_assign->odomNoise)); //LioNoise)); // odomNoiseIMU));
-    //   factor_id_cur.push_back(id_accumulate);
-    //   id_accumulate += 1;
-    // }
-    // else
+    // when weight_lid_zero, skip NmeaLioGravRelFactor to avoid singular G block; constrain G by prior only
+    if (!weight_lid_zero)
     {
       p_assign->gtSAMgraph.add(ligo::NmeaLioGravRelFactor(P(0), R(frame_num), A(frame_num), O(frame_num), G(frame_num), gravity_init, state_gravity, pos, vel, rot, ba, bg, acc, omg, sqrt_lidar, p_assign->odomNoise)); //LioNoise)); // odomNoiseIMU));
+      factor_id_cur.push_back(id_accumulate);
+      id_accumulate += 1;
+    }
+    else
+    {
+      p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(G(frame_num), gtsam::Vector3(state_gravity), p_assign->priorGravNoise));
+      factor_id_cur.push_back(id_accumulate);
+      id_accumulate += 1;
+
+      Eigen::Matrix<double, 6, 1> pv;
+      pv.block<3,1>(0,0) = pos;
+      pv.block<3,1>(3,0) = vel;
+      p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector6>(A(frame_num), gtsam::Vector6(pv), p_assign->priorNoise));
+      factor_id_cur.push_back(id_accumulate);
+      id_accumulate += 1;
+
+      p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
+      factor_id_cur.push_back(id_accumulate);
+      id_accumulate += 1;
+
+      Eigen::Matrix<double, 12, 1> oth;
+      oth.block<3,1>(0,0) = omg;
+      oth.block<3,1>(3,0) = acc;
+      oth.block<3,1>(6,0) = bg;
+      oth.block<3,1>(9,0) = ba;
+      p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector12>(O(frame_num), gtsam::Vector12(oth), p_assign->priorBiasNoise));
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
     }

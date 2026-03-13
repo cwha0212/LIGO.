@@ -179,7 +179,7 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
       isam.update(gtSAMgraph, initialEstimate);
       gtSAMgraph.resize(0); // will the initialEstimate change?
       initialEstimate.clear();
-      isam.update(gtSAMgraph, initialEstimate, delete_factor);   
+      isam.update(gtSAMgraph, initialEstimate, delete_factor);
     }
     else
     {
@@ -208,4 +208,4 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
       initialEstimate.clear();
       isam.update(gtSAMgraph, initialEstimate, delete_factor);
     }
-}  
+}
