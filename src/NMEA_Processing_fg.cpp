@@ -35,6 +35,23 @@
  */
 
 #include "NMEA_Processing_fg.h"
+#include <chrono>
+#include <fstream>
+
+// #region agent log
+static inline void ligo_dbg62_nmea(const char* location, const char* message, const std::string& data_json,
+                                  const char* hypothesisId, const char* runId = "pre-fix") {
+  try {
+    std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-62f312.log", std::ios::app);
+    if (!f.is_open()) return;
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    f << "{\"sessionId\":\"62f312\",\"runId\":\"" << runId << "\",\"hypothesisId\":\"" << hypothesisId
+      << "\",\"location\":\"" << location << "\",\"message\":\"" << message << "\",\"data\":" << data_json
+      << ",\"timestamp\":" << ts << "}\n";
+  } catch (...) {}
+}
+// #endregion
 #include <rclcpp/rclcpp.hpp>
 #include <fstream>
 #include <chrono>
@@ -103,6 +120,15 @@ Eigen::Vector3d NMEAProcess::local2enu(Eigen::Matrix3d R_enu_local_, Eigen::Vect
 
 void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_meas, state_output &state)
 {
+  // #region agent log
+  ligo_dbg62_nmea("NMEA_Processing_fg.cpp:processNMEA", "processNMEA called",
+                  std::string("{\"nmea_ready\":") + (nmea_ready ? "true" : "false") +
+                  ",\"cov_xx\":" + std::to_string(nmea_meas->pose.covariance[0]) +
+                  ",\"cov_yy\":" + std::to_string(nmea_meas->pose.covariance[7]) +
+                  ",\"cov_zz\":" + std::to_string(nmea_meas->pose.covariance[14]) +
+                  ",\"ppp_std_threshold\":" + std::to_string(p_assign->ppp_std_threshold) + "}",
+                  "H5");
+  // #endregion
   if (!nmea_ready)
   {
     // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
@@ -130,6 +156,12 @@ void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_mea
     {
       RCLCPP_INFO(rclcpp::get_logger("ligo"), "NMEA Initialization is done");
       state_const_ = state;
+      // #region agent log
+      ligo_dbg62_nmea("NMEA_Processing_fg.cpp:processNMEA", "NMEA initialization done (nmea_ready=true)",
+                      std::string("{\"frame_count\":") + std::to_string(frame_count) +
+                      ",\"wind_size\":" + std::to_string(wind_size) + "}",
+                      "H5");
+      // #endregion
     }
   }
   else
@@ -445,6 +477,16 @@ bool NMEAProcess::Evaluate(state_output &state)
 bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::Vector3 rel_vel, Eigen::Vector3d state_gravity, double delta_t, double time_current,
                 Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot)
 {
+  // #region agent log
+  ligo_dbg62_nmea("NMEA_Processing_fg.cpp:AddFactor", "AddFactor called",
+                  std::string("{\"frame_num\":") + std::to_string(frame_num) +
+                  ",\"nolidar\":" + (nolidar ? "true" : "false") +
+                  ",\"nolidar_cur\":" + (nolidar_cur ? "true" : "false") +
+                  ",\"delta_t\":" + std::to_string(delta_t) +
+                  ",\"time_current\":" + std::to_string(time_current) +
+                  ",\"nmea_weight\":" + std::to_string(nmea_weight) + "}",
+                  "H6");
+  // #endregion
   invalid_lidar = false;
   bool weight_lid_zero = false;
   if (!nolidar)
@@ -576,6 +618,15 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
         p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise));
         LIGO_LOG_FACTOR("NMEAFactor", frame_num);
       }
+      // #region agent log
+      ligo_dbg62_nmea("NMEA_Processing_fg.cpp:AddFactor", "NMEAFactor added to graph",
+                      std::string("{\"frame_num\":") + std::to_string(frame_num) +
+                      ",\"invalid_lidar\":" + (invalid_lidar ? "true" : "false") +
+                      ",\"pos_x\":" + std::to_string(values[6]) +
+                      ",\"pos_y\":" + std::to_string(values[7]) +
+                      ",\"pos_z\":" + std::to_string(values[8]) + "}",
+                      "H7");
+      // #endregion
     }
     else
     {

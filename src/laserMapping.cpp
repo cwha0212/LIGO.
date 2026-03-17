@@ -56,6 +56,21 @@
 #include <chrono>
 #include <chrono>
 
+// #region agent log
+static inline void ligo_dbg62_map(const char* location, const char* message, const std::string& data_json,
+                                  const char* hypothesisId, const char* runId = "pre-fix") {
+    try {
+        std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-62f312.log", std::ios::app);
+        if (!f.is_open()) return;
+        const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        f << "{\"sessionId\":\"62f312\",\"runId\":\"" << runId << "\",\"hypothesisId\":\"" << hypothesisId
+          << "\",\"location\":\"" << location << "\",\"message\":\"" << message << "\",\"data\":" << data_json
+          << ",\"timestamp\":" << ts << "}\n";
+    } catch (...) {}
+}
+// #endregion
+
 
 #define PUBFRAME_PERIOD     (20)
 
@@ -542,12 +557,24 @@ int main(int argc, char** argv)
             sub_nmea_meas = node->create_subscription<sensor_msgs::msg::NavSatFix>(
                 nmea_meas_topic, qos_nmea, gpsHandler);
             RCLCPP_INFO(node->get_logger(), "NMEA subscription active (NavSatFix->Odom bridge): %s", nmea_meas_topic.c_str());
+            // #region agent log
+            ligo_dbg62_map("laserMapping.cpp:subscribe_nmea", "Subscribed NMEA as NavSatFix (bridge)",
+                           std::string("{\"topic\":\"") + nmea_meas_topic + "\",\"nmea_input_type\":\"" + nmea_input_type +
+                           "\",\"NMEA_ENABLE\":" + (NMEA_ENABLE ? "true" : "false") + "}",
+                           "H8");
+            // #endregion
         }
         else
         {
             sub_nmea_meas = node->create_subscription<nav_msgs::msg::Odometry>(
                 nmea_meas_topic, qos_nmea, nmea_meas_callback);
             RCLCPP_INFO(node->get_logger(), "NMEA subscription active (Odometry): %s", nmea_meas_topic.c_str());
+            // #region agent log
+            ligo_dbg62_map("laserMapping.cpp:subscribe_nmea", "Subscribed NMEA as Odometry",
+                           std::string("{\"topic\":\"") + nmea_meas_topic + "\",\"nmea_input_type\":\"" + nmea_input_type +
+                           "\",\"NMEA_ENABLE\":" + (NMEA_ENABLE ? "true" : "false") + "}",
+                           "H8");
+            // #endregion
         }
     }
 
@@ -570,6 +597,14 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_gnss->gnss_msg, p_nmea->nmea_msg)) 
         {
+            // #region agent log
+            ligo_dbg62_map("laserMapping.cpp:main_loop", "sync_packages returned true",
+                           std::string("{\"GNSS_ENABLE\":") + (GNSS_ENABLE ? "true" : "false") +
+                           ",\"NMEA_ENABLE\":" + (NMEA_ENABLE ? "true" : "false") +
+                           ",\"gnss_msg_size\":" + std::to_string(p_gnss->gnss_msg.size()) +
+                           ",\"nmea_msg_size\":" + std::to_string(p_nmea->nmea_msg.size()) + "}",
+                           "H9");
+            // #endregion
             if (flg_reset)
             {
                 RCLCPP_WARN(node->get_logger(), "reset when rosbag play back");
@@ -993,6 +1028,14 @@ int main(int argc, char** argv)
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {   
                                 nmea_cur = p_nmea->nmea_msg.front();
+                                // #region agent log
+                                ligo_dbg62_map("laserMapping.cpp:nmea_entry", "Entered NMEA processing block",
+                                               std::string("{\"nmea_msg_size\":") + std::to_string(p_nmea->nmea_msg.size()) +
+                                               ",\"nmea_ready\":" + (p_nmea->nmea_ready ? "true" : "false") +
+                                               ",\"time_diff_nmea_local\":" + std::to_string(time_diff_nmea_local) +
+                                               ",\"time_predict_last_const\":" + std::to_string(time_predict_last_const) + "}",
+                                               "H10");
+                                // #endregion
                                 while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
                                 {
                                     p_nmea->nmea_msg.pop();
@@ -1027,6 +1070,12 @@ int main(int argc, char** argv)
                                         p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                         // p_gnss->sqrt_lidar *= 0.002;
                                         update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                        // #region agent log
+                                        ligo_dbg62_map("laserMapping.cpp:nmea_eval", "Evaluate returned",
+                                                       std::string("{\"update_nmea\":") + (update_nmea ? "true" : "false") +
+                                                       ",\"nmea_ready\":" + (p_nmea->nmea_ready ? "true" : "false") + "}",
+                                                       "H11");
+                                        // #endregion
                                         if (!p_nmea->nmea_ready)
                                         {
                                             flg_reset = true;

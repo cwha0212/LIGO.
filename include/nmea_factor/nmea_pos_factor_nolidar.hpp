@@ -39,6 +39,7 @@
 
 #include <vector>
 #include <Eigen/Dense>
+#include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
@@ -61,7 +62,7 @@ class NMEAFactorNolidar : public gtsam::NoiseModelFactor2<gtsam::Rot3, gtsam::Ve
         virtual ~NMEAFactorNolidar() {}
 
         gtsam::Vector evaluateError(const gtsam::Rot3 &rot, const gtsam::Vector12 &pos_vel,
-            gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone) const override
+            boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none) const override
         {
             Eigen::Vector3d P_enu = pos_vel.segment<3>(0) + rot.matrix() * Tex_imu_r;
             

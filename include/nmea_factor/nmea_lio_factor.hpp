@@ -39,6 +39,7 @@
 
 #include <vector>
 #include <Eigen/Dense>
+#include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
@@ -57,7 +58,7 @@ class NmeaLioFactor : public gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector
         }
         virtual ~NmeaLioFactor() {}
         gtsam::Vector evaluateError(const gtsam::Rot3 &rot1, const gtsam::Vector6 &pos_vel_bias1, const gtsam::Rot3 &rot2, const gtsam::Vector6 &pos_vel_bias2, 
-            gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone, gtsam::OptionalMatrixType H3 = OptionalNone, gtsam::OptionalMatrixType H4 = OptionalNone) const override
+            boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none, boost::optional<gtsam::Matrix&> H3 = boost::none, boost::optional<gtsam::Matrix&> H4 = boost::none) const override
         {
 
             Eigen::Matrix3d d = rot1.transpose() * rot2.matrix();

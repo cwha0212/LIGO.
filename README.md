@@ -141,3 +141,7 @@ source ~/catkin_ws/devel/setup.bash
         <img src="https://github.com/Joanna-HE/LIGO/blob/main/image/Sample.png" width = 75% >
     </div>
 </div>
+
+
+# 달라진 점
+v1.1 : NMEA입력을 NatSatMsg로 받아서 처리하는 부분을 다시 활성화 함.

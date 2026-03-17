@@ -40,6 +40,7 @@
 #include <vector>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
@@ -65,8 +66,8 @@ class NMEAFactor : public gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, 
         virtual ~NMEAFactor() {}
 
         gtsam::Vector evaluateError(const gtsam::Rot3 &rot_ext, const gtsam::Vector3 &pos_ext, const gtsam::Vector6 &pos_vel, const gtsam::Rot3 &rot,
-            gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone, 
-            gtsam::OptionalMatrixType H3 = OptionalNone, gtsam::OptionalMatrixType H4 = OptionalNone) const override
+            boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none, 
+            boost::optional<gtsam::Matrix&> H3 = boost::none, boost::optional<gtsam::Matrix&> H4 = boost::none) const override
         {
             Eigen::Vector3d ref_enu = pos_ext;
 

@@ -39,6 +39,7 @@
 
 #include <Eigen/Dense>
 #include <vector>
+#include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/base/Vector.h>
 #include <gtsam/geometry/Pose3.h>
@@ -57,8 +58,8 @@ class NmeaLioGravHardFactor : public gtsam::NoiseModelFactor3<gtsam::Rot3, gtsam
         virtual ~NmeaLioGravHardFactor() {}
 
         gtsam::Vector evaluateError(const gtsam::Rot3 &rot_ext, const gtsam::Rot3 &rot, const gtsam::Vector6 &pos_vel,
-        gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone,
-        gtsam::OptionalMatrixType H3 = OptionalNone) const override
+        boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none,
+        boost::optional<gtsam::Matrix&> H3 = boost::none) const override
         {
             Eigen::Matrix3d res_R = rot_lio.transpose() * rot.matrix();
             Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));

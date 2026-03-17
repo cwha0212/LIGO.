@@ -47,6 +47,18 @@
 #include <../include/IKFoM/IKFoM_toolkit/esekfom/esekfom.hpp>
 #include <ligo/msg/local_sensor_external_trigger.hpp>
 #include <queue>
+#include <boost/optional.hpp>
+#include <gtsam/nonlinear/NonlinearFactor.h>
+
+// GTSAM API compatibility: some code uses OptionalMatrixType/OptionalNone.
+// On older GTSAM (e.g., Ubuntu packaged), factors use boost::optional<Matrix&>.
+#ifndef LIGO_GTSAM_OPTIONAL_COMPAT
+#define LIGO_GTSAM_OPTIONAL_COMPAT
+namespace gtsam {
+using OptionalMatrixType = boost::optional<Matrix&>;
+}  // namespace gtsam
+static const boost::none_t OptionalNone = boost::none;
+#endif
 
 using namespace std;
 using namespace Eigen;

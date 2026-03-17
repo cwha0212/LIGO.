@@ -38,6 +38,20 @@
 #include <rclcpp/rclcpp.hpp>
 #include <fstream>
 #include <chrono>
+// #region agent log
+static inline void ligo_dbg62(const char* location, const char* message, const std::string& data_json,
+                              const char* hypothesisId, const char* runId = "pre-fix") {
+    try {
+        std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-62f312.log", std::ios::app);
+        if (!f.is_open()) return;
+        const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        f << "{\"sessionId\":\"62f312\",\"runId\":\"" << runId << "\",\"hypothesisId\":\"" << hypothesisId
+          << "\",\"location\":\"" << location << "\",\"message\":\"" << message << "\",\"data\":" << data_json
+          << ",\"timestamp\":" << ts << "}\n";
+    } catch (...) {}
+}
+// #endregion
 bool data_accum_finished = false, data_accum_start = false, online_calib_finish = false, refine_print = false;
 int frame_num_init = 0;
 double time_lag_IMU_wtr_lidar = 0.0, move_start_time = 0.0, online_calib_starts_time = 0.0; //, mean_acc_norm = 9.81;
@@ -184,6 +198,13 @@ void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg)
     nav_msgs::msg::Odometry::SharedPtr nmea_meas = std::make_shared<nav_msgs::msg::Odometry>(*meas_msg);
     last_nmea_time = rclcpp::Time(nmea_meas->header.stamp).seconds();
     nmea_meas_buf.push(std::move(nmea_meas)); // ?
+    // #region agent log
+    ligo_dbg62("li_initialization.cpp:nmea_meas_callback", "NMEA Odometry received->buffered",
+               std::string("{\"stamp_sec\":") + std::to_string(meas_msg->header.stamp.sec) +
+               ",\"stamp_nanosec\":" + std::to_string(meas_msg->header.stamp.nanosec) +
+               ",\"buf_size\":" + std::to_string(nmea_meas_buf.size()) + "}",
+               "H1");
+    // #endregion
 }
 
 void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
@@ -192,6 +213,30 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
     if (gpsMsg->status.status != 0)
         return;
 
+    // Align NavSatFix timestamp base to LiDAR/IMU ROS(bag) time if needed.
+    // Some datasets publish GNSS with Unix epoch stamps while LiDAR uses bag time.
+    static bool nmea_stamp_offset_inited = false;
+    static double nmea_stamp_offset_sec = 0.0;
+    const double gps_ts_raw = rclcpp::Time(gpsMsg->header.stamp).seconds();
+    bool offset_just_inited = false;
+    if (!nmea_stamp_offset_inited && last_timestamp_lidar > 1.0)
+    {
+        const double diff = gps_ts_raw - last_timestamp_lidar;
+        if (std::fabs(diff) > 1000.0)  // clearly different time bases
+        {
+            nmea_stamp_offset_sec = diff;
+            nmea_stamp_offset_inited = true;
+            offset_just_inited = true;
+            // #region agent log
+            ligo_dbg62("li_initialization.cpp:gpsHandler", "Initialized nmea_stamp_offset_sec to align epoch->bag time",
+                       std::string("{\"gps_ts_raw\":") + std::to_string(gps_ts_raw) +
+                       ",\"last_timestamp_lidar\":" + std::to_string(last_timestamp_lidar) +
+                       ",\"offset_sec\":" + std::to_string(nmea_stamp_offset_sec) + "}",
+                       "H13");
+            // #endregion
+        }
+    }
+
     Eigen::Vector3d trans_local_;
     if (!first_gps) {
         first_gps = true;
@@ -199,12 +244,30 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         geo << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
         first_gps_lla = geo;
         first_gps_ecef = geo2ecef(geo);
+        // #region agent log
+        ligo_dbg62("li_initialization.cpp:gpsHandler", "NavSatFix first_gps anchor set",
+                   std::string("{\"lat\":") + std::to_string(gpsMsg->latitude) +
+                   ",\"lon\":" + std::to_string(gpsMsg->longitude) +
+                   ",\"alt\":" + std::to_string(gpsMsg->altitude) + "}",
+                   "H2");
+        // #endregion
     }
     Eigen::Vector3d cur_ecef = geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
     trans_local_ = ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);
 
     nav_msgs::msg::Odometry gps_odom;
-    gps_odom.header.stamp = gpsMsg->header.stamp;
+    if (nmea_stamp_offset_inited)
+    {
+        const double gps_ts_aligned = gps_ts_raw - nmea_stamp_offset_sec;
+        const int32_t sec = static_cast<int32_t>(std::floor(gps_ts_aligned));
+        const uint32_t nanosec = static_cast<uint32_t>(std::round((gps_ts_aligned - std::floor(gps_ts_aligned)) * 1e9));
+        gps_odom.header.stamp.sec = sec;
+        gps_odom.header.stamp.nanosec = nanosec;
+    }
+    else
+    {
+        gps_odom.header.stamp = gpsMsg->header.stamp;
+    }
     gps_odom.header.frame_id = "map";
     gps_odom.pose.pose.position.x = trans_local_[0];
     gps_odom.pose.pose.position.y = trans_local_[1];
@@ -218,7 +281,33 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
     // gps_odom->pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(0.0, 0.0, 0.0);
     // pubGpsOdom.publish(gps_odom);
     // gpsQueue.push_back(gps_odom);
+    if (offset_just_inited)
+    {
+        // Clear any previously buffered NMEA messages with incompatible time base
+        // (e.g., first NavSatFix arriving before LiDAR time is available).
+        while (!nmea_meas_buf.empty()) nmea_meas_buf.pop();
+        // #region agent log
+        ligo_dbg62("li_initialization.cpp:gpsHandler", "Cleared nmea_meas_buf after offset init",
+                   std::string("{\"cleared\":true}"),
+                   "H13");
+        // #endregion
+    }
     nmea_meas_buf.push(std::make_shared<nav_msgs::msg::Odometry>(gps_odom));
+    // #region agent log
+    ligo_dbg62("li_initialization.cpp:gpsHandler", "NavSatFix->Odom pushed to nmea_meas_buf",
+               std::string("{\"enu_x\":") + std::to_string(trans_local_[0]) +
+               ",\"enu_y\":" + std::to_string(trans_local_[1]) +
+               ",\"enu_z\":" + std::to_string(trans_local_[2]) +
+               ",\"cov_xx\":" + std::to_string(gps_odom.pose.covariance[0]) +
+               ",\"cov_yy\":" + std::to_string(gps_odom.pose.covariance[7]) +
+               ",\"cov_zz\":" + std::to_string(gps_odom.pose.covariance[14]) +
+               ",\"gps_ts_raw\":" + std::to_string(gps_ts_raw) +
+               ",\"gps_ts_aligned\":" + std::to_string(rclcpp::Time(gps_odom.header.stamp).seconds()) +
+               ",\"offset_inited\":" + std::string(nmea_stamp_offset_inited ? "true" : "false") +
+               ",\"offset_sec\":" + std::to_string(nmea_stamp_offset_sec) +
+               ",\"buf_size\":" + std::to_string(nmea_meas_buf.size()) + "}",
+               "H2");
+    // #endregion
 #endif
 }
 
@@ -435,6 +524,15 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
 
         if ((last_nmea_time < time_diff_nmea_local + imu_first_time + lidar_time_inte) && NMEA_ENABLE)
         {
+            // #region agent log
+            ligo_dbg62("li_initialization.cpp:sync_packages", "NMEA gating: last_nmea_time too old (waiting)",
+                       std::string("{\"last_nmea_time\":") + std::to_string(last_nmea_time) +
+                       ",\"imu_first_time\":" + std::to_string(imu_first_time) +
+                       ",\"lidar_time_inte\":" + std::to_string(lidar_time_inte) +
+                       ",\"time_diff_nmea_local\":" + std::to_string(time_diff_nmea_local) +
+                       ",\"nmea_meas_buf_size\":" + std::to_string(nmea_meas_buf.size()) + "}",
+                       "H3");
+            // #endregion
             return false;
         }
 
@@ -565,6 +663,13 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
 
                 if (!nmea_msg.empty())
                 {
+                    // #region agent log
+                    ligo_dbg62("li_initialization.cpp:sync_packages", "nmea_msg filled (ready for NMEAProcess)",
+                               std::string("{\"nmea_msg_size\":") + std::to_string(nmea_msg.size()) +
+                               ",\"nmea_meas_buf_size\":" + std::to_string(nmea_meas_buf.size()) +
+                               ",\"imu_first_time\":" + std::to_string(imu_first_time) + "}",
+                               "H4");
+                    // #endregion
                     imu_pushed = false;
                     return true;
                 }
@@ -893,6 +998,18 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
     {
         if (!nmea_meas_buf.empty()) // or can wait for a short time?
         {
+            // #region agent log
+            ligo_dbg62("li_initialization.cpp:sync_packages(lidar)", "NMEA fill attempt (before while)",
+                       std::string("{\"lose_lid\":") + (lose_lid ? "true" : "false") +
+                       ",\"lidar_beg_time\":" + std::to_string(meas.lidar_beg_time) +
+                       ",\"lidar_end_time\":" + std::to_string(lidar_end_time) +
+                       ",\"lidar_time_inte\":" + std::to_string(lidar_time_inte) +
+                       ",\"time_diff_nmea_local\":" + std::to_string(time_diff_nmea_local) +
+                       ",\"nmea_meas_buf_size\":" + std::to_string(nmea_meas_buf.size()) +
+                       ",\"nmea_msg_size\":" + std::to_string(nmea_msg.size()) +
+                       ",\"front_nmea_ts\":" + std::to_string(rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds()) + "}",
+                       "H12");
+            // #endregion
             double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
             while ((!lose_lid && (front_nmea_ts < lidar_end_time + time_diff_nmea_local)) || (lose_lid && (front_nmea_ts < meas.lidar_beg_time + time_diff_nmea_local + lidar_time_inte) )) 
             {
@@ -901,6 +1018,14 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                 if (nmea_meas_buf.empty()) break;
                 front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
             }
+            // #region agent log
+            ligo_dbg62("li_initialization.cpp:sync_packages(lidar)", "NMEA fill attempt (after while)",
+                       std::string("{\"nmea_meas_buf_size\":" + std::to_string(nmea_meas_buf.size()) +
+                       ",\"nmea_msg_size\":" + std::to_string(nmea_msg.size()) +
+                       ",\"front_nmea_ts_after\":" + (nmea_meas_buf.empty() ? std::string("null") : std::to_string(rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds())) +
+                       "}"),
+                       "H12");
+            // #endregion
             if (!nmea_msg.empty())
             {
                 time_buffer.pop_front();
