@@ -168,6 +168,19 @@ void gnss_tp_info_callback(const gnss_comm::msg::GnssTimePulseInfoMsg::ConstShar
 
 void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg)
 {
+    // #region agent log — ensure debug log file is created on first NMEA message
+    {
+        static int nmea_cb_count = 0;
+        int c = nmea_cb_count++;
+        if (c < 3 || (c % 500 == 0)) {
+            std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app);
+            if (f.is_open()) {
+                f << "{\"sessionId\":\"288b39\",\"location\":\"li_initialization.cpp:nmea_meas_callback\",\"message\":\"NMEA odom received\",\"data\":{\"count\":" << (c + 1) << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n";
+                f.close();
+            }
+        }
+    }
+    // #endregion
     nav_msgs::msg::Odometry::SharedPtr nmea_meas = std::make_shared<nav_msgs::msg::Odometry>(*meas_msg);
     last_nmea_time = rclcpp::Time(nmea_meas->header.stamp).seconds();
     nmea_meas_buf.push(std::move(nmea_meas)); // ?
@@ -624,10 +637,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                     }
                     if (!gnss_msg.empty())
                     {
-                        time_buffer.pop_front();
-                        lidar_buffer.pop_front();
-                        lidar_pushed = false;
-                        return true;
+                        /* Fall through to fill nmea_msg too when NMEA_ENABLE, so both GNSS and NMEA are used in same frame */
                     }
                     }
                 }
@@ -869,11 +879,7 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
             }
             if (!gnss_msg.empty())
             {
-                time_buffer.pop_front();
-                lidar_buffer.pop_front();
-                lidar_pushed = false;
-                imu_pushed = false;
-                return true;
+                /* Fall through to fill nmea_msg too when NMEA_ENABLE */
             }
         }
     }

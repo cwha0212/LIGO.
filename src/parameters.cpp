@@ -37,6 +37,7 @@
 #include "parameters.h"
 #include <fstream>
 #include <chrono>
+#include <rclcpp/exceptions.hpp>
 
 typename curvefitter::TrajectoryManager<4>::Ptr traj_manager = std::make_shared<curvefitter::TrajectoryManager<4>>();
 bool is_first_frame = true;
@@ -119,7 +120,11 @@ void readParameters(rclcpp::Node * node)
   p_nmea.reset(new NMEAProcess());
 
   auto get_param = [node](const std::string & name, auto default_val) -> decltype(default_val) {
-    node->declare_parameter(name, default_val);
+    try {
+      node->declare_parameter(name, default_val);
+    } catch (const rclcpp::exceptions::ParameterAlreadyDeclaredException &) {
+      // Already declared (e.g. when both GNSS and NMEA read same param) — just get value
+    }
     return node->get_parameter(name).get_value<decltype(default_val)>();
   };
   prop_at_freq_of_imu = get_param("prop_at_freq_of_imu", true);

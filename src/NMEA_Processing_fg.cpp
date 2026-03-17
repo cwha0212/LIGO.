@@ -39,6 +39,13 @@
 #include <fstream>
 #include <chrono>
 
+// #region agent log — factor debug
+#define LIGO_LOG_FACTOR(factor_name, frame_num) do { \
+  std::ofstream _lf("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app); \
+  if (_lf.is_open()) { _lf << "{\"sessionId\":\"288b39\",\"message\":\"factor_added\",\"data\":{\"factor\":\"" << (factor_name) << "\",\"frame_num\":" << (frame_num) << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n"; _lf.close(); } \
+} while(0)
+// #endregion
+
 NMEAProcess::NMEAProcess()
 {
   Reset();
@@ -101,6 +108,9 @@ void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_mea
     // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
     if (nmea_meas->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[7] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[14] > p_assign->ppp_std_threshold)
     {
+      // #region agent log
+      { std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app); if (f.is_open()) { f << "{\"sessionId\":\"288b39\",\"location\":\"NMEA_Processing_fg.cpp:processNMEA_reject\",\"message\":\"NMEA rejected cov\",\"data\":{\"cov0\":" << nmea_meas->pose.covariance[0] << ",\"cov7\":" << nmea_meas->pose.covariance[7] << ",\"cov14\":" << nmea_meas->pose.covariance[14] << ",\"thres\":" << p_assign->ppp_std_threshold << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n"; f.close(); } }
+      // #endregion
       return;
     }
     {
@@ -111,7 +121,10 @@ void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_mea
       vel_window[frame_count] = state.vel + state.rot * omg_skew * Tex_imu_r; // .normalized().toRotationMatrix()
     }
     nmea_meas_[frame_count] = nmea_meas;
-    frame_count ++; 
+    frame_count ++;
+    // #region agent log
+    { std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app); if (f.is_open()) { f << "{\"sessionId\":\"288b39\",\"location\":\"NMEA_Processing_fg.cpp:processNMEA_stored_init\",\"message\":\"NMEA stored init\",\"data\":{\"frame_count\":" << frame_count << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n"; f.close(); } }
+    // #endregion
     nmea_ready = NMEALIAlign();
     if (nmea_ready)
     {
@@ -332,6 +345,9 @@ bool NMEAProcess::Evaluate(state_output &state)
   // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
   if (nmea_meas_[0]->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[7] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[14] > p_assign->ppp_std_threshold)
   {
+    // #region agent log
+    { std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app); if (f.is_open()) { f << "{\"sessionId\":\"288b39\",\"location\":\"NMEA_Processing_fg.cpp:Evaluate_reject\",\"message\":\"NMEA Evaluate rejected cov\",\"data\":{\"cov0\":" << nmea_meas_[0]->pose.covariance[0] << ",\"cov7\":" << nmea_meas_[0]->pose.covariance[7] << ",\"cov14\":" << nmea_meas_[0]->pose.covariance[14] << ",\"thres\":" << p_assign->ppp_std_threshold << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n"; f.close(); } }
+    // #endregion
     return false;
   }
   double time_current = rclcpp::Time(nmea_meas_[0]->header.stamp).seconds();
@@ -474,12 +490,14 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     if (!weight_lid_zero)
     {
       p_assign->gtSAMgraph.add(ligo::NmeaLioGravRelFactor(P(0), R(frame_num), A(frame_num), O(frame_num), G(frame_num), gravity_init, state_gravity, pos, vel, rot, ba, bg, acc, omg, sqrt_lidar, p_assign->odomNoise)); //LioNoise)); // odomNoiseIMU));
+      LIGO_LOG_FACTOR("NmeaLioGravRelFactor", frame_num);
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
     }
     else
     {
       p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(G(frame_num), gtsam::Vector3(state_gravity), p_assign->priorGravNoise));
+      LIGO_LOG_FACTOR("PriorFactor_G", frame_num);
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
 
@@ -487,10 +505,12 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       pv.block<3,1>(0,0) = pos;
       pv.block<3,1>(3,0) = vel;
       p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector6>(A(frame_num), gtsam::Vector6(pv), p_assign->priorNoise));
+      LIGO_LOG_FACTOR("PriorFactor_A", frame_num);
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
 
       p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
+      LIGO_LOG_FACTOR("PriorFactor_R", frame_num);
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
 
@@ -500,6 +520,7 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       oth.block<3,1>(6,0) = bg;
       oth.block<3,1>(9,0) = ba;
       p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector12>(O(frame_num), gtsam::Vector12(oth), p_assign->priorBiasNoise));
+      LIGO_LOG_FACTOR("PriorFactor_O", frame_num);
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
     }
@@ -529,6 +550,7 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
   {
     p_assign->gtSAMgraph.add(ligo::GnssLioFactorNolidar(R(frame_num-1), F(frame_num-1), R(frame_num), F(frame_num), rel_rot, rel_pos, rel_vel, 
                   state_gravity, delta_t, ba, bg, pre_integration, p_assign->odomNoiseIMU));
+    LIGO_LOG_FACTOR("GnssLioFactorNolidar", frame_num);
     p_assign->factor_id_frame[frame_num-1-frame_delete].push_back(id_accumulate);
     id_accumulate += 1;
   }
@@ -547,15 +569,18 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       if (frame_num < delete_thred)
       {
         p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise_init));
+        LIGO_LOG_FACTOR("NMEAFactor_init", frame_num);
       }
       else
       {
         p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise));
+        LIGO_LOG_FACTOR("NMEAFactor", frame_num);
       }
     }
     else
     {
       p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise)); // not work
+      LIGO_LOG_FACTOR("NMEAFactorNolidar", frame_num);
     }
     factor_id_cur.push_back(id_accumulate);
     id_accumulate += 1;
@@ -605,6 +630,7 @@ void NMEAProcess::SetInit()
     p_assign->gtSAMgraph.add(init_vel_);
     p_assign->gtSAMgraph.add(init_bias_);
     p_assign->gtSAMgraph.add(init_grav_);
+    LIGO_LOG_FACTOR("init_rot_ext", -1); LIGO_LOG_FACTOR("init_pos_ext", -1); LIGO_LOG_FACTOR("init_rot", -1); LIGO_LOG_FACTOR("init_vel", -1); LIGO_LOG_FACTOR("init_bias", -1); LIGO_LOG_FACTOR("init_grav", -1);
     p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1, 2, 3, 4, 5});
     id_accumulate += 6;
   }
@@ -618,6 +644,7 @@ void NMEAProcess::SetInit()
     gtsam::PriorFactor<gtsam::Vector12> init_vel_bias(F(0), gtsam::Vector12(init_vel_bias_vector), p_assign->priorposNoise);
     p_assign->gtSAMgraph.add(init_rot);
     p_assign->gtSAMgraph.add(init_vel_bias);
+    LIGO_LOG_FACTOR("init_rot_nolidar", -1); LIGO_LOG_FACTOR("init_vel_bias", -1);
     p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1}); //{i * 4, i * 4 + 1, i * 4  + 2, i * 4 + 3});
     p_assign->initialEstimate.insert(R(0), gtsam::Rot3(rot_window[wind_size])); // R_enu_local_ * 
     p_assign->initialEstimate.insert(F(0), gtsam::Vector12(init_vel_bias_vector));

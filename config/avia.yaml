@@ -41,7 +41,7 @@
                     0.0, 0.0, 1.0] # extrinsics of LiDAR to IMU represented in IMU frame
 
     gnss:
-      gnss_enable: true                  # enable fuse GNSS
+      gnss_enable: false                  # enable fuse GNSS
       ephem_from_rinex: false            # true: read ephem from rinex. false: get ephem from rosbag
       ephem_file_name: " "
       obs_from_rinex: false              # true: read gnss obs (e.g., pseudo range, doppler, carrier-phase) from rinex. false: get obs from rosbag
@@ -86,7 +86,7 @@
                     0.0, 0.0, 1.0 ]            # extrinsics of the GNSS receiver to IMU represented in IMU frame
 
     nmea:
-      nmea_enable: false # enable fuse ppp results of gnss observations
+      nmea_enable: true # enable fuse ppp results of gnss observations
       posit_odo_topic: "/ublox_driver/receiver_lla" # "/mavros/local_position/odom" # ppp solutions topic
       ppp_std_thres: 1000.0 # ppp solution std thred
       pos_noise: 1.0 # factor cov for position factors

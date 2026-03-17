@@ -11,7 +11,7 @@ def generate_launch_description():
     stdout_colorized_envvar = SetEnvironmentVariable('RCUTILS_COLORIZED_OUTPUT', '1')
 
     config_file = PathJoinSubstitution([
-        get_package_share_directory('ligo'), 'config', 'avia_septentrio.yaml'
+        get_package_share_directory('ligo'), 'config', 'avia.yaml'
     ])
     rviz_config = PathJoinSubstitution([
         get_package_share_directory('ligo'), 'rviz_cfg', 'loam_livox.rviz'
