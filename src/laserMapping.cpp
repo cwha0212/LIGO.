@@ -537,9 +537,18 @@ int main(int argc, char** argv)
     if (NMEA_ENABLE)
     {
         rclcpp::QoS qos_nmea(10000);
-        sub_nmea_meas = node->create_subscription<nav_msgs::msg::Odometry>(
-            nmea_meas_topic, qos_nmea, nmea_meas_callback);
-        RCLCPP_INFO(node->get_logger(), "NMEA subscription active: %s", nmea_meas_topic.c_str());
+        if (nmea_input_type == "navsatfix")
+        {
+            sub_nmea_meas = node->create_subscription<sensor_msgs::msg::NavSatFix>(
+                nmea_meas_topic, qos_nmea, gpsHandler);
+            RCLCPP_INFO(node->get_logger(), "NMEA subscription active (NavSatFix->Odom bridge): %s", nmea_meas_topic.c_str());
+        }
+        else
+        {
+            sub_nmea_meas = node->create_subscription<nav_msgs::msg::Odometry>(
+                nmea_meas_topic, qos_nmea, nmea_meas_callback);
+            RCLCPP_INFO(node->get_logger(), "NMEA subscription active (Odometry): %s", nmea_meas_topic.c_str());
+        }
     }
 
     rclcpp::QoS qos_pub(1000);

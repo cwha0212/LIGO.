@@ -88,6 +88,7 @@
     nmea:
       nmea_enable: true # enable fuse ppp results of gnss observations
       posit_odo_topic: "/ublox_driver/receiver_lla" # "/mavros/local_position/odom" # ppp solutions topic
+      nmea_input_type: "navsatfix" # "odometry" (nav_msgs/Odometry) or "navsatfix" (sensor_msgs/NavSatFix -> internal Odom)
       ppp_std_thres: 1000.0 # ppp solution std thred
       pos_noise: 1.0 # factor cov for position factors
       nmea_weight: 1000.0 

@@ -116,6 +116,7 @@ extern std::string gnss_ephem_topic, gnss_glo_ephem_topic, gnss_meas_topic, gnss
 extern std::string gt_fname, ephem_fname, ppp_fname;
 extern std::string gnss_tp_info_topic, local_trigger_info_topic, rtk_pvt_topic, rtk_lla_topic;
 extern std::string nmea_meas_topic;
+extern std::string nmea_input_type;
 extern std::vector<double> default_gnss_iono_params;
 extern double gnss_local_time_diff, gnss_ekf_noise;
 extern bool next_pulse_time_valid, update_gnss, update_nmea;

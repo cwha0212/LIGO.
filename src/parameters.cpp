@@ -88,6 +88,7 @@ std::string gnss_ephem_topic, gnss_glo_ephem_topic, gnss_meas_topic, gnss_iono_p
 std::string gt_fname, ephem_fname, ppp_fname;
 std::string gnss_tp_info_topic, local_trigger_info_topic, rtk_pvt_topic, rtk_lla_topic;
 std::string nmea_meas_topic;
+std::string nmea_input_type;
 std::vector<double> default_gnss_iono_params(8, 0.0);
 double gnss_local_time_diff = 18.0;
 bool next_pulse_time_valid = false, update_gnss = false, update_nmea = false;
@@ -272,6 +273,7 @@ void readParameters(rclcpp::Node * node)
     p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
     p_nmea->nmea_weight = get_param("nmea.nmea_weight", 0.1);
     nmea_meas_topic = get_param("nmea.posit_odo_topic", std::string("/mavros/local_position/odom"));
+    nmea_input_type = get_param("nmea.nmea_input_type", std::string("odometry"));
     p_nmea->gravity_init << VEC_FROM_ARRAY(gravity);
     time_diff_nmea_local = get_param("nmea.nmea_local_time_diff", 0.0);
     p_nmea->p_assign->prior_noise = get_param("gnss.prior_noise", 0.010);

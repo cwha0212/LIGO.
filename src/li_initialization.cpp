@@ -205,10 +205,16 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
 
     nav_msgs::msg::Odometry gps_odom;
     gps_odom.header.stamp = gpsMsg->header.stamp;
-    // gps_odom->header.frame_id = "map";
+    gps_odom.header.frame_id = "map";
     gps_odom.pose.pose.position.x = trans_local_[0];
     gps_odom.pose.pose.position.y = trans_local_[1];
     gps_odom.pose.pose.position.z = trans_local_[2];
+    if (gpsMsg->position_covariance_type != sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN)
+    {
+        gps_odom.pose.covariance[0] = gpsMsg->position_covariance[0];  // xx
+        gps_odom.pose.covariance[7] = gpsMsg->position_covariance[4];  // yy
+        gps_odom.pose.covariance[14] = gpsMsg->position_covariance[8]; // zz
+    }
     // gps_odom->pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(0.0, 0.0, 0.0);
     // pubGpsOdom.publish(gps_odom);
     // gpsQueue.push_back(gps_odom);
