@@ -115,7 +115,7 @@ void NMEAAssignment::initNoises( void ) // maybe usable!
     relatNoiseVector9 << odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise;
     relatNoise = gtsam::noiseModel::Diagonal::Variances(relatNoiseVector9);
     gtsam::Vector robustnmeaNoiseVector9(3); // gtsam::Pose3 factor has 6 elements (6D)
-    robustnmeaNoiseVector9 << pos_noise, pos_noise, pos_noise; //, vel_noise, vel_noise, vel_noise, rot_noise, rot_noise, rot_noise;
+    robustnmeaNoiseVector9 << pos_noise, pos_noise, pos_noise_z; // x, y, z (z often larger for GNSS/PPP vertical)
     if (outlier_rej)
     {
       robustnmeaNoise = gtsam::noiseModel::Robust::Create(

@@ -287,6 +287,7 @@ void readParameters(rclcpp::Node * node)
     p_nmea->p_assign->odo_noise = get_param("gnss.odo_noise", 0.1);
     p_nmea->p_assign->grav_noise = get_param("gnss.grav_noise", 0.1);
     p_nmea->p_assign->pos_noise = get_param("nmea.pos_noise", 0.1);
+    p_nmea->p_assign->pos_noise_z = get_param("nmea.pos_noise_z", p_nmea->p_assign->pos_noise);
     p_nmea->delete_thred = get_param("gnss.gtsam_variable_thres", 200);
     p_nmea->p_assign->marg_thred = get_param("gnss.gtsam_marg_variable_thres", 1);
     p_nmea->p_assign->outlier_thres = get_param("gnss.outlier_thres", 0.1);

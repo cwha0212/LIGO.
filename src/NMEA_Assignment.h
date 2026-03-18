@@ -102,6 +102,7 @@ class NMEAAssignment
         double odo_noise = 0.01;
         double grav_noise = 0.01;
         double pos_noise = 0.01;
+        double pos_noise_z = 0.01;  // z-axis position noise (often larger for GNSS/PPP vertical)
         double vel_noise = 0.01;
         double rot_noise = 0.01;
 
