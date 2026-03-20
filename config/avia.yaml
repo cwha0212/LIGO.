@@ -89,9 +89,9 @@
       nmea_enable: true # enable fuse ppp results of gnss observations
       posit_odo_topic: "/ublox_driver/receiver_lla" # "/mavros/local_position/odom" # ppp solutions topic
       nmea_input_type: "navsatfix" # "odometry" (nav_msgs/Odometry) or "navsatfix" (sensor_msgs/NavSatFix -> internal Odom)
-      ppp_std_thres: 0.1 # ppp solution std thred
+      ppp_std_thres: 1.0 # ppp solution std thred
       pos_noise: 1.0 # factor cov for position (x,y)
-      pos_noise_z: 20.0 # factor cov for position z (GNSS/PPP vertical error is larger; increase to trust z less)
+      pos_noise_z: 30000.0 # factor cov for position z (GNSS/PPP vertical error is larger; increase to trust z less)
       nmea_weight: 1000.0 
       nmea_local_time_diff: 0.0 # 27.062 # difference between PPP solution and local time (s)
       ppp_file_name: "deg2.pos" # "deg2.pos" # ""

@@ -154,7 +154,7 @@ class GnssLioFactor : public gtsam::NoiseModelFactor6<gtsam::Rot3, gtsam::Vector
         {
 
             // Eigen::Matrix3d d = rot1.transpose() * rot2.matrix();
-Eigen::Matrix3d res_R = rel_rot.transpose() * rot1.matrix();
+            Eigen::Matrix3d res_R = rel_rot.transpose() * rot1.matrix();
             Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
             // Eigen::Vector3d delta_p = rot1.transpose() * (pos_vel_bias2.segment<3>(0) - pos_vel_bias1.segment<3>(0) - pos_vel_bias1.segment<3>(3) * dt - 0.5 * grav * dt * dt);
             // Eigen::Vector3d delta_p = pos_vel_bias2.segment<3>(0) - pos_vel_bias1.segment<3>(0); // - pos_vel_bias1.segment<3>(3) * dt - 0.5 * grav * dt * dt);

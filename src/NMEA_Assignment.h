@@ -64,11 +64,9 @@
 // #include <nmea_factor/nmea_lio_gravity_hard_factor.hpp>
 #include <nmea_factor/nmea_lio_gravity_rel_factor.hpp>
 #include <gnss_factor/gnss_prior_factor.hpp>
-// #include <nmea_factor/nmea_factor.hpp>
-#include <nmea_factor/nmea_pos_factor.hpp>
+#include <nmea_factor/nmea_factor.hpp>
 #include <nmea_factor/nmea_lio_factor.hpp>
-// #include <nmea_factor/nmea_factor_nolidar.hpp>
-#include <nmea_factor/nmea_pos_factor_nolidar.hpp>
+#include <nmea_factor/nmea_factor_nolidar.hpp>
 
 using gtsam::symbol_shorthand::R; // Pose3 ()
 using gtsam::symbol_shorthand::P; // Pose3 (x,y,z,r,p,y) ext_R

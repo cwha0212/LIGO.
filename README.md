@@ -146,3 +146,5 @@ source ~/catkin_ws/devel/setup.bash
 # 달라진 점
 v1.1 : NMEA입력을 NatSatMsg로 받아서 처리하는 부분을 다시 활성화 함.
 v1.2 : Z축에 대한 noise param 추가
+
+v2 : indoor_localization_factor 추가, NMEA에서 pose only 추가, 'ring'오류 처리, markdown파일 추가

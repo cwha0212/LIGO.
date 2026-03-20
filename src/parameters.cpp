@@ -101,9 +101,16 @@ int orig_odom_freq = 10;
 double online_refine_time = 20.0; //unit: s
 bool GNSS_ENABLE = true;
 bool NMEA_ENABLE = true;
+bool indoor_flag = false;
 bool dyn_filter = false;
 double dyn_filter_resolution = 1.0;
 Eigen::Matrix3d Rot_gnss_init(Eye3d);
+Eigen::Vector3d indoor_pos_enu_meas = Eigen::Vector3d::Zero();
+Eigen::Quaterniond indoor_rot_enu_meas = Eigen::Quaterniond::Identity();
+bool indoor_pose_valid = false;
+double indoor_pose_time = 0.0;
+gtsam::noiseModel::Base::shared_ptr indoorPoseNoise;
+gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
 std::vector<Eigen::Matrix3d> local_rots;
@@ -268,6 +275,8 @@ void readParameters(rclcpp::Node * node)
   }
   NMEA_ENABLE = get_param("nmea.nmea_enable", false);
   cout << "nmea enable:" << NMEA_ENABLE << endl;
+  indoor_flag = get_param("indoor.indoor_flag", false);
+  cout << "indoor enable:" << indoor_flag << endl;
   if (NMEA_ENABLE)
   {
     p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
@@ -297,6 +306,19 @@ void readParameters(rclcpp::Node * node)
     nolidar = get_param("gnss.nolidar", false);
     p_nmea->wind_size = get_param("gnss.window_size", 2);
     p_nmea->p_assign->initNoises();
+  }
+
+  if (indoor_flag)
+  {
+    const bool indoor_outlier_rej = get_param("indoor.outlier_rejection", false);
+    const double indoor_outlier_thres = get_param("indoor.outlier_thres", 0.1);
+    const double indoor_outlier_thres_init = get_param("indoor.outlier_thres_init", 0.1);
+    const double indoor_pos_noise = get_param("indoor.pos_noise", 0.1);
+    const double indoor_pos_noise_z = get_param("indoor.pos_noise_z", indoor_pos_noise);
+    const double indoor_rot_noise = get_param("indoor.rot_noise", 0.1);
+    ligo::indoor::initIndoorPoseNoises(indoor_pos_noise, indoor_pos_noise_z, indoor_rot_noise,
+                                       indoor_outlier_rej, indoor_outlier_thres, indoor_outlier_thres_init,
+                                       indoorPoseNoise, indoorPoseNoiseInit);
   }
 #endif
 }

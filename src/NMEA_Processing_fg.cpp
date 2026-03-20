@@ -35,6 +35,7 @@
  */
 
 #include "NMEA_Processing_fg.h"
+#include "parameters.h"
 #include <chrono>
 #include <fstream>
 
@@ -597,6 +598,7 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     id_accumulate += 1;
   }
   {
+    const bool nmea_navsatfix_pos_only = (nmea_input_type == "navsatfix");
     double values[17];
     values[0] = Tex_imu_r[0]; values[1] = Tex_imu_r[1]; values[2] = Tex_imu_r[2]; values[3] = anc_local[0]; values[4] = anc_local[1]; values[5] = anc_local[2];
     values[6] = nmea_meas_[0]->pose.pose.position.x; values[7] = nmea_meas_[0]->pose.pose.position.y; values[8] = nmea_meas_[0]->pose.pose.position.z; 
@@ -604,18 +606,27 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     values[12] = nmea_meas_[0]->pose.pose.orientation.w; values[13] = nmea_meas_[0]->pose.pose.orientation.x; values[14] = nmea_meas_[0]->pose.pose.orientation.y;
     values[15] = nmea_meas_[0]->pose.pose.orientation.z; 
     values[16] = nmea_weight; 
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "[NMEA FACTOR INPUT] ts=%.6f pos=(%.6f, %.6f, %.6f) vel=(%.6f, %.6f, %.6f) quat=(%.6f, %.6f, %.6f, %.6f) w=%.6f",
+                time_current,
+                values[6], values[7], values[8],
+                values[9], values[10], values[11],
+                values[12], values[13], values[14], values[15],
+                values[16]);
     if (!nolidar)
     {
       // Eigen::Vector3d RTex1 = rot * Tex_imu_r;
       // values[0] = RTex1[0]; values[1] = RTex1[1]; values[2] = RTex1[2]; 
       if (frame_num < delete_thred)
       {
-        p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise_init));
+        p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise_init,
+                                  nmea_navsatfix_pos_only));
         LIGO_LOG_FACTOR("NMEAFactor_init", frame_num);
       }
       else
       {
-        p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise));
+        p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
+                                  nmea_navsatfix_pos_only));
         LIGO_LOG_FACTOR("NMEAFactor", frame_num);
       }
       // #region agent log
@@ -627,10 +638,12 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
                       ",\"pos_z\":" + std::to_string(values[8]) + "}",
                       "H7");
       // #endregion
+
     }
     else
     {
-      p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise)); // not work
+      p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
+                                                       nmea_navsatfix_pos_only)); // not work
       LIGO_LOG_FACTOR("NMEAFactorNolidar", frame_num);
     }
     factor_id_cur.push_back(id_accumulate);

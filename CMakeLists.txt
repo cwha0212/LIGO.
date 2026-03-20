@@ -83,6 +83,8 @@ set(ligo_sources
   src/laserMapping.cpp
   src/li_initialization.cpp
   src/parameters.cpp
+  src/Indoor_NoiseModel.cpp
+  src/Indoor_Processing.cpp
   src/preprocess.cpp
   src/Estimator.cpp
   src/IMU_Processing.cpp

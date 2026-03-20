@@ -65,6 +65,7 @@
 #include <pcl/common/transforms.h>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <Curvefitter/curvefitter.hpp>
+#include "Indoor_NoiseModel.h"
 
 using IVoxType = faster_lio::IVox<3, faster_lio::IVoxNodeType::DEFAULT, PointType>;
 
@@ -129,8 +130,15 @@ extern int orig_odom_freq;
 extern double online_refine_time; //unit: s
 extern bool GNSS_ENABLE;
 extern bool NMEA_ENABLE;
+extern bool indoor_flag;
 extern double time_update_last, time_current, time_predict_last_const, t_last;
 extern Eigen::Matrix3d Rot_gnss_init;
+extern Eigen::Vector3d indoor_pos_enu_meas;
+extern Eigen::Quaterniond indoor_rot_enu_meas;
+extern bool indoor_pose_valid;
+extern double indoor_pose_time;
+extern gtsam::noiseModel::Base::shared_ptr indoorPoseNoise;
+extern gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
 
 extern MeasureGroup Measures;
 

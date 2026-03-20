@@ -219,45 +219,95 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::SharedPtr
     pl_corn.clear();
     pl_full.clear();
 
-    pcl::PointCloud<velodyne_ros::Point> pl_orig;
-    pcl::fromROSMsg(*msg, pl_orig);
-    int plsize = pl_orig.points.size();
-    if (plsize == 0) return;
-    pl_surf.reserve(plsize);
-    
+    auto has_field = [&](const std::string &name) -> bool {
+      for (const auto &field : msg->fields) {
+        if (field.name == name) return true;
+      }
+      return false;
+    };
+    const bool has_ring = has_field("ring");
+    const bool has_time = has_field("time");
+
     /*** These variables only works when no point timestamps given ***/
     double omega_l = 0.361 * SCAN_RATE;       // scan angular velocity
-    std::vector<bool> is_first(N_SCANS,true);
+    std::vector<bool> is_first(N_SCANS, true);
     std::vector<double> yaw_fp(N_SCANS, 0.0);      // yaw of first scan point
     std::vector<float> yaw_last(N_SCANS, 0.0);   // yaw of last scan point
     std::vector<float> time_last(N_SCANS, 0.0);  // last offset time
     /*****************************************************************/
 
-    if (pl_orig.points[plsize - 1].time > 0)
+    if (has_ring && has_time)
     {
-      given_offset_time = true;
+      pcl::PointCloud<velodyne_ros::Point> pl_orig;
+      pcl::fromROSMsg(*msg, pl_orig);
+      int plsize = pl_orig.points.size();
+      if (plsize == 0) return;
+      pl_surf.reserve(plsize);
+
+      given_offset_time = (pl_orig.points[plsize - 1].time > 0);
+
+      for (int i = 0; i < plsize; i++)
+      {
+        PointType added_pt;
+        added_pt.normal_x = 0;
+        added_pt.normal_y = 0;
+        added_pt.normal_z = 0;
+        added_pt.x = pl_orig.points[i].x;
+        added_pt.y = pl_orig.points[i].y;
+        added_pt.z = pl_orig.points[i].z;
+        added_pt.intensity = pl_orig.points[i].intensity;
+        added_pt.curvature = pl_orig.points[i].time * time_unit_scale;  // curvature unit: ms
+        if (i % point_filter_num != 0 || std::isnan(added_pt.x) || std::isnan(added_pt.y) || std::isnan(added_pt.z)) continue;
+
+        if (!given_offset_time)
+        {
+          int layer = 0;
+          double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957;
+
+          if (is_first[layer])
+          {
+            yaw_fp[layer] = yaw_angle;
+            is_first[layer] = false;
+            added_pt.curvature = 0.0;
+            yaw_last[layer] = yaw_angle;
+            time_last[layer] = added_pt.curvature;
+            continue;
+          }
+
+          if (yaw_angle < yaw_fp[layer])
+          {
+            added_pt.curvature = (yaw_fp[layer] - yaw_angle) / omega_l;
+          }
+          else
+          {
+            added_pt.curvature = (yaw_fp[layer] - yaw_angle + 360.0) / omega_l;
+          }
+        }
+
+        double dist = added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z;
+        if (dist > (blind * blind) && dist < (det_range * det_range))
+        {
+          pl_surf.points.push_back(added_pt);
+        }
+      }
+      return;
     }
-    else
-    {
-      given_offset_time = false;
-      // double yaw_first = atan2(pl_orig.points[0].y, pl_orig.points[0].x) * 57.29578;
-      // double yaw_end  = yaw_first;
-      // int layer_first = pl_orig.points[0].ring;
-      // for (uint i = plsize - 1; i > 0; i--)
-      // {
-      //   if (pl_orig.points[i].ring == layer_first)
-      //   {
-      //     yaw_end = atan2(pl_orig.points[i].y, pl_orig.points[i].x) * 57.29578;
-      //     break;
-      //   }
-      // }
-    }
+
+    // Fallback path for PointCloud2 streams without ring/time fields.
+    // This avoids noisy PCL "Failed to find match for field 'ring'" logs.
+    pcl::PointCloud<pcl::PointXYZI> pl_orig;
+    pcl::fromROSMsg(*msg, pl_orig);
+    const int plsize = pl_orig.points.size();
+    if (plsize == 0) return;
+    pl_surf.reserve(plsize);
+    given_offset_time = false;
+
+    RCLCPP_WARN(rclcpp::get_logger("preprocess"),
+                "Input cloud has no ring/time field. Using XYZI fallback parser.");
 
     for (int i = 0; i < plsize; i++)
     {
       PointType added_pt;
-      // cout<<"!!!!!!"<<i<<" "<<plsize<<endl;
-      
       added_pt.normal_x = 0;
       added_pt.normal_y = 0;
       added_pt.normal_z = 0;
@@ -265,57 +315,35 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::SharedPtr
       added_pt.y = pl_orig.points[i].y;
       added_pt.z = pl_orig.points[i].z;
       added_pt.intensity = pl_orig.points[i].intensity;
-      added_pt.curvature = pl_orig.points[i].time * time_unit_scale;  // curvature unit: ms // cout<<added_pt.curvature<<endl;
+      added_pt.curvature = 0.0;
       if (i % point_filter_num != 0 || std::isnan(added_pt.x) || std::isnan(added_pt.y) || std::isnan(added_pt.z)) continue;
 
-      if (!given_offset_time)
+      int layer = 0;
+      double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957;
+      if (is_first[layer])
       {
-        // int unit_size = plsize / 16;
-        // int layer = i / unit_size; // pl_orig.points[i].ring;
-        // cout << "check layer:" << unit_size << ";" << i << ";" << layer << endl;
-        int layer = 0;
-        double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957;
-
-        if (is_first[layer])
-        {
-          // printf("layer: %d; is first: %d", layer, is_first[layer]);
-            yaw_fp[layer]=yaw_angle;
-            is_first[layer]=false;
-            added_pt.curvature = 0.0;
-            yaw_last[layer]=yaw_angle;
-            time_last[layer]=added_pt.curvature;
-            continue;
-        }
-
-        // compute offset time
-        if (yaw_angle < yaw_fp[layer])
-        {
-          added_pt.curvature = (yaw_fp[layer]-yaw_angle) / omega_l;
-          // added_pt.curvature = (yaw_angle + 360.0 - yaw_fp[layer]) / omega_l;
-        }
-        else
-        {
-          added_pt.curvature = (yaw_fp[layer]-yaw_angle+360.0) / omega_l;
-          // added_pt.curvature = (yaw_angle-yaw_fp[layer]) / omega_l;
-        }
-
-        // if (added_pt.curvature < time_last[layer])  added_pt.curvature+=360.0/omega_l;
-
-        // yaw_last[layer] = yaw_angle;
-        // time_last[layer]=added_pt.curvature;
+        yaw_fp[layer] = yaw_angle;
+        is_first[layer] = false;
+        added_pt.curvature = 0.0;
+        yaw_last[layer] = yaw_angle;
+        time_last[layer] = added_pt.curvature;
+        continue;
+      }
+      if (yaw_angle < yaw_fp[layer])
+      {
+        added_pt.curvature = (yaw_fp[layer] - yaw_angle) / omega_l;
+      }
+      else
+      {
+        added_pt.curvature = (yaw_fp[layer] - yaw_angle + 360.0) / omega_l;
       }
 
-      // if (i % point_filter_num == 0 && !std::isnan(added_pt.x) && !std::isnan(added_pt.y) && !std::isnan(added_pt.z))
       double dist = added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z;
+      if (dist > (blind * blind) && dist < (det_range * det_range))
       {
-        if(dist > (blind * blind)
-        && dist < (det_range * det_range))
-        {
-          pl_surf.points.push_back(added_pt);
-        }
+        pl_surf.points.push_back(added_pt);
       }
     }
-    
 }
 
 void Preprocess::hesai_handler(const sensor_msgs::msg::PointCloud2::SharedPtr &msg)

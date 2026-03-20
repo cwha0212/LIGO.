@@ -211,7 +211,9 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
 {
 #ifndef LIGO_WITHOUT_GNSS
     if (gpsMsg->status.status != 0)
+    {
         return;
+    }
 
     // Align NavSatFix timestamp base to LiDAR/IMU ROS(bag) time if needed.
     // Some datasets publish GNSS with Unix epoch stamps while LiDAR uses bag time.

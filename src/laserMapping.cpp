@@ -49,6 +49,7 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include "li_initialization.h"
+#include "Indoor_Processing.h"
 #include <malloc.h>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
@@ -597,6 +598,9 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_gnss->gnss_msg, p_nmea->nmea_msg)) 
         {
+            ligo::indoor::updateIndoorLocalizationPlaceholder(state_out.pos, state_out.rot, time_current);
+            // TODO(indoor): enable real graph insertion after localization module is implemented.
+            // ligo::indoor::addIndoorFactorToGraphStubCommented();
             // #region agent log
             ligo_dbg62_map("laserMapping.cpp:main_loop", "sync_packages returned true",
                            std::string("{\"GNSS_ENABLE\":") + (GNSS_ENABLE ? "true" : "false") +

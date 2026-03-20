@@ -50,8 +50,10 @@ namespace ligo {
 class NMEAFactorNolidar : public gtsam::NoiseModelFactor2<gtsam::Rot3, gtsam::Vector12>
 {
     public: 
-        NMEAFactorNolidar(gtsam::Key j1, gtsam::Key j2, double values_[17], Eigen::Vector3d hat_omg_T_, Eigen::Matrix3d Rex_imu_r_, const gtsam::SharedNoiseModel& model) :
-        hat_omg_T(hat_omg_T_), Rex_imu_r(Rex_imu_r_), gtsam::NoiseModelFactor2<gtsam::Rot3, gtsam::Vector12>(model, j1, j2) {
+        NMEAFactorNolidar(gtsam::Key j1, gtsam::Key j2, double values_[17], Eigen::Vector3d hat_omg_T_, Eigen::Matrix3d Rex_imu_r_, const gtsam::SharedNoiseModel& model,
+                          bool position_only = false) :
+        hat_omg_T(hat_omg_T_), Rex_imu_r(Rex_imu_r_), position_only_(position_only),
+        gtsam::NoiseModelFactor2<gtsam::Rot3, gtsam::Vector12>(model, j1, j2) {
             Tex_imu_r << values_[0], values_[1], values_[2];
             pos_meas << values_[6], values_[7], values_[8];
             vel_meas << values_[9], values_[10], values_[11];
@@ -65,6 +67,25 @@ class NMEAFactorNolidar : public gtsam::NoiseModelFactor2<gtsam::Rot3, gtsam::Ve
             boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none) const override
         {
             Eigen::Vector3d P_enu = pos_vel.segment<3>(0) + rot.matrix() * Tex_imu_r;
+
+            if (position_only_)
+            {
+                gtsam::Vector residual(3);
+                residual = (P_enu - pos_meas) * relative_sqrt_info;
+                Eigen::Matrix3d hat_T;
+                hat_T << SKEW_SYM_MATRX(Tex_imu_r);
+                if (H1)
+                {
+                    (*H1) = gtsam::Matrix::Zero(3, 3);
+                    (*H1).block<3, 3>(0, 0) = -relative_sqrt_info * rot.matrix() * hat_T;
+                }
+                if (H2)
+                {
+                    (*H2) = gtsam::Matrix::Zero(3, 12);
+                    (*H2).block<3, 3>(0, 0) = relative_sqrt_info * Eigen::Matrix3d::Identity();
+                }
+                return residual;
+            }
             
             Eigen::Vector3d V_local = rot.matrix().transpose() * pos_vel.segment<3>(3);
             Eigen::Vector3d V_enu = V_local + hat_omg_T;
@@ -107,6 +128,7 @@ class NMEAFactorNolidar : public gtsam::NoiseModelFactor2<gtsam::Rot3, gtsam::Ve
         Eigen::Vector3d Tex_imu_r, hat_omg_T, pos_meas, vel_meas;
         Eigen::Matrix3d Rex_imu_r, rot_meas;
         double relative_sqrt_info;
+        bool position_only_;
 };
 }
 

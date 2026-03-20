@@ -51,9 +51,11 @@ namespace ligo {
 class NMEAFactor : public gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, gtsam::Vector6, gtsam::Rot3>
 {
     public: 
+        /** If true (NavSatFix bridge: no valid twist/orientation), only apply 3D position residual in ENU. */
         NMEAFactor(gtsam::Key j1, gtsam::Key j2, gtsam::Key j3, gtsam::Key j4, bool invalid_lidar_, double values_[17],
-        Eigen::Vector3d hat_omg_T_, Eigen::Matrix3d Rex_imu_r_, const gtsam::SharedNoiseModel& model) :
-        hat_omg_T(hat_omg_T_), invalid_lidar(invalid_lidar_), Rex_imu_r(Rex_imu_r_),
+        Eigen::Vector3d hat_omg_T_, Eigen::Matrix3d Rex_imu_r_, const gtsam::SharedNoiseModel& model,
+        bool position_only = false) :
+        hat_omg_T(hat_omg_T_), invalid_lidar(invalid_lidar_), Rex_imu_r(Rex_imu_r_), position_only_(position_only),
         gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, gtsam::Vector6, gtsam::Rot3>(model, j1, j2, j3, j4) {
             Tex_imu_r << values_[0], values_[1], values_[2];
             anc_local << values_[3], values_[4], values_[5];
@@ -77,7 +79,37 @@ class NMEAFactor : public gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, 
             Eigen::Matrix3d R_enu_local = rot_ext.matrix(); // R_ecef_enu_cur * R_enu_local;
 
             Eigen::Vector3d P_enu = R_enu_local * local_pos + ref_enu;
-            
+
+            if (position_only_)
+            {
+                gtsam::Vector residual(3);
+                residual = (P_enu - pos_meas) * relative_sqrt_info;
+                if (H1)
+                {
+                    (*H1) = gtsam::Matrix::Zero(3, 3);
+                    Eigen::Matrix3d d_pos;
+                    d_pos << 0.0, local_pos[2], -local_pos[1],
+                             -local_pos[2], 0.0, local_pos[0],
+                             local_pos[1], -local_pos[0], 0.0;
+                    (*H1).block<3, 3>(0, 0) = R_enu_local * d_pos * relative_sqrt_info;
+                }
+                if (H2)
+                {
+                    (*H2) = gtsam::Matrix::Zero(3, 3);
+                    (*H2).block<3, 3>(0, 0) = gtsam::Matrix::Identity(3, 3) * relative_sqrt_info;
+                }
+                if (H3)
+                {
+                    (*H3) = gtsam::Matrix::Zero(3, 6);
+                    (*H3).block<3, 3>(0, 0) = R_enu_local * relative_sqrt_info;
+                }
+                if (H4)
+                {
+                    (*H4) = gtsam::Matrix::Zero(3, 3);
+                }
+                return residual;
+            }
+
             Eigen::Vector3d V_enu = local_vel + hat_omg_T;
 
             Eigen::Matrix3d R_enu = R_enu_local * rot.matrix() * Rex_imu_r;
@@ -138,6 +170,7 @@ class NMEAFactor : public gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, 
         Eigen::Matrix3d rot_meas, Rex_imu_r;
         double relative_sqrt_info;
         bool invalid_lidar;
+        bool position_only_;
 };
 }
 
