@@ -53,6 +53,7 @@ static inline void ligo_dbg62_nmea(const char* location, const char* message, co
   } catch (...) {}
 }
 // #endregion
+
 #include <rclcpp/rclcpp.hpp>
 #include <fstream>
 #include <chrono>
@@ -655,6 +656,72 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     std::vector<size_t>().swap(factor_id_cur);
   }
   return true;
+}
+
+void NMEAProcess::SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
+                                          const Eigen::Matrix3d &indoor_rot_enu,
+                                          const state_output &seed_state,
+                                          double init_time_sec)
+{
+  // Rebuild NMEA graph state from indoor localization anchor while keeping the
+  // existing gravity prior path intact in SetInit().
+  Reset();
+
+  anc_enu = indoor_pos_enu;
+  anc_local = seed_state.rot * Tex_imu_r + seed_state.pos;
+  Rot_nmea_init.setIdentity();
+  yaw_enu_local = 0.0;
+
+  // Keep ENU/local conversion consistent with existing factor geometry:
+  // R_enu = R_enu_local * R_local * Rex  =>  R_enu_local = R_enu * (R_local * Rex)^T
+  Eigen::Matrix3d r_enu_local = indoor_rot_enu * (seed_state.rot * Rex_imu_r).transpose();
+
+  if (!nolidar)
+  {
+    Eigen::Matrix<double, 6, 1> init_vel_bias_vector;
+    Eigen::Matrix<double, 12, 1> init_others_vector;
+    init_vel_bias_vector.block<3,1>(0,0) = Eigen::Vector3d::Zero();
+    init_vel_bias_vector.block<3,1>(3,0) = Eigen::Vector3d::Zero();
+    init_others_vector.block<3,1>(0,0) = Eigen::Vector3d::Zero();
+    init_others_vector.block<3,1>(3,0) = Eigen::Vector3d::Zero();
+    init_others_vector.block<3,1>(6,0) = Eigen::Vector3d::Zero();
+    init_others_vector.block<3,1>(9,0) = Eigen::Vector3d::Zero();
+
+    p_assign->initialEstimate.insert(P(0), gtsam::Rot3(Rot_nmea_init));
+    p_assign->initialEstimate.insert(A(0), gtsam::Vector6(init_vel_bias_vector));
+    p_assign->initialEstimate.insert(O(0), gtsam::Vector12(init_others_vector));
+    p_assign->initialEstimate.insert(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]));
+    p_assign->initialEstimate.insert(R(0), gtsam::Rot3(r_enu_local));
+    p_assign->initialEstimate.insert(G(0), gtsam::Vector3(gravity_init));
+
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(P(0), gtsam::Rot3(gtsam::Rot3(Rot_nmea_init)), p_assign->priorextrotNoise));
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]), p_assign->priorextposNoise));
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(0), gtsam::Rot3(r_enu_local), p_assign->priorrotNoise));
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector6>(A(0), gtsam::Vector6(init_vel_bias_vector), p_assign->priorNoise));
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector12>(O(0), gtsam::Vector12(init_others_vector), p_assign->priorBiasNoise));
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(G(0), gtsam::Vector3(gravity_init), p_assign->priorGravNoise));
+    p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1, 2, 3, 4, 5});
+    id_accumulate += 6;
+  }
+  else
+  {
+    Eigen::Matrix<double, 12, 1> init_vel_bias_vector;
+    init_vel_bias_vector.block<3,1>(0,0) = anc_enu + seed_state.pos;
+    init_vel_bias_vector.block<3,1>(3,0) = seed_state.vel;
+    init_vel_bias_vector.block<6,1>(6,0) = Eigen::Matrix<double, 6, 1>::Zero();
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(0), gtsam::Rot3(indoor_rot_enu), p_assign->priorrotNoise));
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector12>(F(0), gtsam::Vector12(init_vel_bias_vector), p_assign->priorposNoise));
+    p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1});
+    p_assign->initialEstimate.insert(R(0), gtsam::Rot3(indoor_rot_enu));
+    p_assign->initialEstimate.insert(F(0), gtsam::Vector12(init_vel_bias_vector));
+    id_accumulate += 2;
+  }
+
+  nmea_ready = true;
+  frame_num = 1;
+  frame_count = 0;
+  last_nmea_time = init_time_sec;
+  runISAM2opt();
 }
 
 void NMEAProcess::SetInit()

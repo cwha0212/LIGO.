@@ -73,6 +73,7 @@ static inline void ligo_dbg62_map(const char* location, const char* message, con
 // #endregion
 
 
+
 #define PUBFRAME_PERIOD     (20)
 
 const float MOV_THRESHOLD = 1.5f;
@@ -88,6 +89,13 @@ Eigen::Vector3d first_pvt_anc, first_lla_anc;
 Eigen::Vector3d first_pvt_used, first_lla_used;
 
 bool  flg_reset = false, flg_exit = false;
+bool  flg_reset_indoor_reloc = false;
+bool  indoor_reloc_applied_once = false;
+Eigen::Vector3d indoor_reloc_pos_enu = Eigen::Vector3d::Zero();
+Eigen::Matrix3d indoor_reloc_rot_enu = Eigen::Matrix3d::Identity();
+double indoor_reloc_pose_time = 0.0;
+constexpr bool kTempForceIndoorByNmeaCov = true;
+constexpr double kTempIndoorCovThreshold = 50.0;
 
 //surf feature in map
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
@@ -107,6 +115,14 @@ void SigHandle(int sig)
     flg_exit = true;
     RCLCPP_WARN(rclcpp::get_logger("ligo"), "catch sig %d", sig);
     sig_buffer.notify_all();
+}
+
+static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr &msg,
+                                        double threshold)
+{
+    return msg->pose.covariance[0] >= threshold ||
+           msg->pose.covariance[7] >= threshold ||
+           msg->pose.covariance[14] >= threshold;
 }
 
 void pointBodyLidarToIMU(PointType const * const pi, PointType * const po)
@@ -611,17 +627,39 @@ int main(int argc, char** argv)
             // #endregion
             if (flg_reset)
             {
-                RCLCPP_WARN(node->get_logger(), "reset when rosbag play back");
+                if (flg_reset_indoor_reloc)
+                {
+                    RCLCPP_WARN(node->get_logger(), "reset by indoor relocalization");
+                }
+                else
+                {
+                    RCLCPP_WARN(node->get_logger(), "reset when rosbag play back");
+                }
                 p_imu->Reset();
                 feats_undistort.reset(new PointCloudXYZI());
                 {
                     state_out = state_output();
+                    if (flg_reset_indoor_reloc)
+                    {
+                        RCLCPP_WARN(node->get_logger(), "indoor mode on");
+                        // Keep ENU anchor in graph init, but restart local state at origin.
+                        state_out.pos = Eigen::Vector3d::Zero();
+                        state_out.rot = indoor_reloc_rot_enu;
+                        state_out.vel = Eigen::Vector3d::Zero();
+                        state_out.gravity << VEC_FROM_ARRAY(gravity);
+                        state_out.acc = -state_out.rot.transpose() * state_out.gravity;
+                        kf_output.x_ = state_out;
+                        p_imu->imu_need_init_ = false;
+                        p_imu->after_imu_init_ = true;
+                        p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
+                    }
                     kf_output.change_P(P_init_output);
                 }
                 is_first_gnss = true;
                 flg_first_scan = true;
                 is_first_frame = true;
                 flg_reset = false;
+                flg_reset_indoor_reloc = false;
                 init_map = false;
                 
                 {
@@ -1074,6 +1112,29 @@ int main(int argc, char** argv)
                                         p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                         // p_gnss->sqrt_lidar *= 0.002;
                                         update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                        const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
+                                        const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                        const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                        const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                        if (trigger_normal || trigger_temp)
+                                        {
+                                            if (trigger_normal)
+                                            {
+                                                indoor_reloc_pos_enu = indoor_pos_enu_meas;
+                                                indoor_reloc_rot_enu = indoor_rot_enu_meas.normalized().toRotationMatrix();
+                                                indoor_reloc_pose_time = indoor_pose_time;
+                                            }
+                                            else
+                                            {
+                                                indoor_reloc_pos_enu = kf_output.x_.pos;
+                                                indoor_reloc_rot_enu = kf_output.x_.rot;
+                                                indoor_reloc_pose_time = time_predict_last_const;
+                                            }
+                                            indoor_reloc_applied_once = true;
+                                            flg_reset_indoor_reloc = true;
+                                            flg_reset = true;
+                                            break;
+                                        }
                                         // #region agent log
                                         ligo_dbg62_map("laserMapping.cpp:nmea_eval", "Evaluate returned",
                                                        std::string("{\"update_nmea\":") + (update_nmea ? "true" : "false") +
@@ -1341,6 +1402,29 @@ int main(int argc, char** argv)
                                 p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                 // p_gnss->sqrt_lidar *= 0.002;
                                 update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
+                                const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                if (trigger_normal || trigger_temp)
+                                {
+                                    if (trigger_normal)
+                                    {
+                                        indoor_reloc_pos_enu = indoor_pos_enu_meas;
+                                        indoor_reloc_rot_enu = indoor_rot_enu_meas.normalized().toRotationMatrix();
+                                        indoor_reloc_pose_time = indoor_pose_time;
+                                    }
+                                    else
+                                    {
+                                        indoor_reloc_pos_enu = kf_output.x_.pos;
+                                        indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        indoor_reloc_pose_time = time_predict_last_const;
+                                    }
+                                    indoor_reloc_applied_once = true;
+                                    flg_reset_indoor_reloc = true;
+                                    flg_reset = true;
+                                    break;
+                                }
                                 if (!p_nmea->nmea_ready)
                                 {
                                     flg_reset = true;
@@ -1774,6 +1858,29 @@ int main(int argc, char** argv)
                                     p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                 }
                                 update_nmea = p_nmea->Evaluate(kf_output.x_); 
+                                const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
+                                const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                if (trigger_normal || trigger_temp)
+                                {
+                                    if (trigger_normal)
+                                    {
+                                        indoor_reloc_pos_enu = indoor_pos_enu_meas;
+                                        indoor_reloc_rot_enu = indoor_rot_enu_meas.normalized().toRotationMatrix();
+                                        indoor_reloc_pose_time = indoor_pose_time;
+                                    }
+                                    else
+                                    {
+                                        indoor_reloc_pos_enu = kf_output.x_.pos;
+                                        indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        indoor_reloc_pose_time = time_predict_last_const;
+                                    }
+                                    indoor_reloc_applied_once = true;
+                                    flg_reset_indoor_reloc = true;
+                                    flg_reset = true;
+                                    break;
+                                }
                                 if (!p_nmea->nmea_ready)
                                 {
                                     flg_reset = true;

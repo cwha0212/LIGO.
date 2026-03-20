@@ -55,6 +55,10 @@ class NMEAProcess
   
   void Reset();
   void processNMEA(const nav_msgs::msg::Odometry::SharedPtr &gnss_meas, state_output &state);
+  void SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
+                               const Eigen::Matrix3d &indoor_rot_enu,
+                               const state_output &seed_state,
+                               double init_time_sec);
   bool NMEALIAlign();
   void TrajAlign(Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>&local_traj, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>&enu_traj, Eigen::Vector3d &pos, Eigen::Matrix3d &rot);
   // bool TrajAlign(Eigen::Vector3d &pos, Eigen::Matrix3d &rot);
