@@ -35,13 +35,14 @@
  */
 
 #include "NMEA_Assignment.h"
+#include <gtsam/linear/linearExceptions.h>
 
 NMEAAssignment::NMEAAssignment() : process_feat_num(0) {}
 
 void NMEAAssignment::initNoises( void ) // maybe usable!
 {
     gtsam::Vector priorrotNoiseVector3(3);
-    priorrotNoiseVector3 << prior_noise, prior_noise, prior_noise;
+    priorrotNoiseVector3 << rot_noise, rot_noise, rot_noise;
     // priorrotNoiseVector3 << prior_noise / 1000, prior_noise / 1000, prior_noise / 1000;
     priorrotNoise = gtsam::noiseModel::Diagonal::Variances(priorrotNoiseVector3);
 
@@ -75,7 +76,7 @@ void NMEAAssignment::initNoises( void ) // maybe usable!
     priorGravNoise = gtsam::noiseModel::Diagonal::Variances(priorNoiseVector3);
 
     gtsam::Vector margrotNoiseVector3(3);
-    margrotNoiseVector3 << prior_noise / 10, prior_noise / 10, prior_noise / 10;
+    margrotNoiseVector3 << rot_noise, rot_noise, rot_noise;
     margrotNoise = gtsam::noiseModel::Diagonal::Variances(margrotNoiseVector3);
 
     gtsam::Vector margposNoiseVector6(6);
@@ -141,18 +142,20 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
     {
       if (frame_delete > 0)
       {
-        if (frame_delete >= change_ext)
+        // Re-anchor global extrinsic states every marginalization cycle.
+        // Runtime evidence showed p0 can become underconstrained near delete boundary.
         {
-            gtsam::noiseModel::Gaussian::shared_ptr updatedERNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(P(0))); // important
-            gtsam::noiseModel::Gaussian::shared_ptr updatedEPNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(E(0))); // important
-            gtsam::PriorFactor<gtsam::Rot3> init_ER(P(0),isamCurrentEstimate.at<gtsam::Rot3>(P(0)), updatedERNoise); // margrotNoise); //
-            gtsam::PriorFactor<gtsam::Vector3> init_EP(E(0),isamCurrentEstimate.at<gtsam::Vector3>(E(0)), updatedEPNoise); // margNoise); // 
+            gtsam::noiseModel::Gaussian::shared_ptr updatedERNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(P(0)));
+            gtsam::noiseModel::Gaussian::shared_ptr updatedEPNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(E(0)));
+            gtsam::PriorFactor<gtsam::Rot3> init_ER(P(0),isamCurrentEstimate.at<gtsam::Rot3>(P(0)), updatedERNoise);
+            gtsam::PriorFactor<gtsam::Vector3> init_EP(E(0),isamCurrentEstimate.at<gtsam::Vector3>(E(0)), updatedEPNoise);
             gtSAMgraph.add(init_ER);
             gtSAMgraph.add(init_EP);
-            // factor_id_frame[0].push_back(id_accumulate);
-            // factor_id_frame[0].push_back(id_accumulate+1);
-            factor_id_frame[frame_num - 1 - frame_delete].push_back(id_accumulate);
-            factor_id_frame[frame_num - 1 - frame_delete].push_back(id_accumulate+1);
+            if (!factor_id_frame.empty())
+            {
+              factor_id_frame.back().push_back(id_accumulate);
+              factor_id_frame.back().push_back(id_accumulate + 1);
+            }
             id_accumulate += 2;
             change_ext = frame_num;
         }
@@ -169,17 +172,27 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
             gtsam::PriorFactor<gtsam::Rot3> init_rot(R(frame_delete+j),isamCurrentEstimate.at<gtsam::Rot3>(R(frame_delete+j)), margrotNoise); // updatedRotNoise); //  
             // gtsam::PriorFactor<gtsam::Vector12> init_vel(F(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector12>(F(frame_delete+j)), updatedPosNoise); // margposNoise);
             gtsam::PriorFactor<gtsam::Vector6> init_vel(A(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector6>(A(frame_delete+j)), margposNoise); // updatedPosNoise); // 
+            gtsam::PriorFactor<gtsam::Vector3> init_grav(G(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector3>(G(frame_delete+j)), priorGravNoise);
             gtSAMgraph.add(init_rot);
             gtSAMgraph.add(init_vel);
-            factor_id_frame[0].push_back(id_accumulate+(j)*2);
-            factor_id_frame[0].push_back(id_accumulate+1+(j)*2);
+            gtSAMgraph.add(init_grav);
+            factor_id_frame[0].push_back(id_accumulate+(j)*3);
+            factor_id_frame[0].push_back(id_accumulate+1+(j)*3);
+            factor_id_frame[0].push_back(id_accumulate+2+(j)*3);
         }
-        id_accumulate += j * 2;
+        id_accumulate += j * 3;
       }
-      isam.update(gtSAMgraph, initialEstimate);
-      gtSAMgraph.resize(0); // will the initialEstimate change?
-      initialEstimate.clear();
-      isam.update(gtSAMgraph, initialEstimate, delete_factor);
+      try
+      {
+        isam.update(gtSAMgraph, initialEstimate);
+        gtSAMgraph.resize(0); // will the initialEstimate change?
+        initialEstimate.clear();
+        isam.update(gtSAMgraph, initialEstimate, delete_factor);
+      }
+      catch (const gtsam::IndeterminantLinearSystemException &)
+      {
+        throw;
+      }
     }
     else
     {
@@ -203,9 +216,16 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
         }
         id_accumulate += j * 2;
       }
-      isam.update(gtSAMgraph, initialEstimate);
-      gtSAMgraph.resize(0); // will the initialEstimate change?
-      initialEstimate.clear();
-      isam.update(gtSAMgraph, initialEstimate, delete_factor);
+      try
+      {
+        isam.update(gtSAMgraph, initialEstimate);
+        gtSAMgraph.resize(0); // will the initialEstimate change?
+        initialEstimate.clear();
+        isam.update(gtSAMgraph, initialEstimate, delete_factor);
+      }
+      catch (const gtsam::IndeterminantLinearSystemException &)
+      {
+        throw;
+      }
     }
 }

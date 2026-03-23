@@ -33,8 +33,8 @@
       match_s: 81.0 # parameter for matching check, the larger, the harder to manifest a match
       ivox_grid_resolution: 1.0 # length (m) of voxels for grid map
       gravity: [0.0, 0.0, -9.81] # 
-      init_with_imu: true
-      gravity_init: [0.0, 0.0, 9.810] # preknown gravity in IMU frame. used when it is impossible to estimate it from acc measurements, i.e., init_with_imu is false
+      init_with_imu: false
+      gravity_init: [0.0, 0.0, -9.810] # preknown gravity in IMU frame. used when it is impossible to estimate it from acc measurements, i.e., init_with_imu is false
       extrinsic_T: [0.04165, 0.02326, -0.0284] # mid360[0.04165, 0.02326, -0.0284] # avia # 
       extrinsic_R: [1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -63,8 +63,8 @@
       gnss_dopp_std_thres: 30.0           # doppler std threshold
       gnss_cp_std_thres: 30.0             # carrier phase std threshold
       gnss_cp_time_thres: 100.0           # single-differenced carrier phase factor time threshold
-      gtsam_variable_thres: 30            # the window size for GNSS obs
-      gtsam_marg_variable_thres: 1
+      gtsam_variable_thres: 150            # the window size for GNSS obs
+      gtsam_marg_variable_thres: 3
       gnss_sample_period: 0.1             # = 1 / frequency of GNSS obs
       outlier_thres: 1.0 # 1                # parameter for robust function of GNSS factors
       outlier_thres_init: 10.0 # 10         # parameter for robust fucntion of initial GNSS factors
@@ -84,6 +84,9 @@
       gnss_extrinsic_R: [ 1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
                     0.0, 0.0, 1.0 ]            # extrinsics of the GNSS receiver to IMU represented in IMU frame
+
+    ligo:
+      global_position_topic: "/ligo/global_position"
 
     nmea:
       nmea_enable: true # enable fuse ppp results of gnss observations

@@ -68,6 +68,36 @@ find_package(GTSAM REQUIRED QUIET)
 find_package(Ceres REQUIRED)
 find_package(Sophus REQUIRED)
 
+# small_gicp integration policy:
+# 1) prefer bundled thirdparty include directory in this package
+# 2) fallback to user-supplied SMALL_GICP_INCLUDE_DIR
+# 3) fallback to system find_package(small_gicp)
+set(LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/small_gicp/include")
+set(SMALL_GICP_INCLUDE_DIR "" CACHE PATH "Path to small_gicp include directory (folder containing small_gicp/...)")
+set(LIGO_WITH_SMALL_GICP OFF)
+set(LIGO_SMALL_GICP_MODE "disabled")
+
+if(EXISTS "${LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR}/small_gicp/registration/registration.hpp")
+  set(LIGO_WITH_SMALL_GICP ON)
+  set(SMALL_GICP_INCLUDE_DIR "${LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR}")
+  set(LIGO_SMALL_GICP_MODE "bundled-thirdparty")
+elseif(SMALL_GICP_INCLUDE_DIR AND EXISTS "${SMALL_GICP_INCLUDE_DIR}/small_gicp/registration/registration.hpp")
+  set(LIGO_WITH_SMALL_GICP ON)
+  set(LIGO_SMALL_GICP_MODE "external-include-path")
+else()
+  find_package(small_gicp QUIET)
+  if(small_gicp_FOUND)
+    set(LIGO_WITH_SMALL_GICP ON)
+    set(LIGO_SMALL_GICP_MODE "find-package")
+  endif()
+endif()
+
+if(LIGO_WITH_SMALL_GICP)
+  message(STATUS "ligo: small_gicp enabled (${LIGO_SMALL_GICP_MODE})")
+else()
+  message(STATUS "ligo: small_gicp not found (indoor small_gicp localizer module disabled)")
+endif()
+
 include_directories(
   include
   ${EIGEN3_INCLUDE_DIRS}
@@ -77,6 +107,9 @@ include_directories(
   ${CERES_INCLUDE_DIRS}
   ${Python3_INCLUDE_DIRS}
 )
+if(SMALL_GICP_INCLUDE_DIR)
+  include_directories(${SMALL_GICP_INCLUDE_DIR})
+endif()
 
 # Source list (exclude GNSS/NMEA when building without gnss_comm)
 set(ligo_sources
@@ -103,6 +136,10 @@ else()
   add_compile_definitions(LIGO_WITHOUT_GNSS)
   list(APPEND ligo_sources src/ligo_gnss_nmea_stub.cpp)
   message(STATUS "ligo: building without gnss_comm (LiDAR+IMU only)")
+endif()
+if(LIGO_WITH_SMALL_GICP)
+  list(APPEND ligo_sources src/Indoor_SmallGICP_Localizer.cpp)
+  add_compile_definitions(LIGO_WITH_SMALL_GICP)
 endif()
 
 add_executable(ligo_mapping ${ligo_sources})
@@ -131,6 +168,9 @@ target_link_libraries(ligo_mapping
   Sophus::Sophus
   fmt
 )
+if(TARGET small_gicp::small_gicp)
+  target_link_libraries(ligo_mapping small_gicp::small_gicp)
+endif()
 if(gnss_comm_FOUND)
   target_link_libraries(ligo_mapping ${gnss_comm_LIBRARIES})
   target_include_directories(ligo_mapping PRIVATE ${gnss_comm_INCLUDE_DIRS})

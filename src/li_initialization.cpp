@@ -197,6 +197,8 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         geo << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
         first_gps_lla = geo;
         first_gps_ecef = geo2ecef(geo);
+        nmea_global_anchor_lla = first_gps_lla;
+        nmea_global_anchor_ready = true;
     }
     Eigen::Vector3d cur_ecef = geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
     trans_local_ = ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);

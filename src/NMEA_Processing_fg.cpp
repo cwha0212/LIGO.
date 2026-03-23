@@ -37,6 +37,7 @@
 #include "NMEA_Processing_fg.h"
 #include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
+#include <gtsam/linear/linearExceptions.h>
 
 
 NMEAProcess::NMEAProcess()
@@ -165,20 +166,41 @@ void NMEAProcess::runISAM2opt(void) //
     }
     else
     {
+      try
+      {
+        p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
+        p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
+        p_assign->initialEstimate.clear();
+        p_assign->isam.update();
+      }
+      catch (const gtsam::IndeterminantLinearSystemException &)
+      {
+        throw;
+      }
+    }
+    try
+    {
+      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
+    }
+    catch (const gtsam::IndeterminantLinearSystemException &)
+    {
+      throw;
+    }
+  }
+  else
+  {
+    try
+    {
       p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
       p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
       p_assign->initialEstimate.clear();
       p_assign->isam.update();
+      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
     }
-    p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
-  }
-  else
-  {
-    p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
-    p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
-    p_assign->initialEstimate.clear();
-    p_assign->isam.update();
-    p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
+    catch (const gtsam::IndeterminantLinearSystemException &)
+    {
+      throw;
+    }
   }
   
   if (nolidar) // || invalid_lidar)
@@ -470,6 +492,11 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
   if (!nolidar)
   {
     bool no_weight = false;
+    // Keep per-frame gravity state G(frame_num) anchored even when lidar branch is active.
+    // Runtime logs showed underconstrained g199 during marginalization update.
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(G(frame_num), gtsam::Vector3(state_gravity), p_assign->priorGravNoise));
+    factor_id_cur.push_back(id_accumulate);
+    id_accumulate += 1;
     // when weight_lid_zero, skip NmeaLioGravRelFactor to avoid singular G block; constrain G by prior only
     if (!weight_lid_zero)
     {
@@ -561,6 +588,25 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       {
         p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
                                   nmea_navsatfix_pos_only));
+      }
+      // When NMEA is position-only and lidar is invalid, R(frame) can become underconstrained.
+      // Add a lightweight rotational anchor from current propagated rotation.
+      if (nmea_navsatfix_pos_only && invalid_lidar)
+      {
+        p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
+        factor_id_cur.push_back(id_accumulate);
+        id_accumulate += 1;
+        // Add temporal rotation constraint when NavSatFix is position-only and lidar is invalid.
+        // This avoids single-frame yaw gauge issues at marginalization boundaries.
+        if (frame_num > 0)
+        {
+          const gtsam::Rot3 prev_rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num - 1));
+          const gtsam::Rot3 cur_rot = gtsam::Rot3(rot);
+          const gtsam::Rot3 rel_meas = prev_rot.between(cur_rot);
+          p_assign->gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Rot3>(R(frame_num - 1), R(frame_num), rel_meas, p_assign->margrotNoise));
+          factor_id_cur.push_back(id_accumulate);
+          id_accumulate += 1;
+        }
       }
 
     }

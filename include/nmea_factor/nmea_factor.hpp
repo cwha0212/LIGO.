@@ -106,6 +106,13 @@ class NMEAFactor : public gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, 
                 if (H4)
                 {
                     (*H4) = gtsam::Matrix::Zero(3, 3);
+                    // Position-only mode still depends on rot via local_pos = rot * Tex_imu_r + pos - anc.
+                    // Provide Jacobian wrt rot to avoid underconstraining R(frame) in NavSatFix path.
+                    Eigen::Matrix3d d_pos_rot;
+                    d_pos_rot << 0.0, -Tex_imu_r[2], Tex_imu_r[1],
+                                 Tex_imu_r[2], 0.0, -Tex_imu_r[0],
+                                 -Tex_imu_r[1], Tex_imu_r[0], 0.0;
+                    (*H4).block<3, 3>(0, 0) = -R_enu_local * rot.matrix() * d_pos_rot * relative_sqrt_info;
                 }
                 return residual;
             }

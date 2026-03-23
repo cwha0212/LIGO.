@@ -88,6 +88,11 @@ std::string gt_fname, ephem_fname, ppp_fname;
 std::string gnss_tp_info_topic, local_trigger_info_topic, rtk_pvt_topic, rtk_lla_topic;
 std::string nmea_meas_topic;
 std::string nmea_input_type;
+std::string enu_position_topic = "/ligo/enu_position";
+std::string enu_position_frame_id = "enu";
+std::string global_position_topic = "/ligo/global_position";
+bool nmea_global_anchor_ready = false;
+Eigen::Vector3d nmea_global_anchor_lla = Eigen::Vector3d::Zero();
 std::vector<double> default_gnss_iono_params(8, 0.0);
 double gnss_local_time_diff = 18.0;
 bool next_pulse_time_valid = false, update_gnss = false, update_nmea = false;
@@ -302,6 +307,9 @@ void readParameters(rclcpp::Node * node)
     nolidar = get_param("gnss.nolidar", false);
     p_nmea->wind_size = get_param("gnss.window_size", 2);
     p_nmea->p_assign->initNoises();
+    enu_position_topic = get_param("ligo.enu_position_topic", enu_position_topic);
+    enu_position_frame_id = get_param("ligo.enu_position_frame_id", enu_position_frame_id);
+    global_position_topic = get_param("ligo.global_position_topic", global_position_topic);
   }
 
   if (indoor_flag)
@@ -421,6 +429,51 @@ void cout_state_to_file_nmea()
         est_poses.push_back(pos_enu);
         time_frame.push_back(time_predict_last_const);
     }
+#endif
+}
+
+bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
+{
+#ifndef LIGO_WITHOUT_GNSS
+    if (!NMEA_ENABLE || !p_nmea->nmea_ready)
+        return false;
+    if (!nolidar)
+    {
+        Eigen::Vector3d truth_imu;
+        truth_imu << 0.0, 0.0, 0.14;
+        Eigen::Vector3d pos_r = kf_output.x_.rot * truth_imu + kf_output.x_.pos;
+        Eigen::Matrix3d enu_rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(P(0)).matrix();
+        Eigen::Vector3d anc_cur = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector3>(E(0));
+        pos_enu = enu_rot * pos_r + anc_cur;
+    }
+    else
+    {
+        pos_enu = kf_output.x_.rot * p_nmea->Tex_imu_r + kf_output.x_.pos;
+    }
+    return true;
+#else
+    (void)pos_enu;
+    return false;
+#endif
+}
+
+bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla)
+{
+#ifndef LIGO_WITHOUT_GNSS
+    Eigen::Vector3d p_enu;
+    if (!compute_fused_imu_position_enu(p_enu))
+        return false;
+    if (!nmea_global_anchor_ready) {
+        return false;
+    }
+    const Eigen::Vector3d anchor_ecef = geo2ecef(nmea_global_anchor_lla);
+    const Eigen::Matrix3d R_ecef_enu = geo2rotation(nmea_global_anchor_lla);
+    const Eigen::Vector3d p_ecef = anchor_ecef + R_ecef_enu * p_enu;
+    out_lla = ecef2geo(p_ecef);
+    return true;
+#else
+    (void)out_lla;
+    return false;
 #endif
 }
 

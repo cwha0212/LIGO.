@@ -40,6 +40,8 @@
 #include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -51,6 +53,9 @@
 #include "li_initialization.h"
 #include "Indoor_Processing.h"
 #include <malloc.h>
+#include <fstream>
+#include <chrono>
+#include <cmath>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
 #define PUBFRAME_PERIOD     (20)
@@ -103,6 +108,120 @@ static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr
            msg->pose.covariance[7] >= threshold ||
            msg->pose.covariance[14] >= threshold;
 }
+
+#ifndef LIGO_WITHOUT_GNSS
+// Matches NMEAProcess::processNMEA gate for collecting alignment window (reject if any diagonal > thr).
+static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
+                                                        double threshold)
+{
+    return msg->pose.covariance[0] <= threshold &&
+           msg->pose.covariance[7] <= threshold &&
+           msg->pose.covariance[14] <= threshold;
+}
+
+static int nmea_outdoor_good_streak = 0;
+static bool nmea_cycle_reopen_pending = false;
+
+// #region agent log
+/** NDJSON debug ingest: session a3a668 — hypotheses H1–H4 for NMEA outdoor re-align path. */
+static void nmeaOutdoorDebugLog(const char *hypothesisId, const char *location, const char *message,
+                                long long cov0_u, long long cov7_u, long long cov14_u,
+                                int streak, int need, int pending, int nmea_ready_i, int indoor_once_i)
+{
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    std::ofstream lf("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-a3a668.log", std::ios::app);
+    if (!lf)
+        return;
+    lf << "{\"sessionId\":\"a3a668\",\"runId\":\"pre-verify\",\"hypothesisId\":\"" << hypothesisId
+       << "\",\"location\":\"" << location << "\",\"message\":\"" << message
+       << "\",\"data\":{\"cov0_e6\":" << cov0_u << ",\"cov7_e6\":" << cov7_u << ",\"cov14_e6\":" << cov14_u
+       << ",\"streak\":" << streak << ",\"need\":" << need << ",\"pending\":" << pending
+       << ",\"nmea_ready\":" << nmea_ready_i << ",\"indoor_reloc_once\":" << indoor_once_i << "}"
+       << ",\"timestamp\":" << ms << "}\n";
+}
+// #endregion
+
+static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
+{
+    if (!NMEA_ENABLE)
+        return;
+    // H4: path never entered because preconditions false (sample occasionally to avoid spam)
+    static int nmea_dbg_skip = 0;
+    if (!p_nmea->nmea_ready || !indoor_reloc_applied_once)
+    {
+        if ((++nmea_dbg_skip % 200) == 0)
+        {
+            // #region agent log
+            nmeaOutdoorDebugLog("H4", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "precondition_false",
+                                (long long)std::llround(nmea_cur->pose.covariance[0] * 1e6),
+                                (long long)std::llround(nmea_cur->pose.covariance[7] * 1e6),
+                                (long long)std::llround(nmea_cur->pose.covariance[14] * 1e6),
+                                nmea_outdoor_good_streak, p_nmea ? (p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size) : -1,
+                                nmea_cycle_reopen_pending ? 1 : 0, p_nmea && p_nmea->nmea_ready ? 1 : 0,
+                                indoor_reloc_applied_once ? 1 : 0);
+            // #endregion
+        }
+        return;
+    }
+    const double thr = p_nmea->p_assign->ppp_std_threshold;
+    const long long c0 = (long long)std::llround(nmea_cur->pose.covariance[0] * 1e6);
+    const long long c7 = (long long)std::llround(nmea_cur->pose.covariance[7] * 1e6);
+    const long long c14 = (long long)std::llround(nmea_cur->pose.covariance[14] * 1e6);
+    const int need = p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size;
+    if (!nmeaCovarianceAcceptableForNmeaInit(nmea_cur, thr))
+    {
+        const int was = nmea_outdoor_good_streak;
+        nmea_outdoor_good_streak = 0;
+        if (was > 0)
+        {
+            // #region agent log
+            // H3: good-cov streak broken by a bad sample while still in indoor session
+            nmeaOutdoorDebugLog("H3", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "streak_broken_by_cov",
+                                c0, c7, c14, was, need, nmea_cycle_reopen_pending ? 1 : 0, 1, 1);
+            // #endregion
+        }
+        return;
+    }
+    nmea_outdoor_good_streak++;
+    // #region agent log
+    // H1/H4: progress toward outdoor Reset (init-quality covariance streak)
+    nmeaOutdoorDebugLog("H4", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "good_cov_streak_tick",
+                        c0, c7, c14, nmea_outdoor_good_streak, need, nmea_cycle_reopen_pending ? 1 : 0, 1, 1);
+    // #endregion
+    if (nmea_outdoor_good_streak >= need)
+    {
+        RCLCPP_WARN(rclcpp::get_logger("ligo"),
+                    "NMEA outdoor re-align: Reset() after %d consecutive init-quality covariance samples (wind_size=%d)",
+                    nmea_outdoor_good_streak, p_nmea->wind_size);
+        // #region agent log
+        // H2: NMEA graph Reset() fired for outdoor re-align
+        nmeaOutdoorDebugLog("H2", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "reset_called_before",
+                            c0, c7, c14, nmea_outdoor_good_streak, need, 0, 1, 1);
+        // #endregion
+        p_nmea->Reset();
+        nmea_cycle_reopen_pending = true;
+        nmea_outdoor_good_streak = 0;
+    }
+}
+
+static void nmeaClearCycleIfRealignComplete()
+{
+    if (!nmea_cycle_reopen_pending || !p_nmea->nmea_ready)
+        return;
+    indoor_reloc_applied_once = false;
+    nmea_cycle_reopen_pending = false;
+    nmea_outdoor_good_streak = 0;
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "NMEA outdoor re-align finished; indoor_reloc_applied_once cleared (indoor can trigger again)");
+    // #region agent log
+    // H2: realign finished — indoor cycle can trigger again
+    nmeaOutdoorDebugLog("H2", "laserMapping.cpp:nmeaClearCycleIfRealignComplete", "cycle_cleared_indoor_rearmed",
+                        0, 0, 0, 0, p_nmea ? (p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size) : -1, 0, 1, 0);
+    // #endregion
+}
+#endif
 
 void pointBodyLidarToIMU(PointType const * const pi, PointType * const po)
 {
@@ -288,6 +407,57 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     transform.transform.translation.z = odomAftMapped.pose.pose.position.z;
     transform.transform.rotation = odomAftMapped.pose.pose.orientation;
     br.sendTransform(transform);
+}
+
+static void try_publish_fused_enu_position(
+    const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr &pubEnuPosition)
+{
+#ifndef LIGO_WITHOUT_GNSS
+    if (!pubEnuPosition)
+        return;
+    Eigen::Vector3d p_enu;
+    if (!compute_fused_imu_position_enu(p_enu))
+        return;
+    geometry_msgs::msg::PointStamped msg;
+    msg.header.frame_id = enu_position_frame_id;
+    const double ts = publish_odometry_without_downsample ? time_current : lidar_end_time;
+    msg.header.stamp.sec = static_cast<int32_t>(std::floor(ts));
+    msg.header.stamp.nanosec =
+        static_cast<uint32_t>(std::round((ts - std::floor(ts)) * 1e9));
+    msg.point.x = p_enu(0);
+    msg.point.y = p_enu(1);
+    msg.point.z = p_enu(2);
+    pubEnuPosition->publish(msg);
+#else
+    (void)pubEnuPosition;
+#endif
+}
+
+static void try_publish_fused_global_nav_sat(
+    const rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr &pubGlobalFix)
+{
+#ifndef LIGO_WITHOUT_GNSS
+    if (!pubGlobalFix)
+        return;
+    Eigen::Vector3d lla;
+    if (!compute_fused_imu_position_geo(lla))
+        return;
+    sensor_msgs::msg::NavSatFix msg;
+    msg.header.frame_id = "wgs84";
+    const double ts = publish_odometry_without_downsample ? time_current : lidar_end_time;
+    msg.header.stamp.sec = static_cast<int32_t>(std::floor(ts));
+    msg.header.stamp.nanosec =
+        static_cast<uint32_t>(std::round((ts - std::floor(ts)) * 1e9));
+    msg.latitude = lla(0);
+    msg.longitude = lla(1);
+    msg.altitude = lla(2);
+    msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+    msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
+    msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
+    pubGlobalFix->publish(msg);
+#else
+    (void)pubGlobalFix;
+#endif
 }
 
 void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
@@ -521,6 +691,11 @@ int main(int argc, char** argv)
             }
             first_pvt_used = ppp_ecef[0].segment<3>(1);
             first_lla_used = ecef2geo(first_pvt_used);
+            if (!nmea_global_anchor_ready)
+            {
+                nmea_global_anchor_lla = first_lla_used;
+                nmea_global_anchor_ready = true;
+            }
             for (int i = 0; i < ppp_sol.size(); i++)
             {
                 nav_msgs::msg::Odometry gps_odom;
@@ -567,6 +742,24 @@ int main(int argc, char** argv)
     auto pubOdomAftMapped = node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_to_init", qos_pub);
     auto pubPath = node->create_publisher<nav_msgs::msg::Path>("/path", qos_pub);
     auto plane_pub = node->create_publisher<visualization_msgs::msg::Marker>("/planner_normal", qos_pub);
+#ifndef LIGO_WITHOUT_GNSS
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
+    rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
+    if (NMEA_ENABLE)
+    {
+        pubEnuPosition =
+            node->create_publisher<geometry_msgs::msg::PointStamped>(enu_position_topic, qos_pub);
+        RCLCPP_INFO(node->get_logger(), "ENU position: topic=%s frame_id=%s", enu_position_topic.c_str(),
+                    enu_position_frame_id.c_str());
+        pubGlobalNavSat =
+            node->create_publisher<sensor_msgs::msg::NavSatFix>(global_position_topic, qos_pub);
+        RCLCPP_INFO(node->get_logger(), "Global WGS84 position (NavSatFix): topic=%s (anchor auto-detected at NMEA init)",
+                    global_position_topic.c_str());
+    }
+#else
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
+    rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
+#endif
 
     signal(SIGINT, SigHandle);
     tf2_ros::TransformBroadcaster tf_br(node);
@@ -1035,7 +1228,24 @@ int main(int argc, char** argv)
                                     double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
                                     double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
 
-                                    if (p_nmea->nmea_ready)
+                                    nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+
+                                    if (!p_nmea->nmea_ready)
+                                    {
+                                        if (dt_cov > 0.0)
+                                        {
+                                            kf_output.predict(dt_cov, Q_output, input_in, false, true);
+                                        }
+
+                                        kf_output.predict(dt, Q_output, input_in, true, false);
+
+                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                        time_update_last = time_predict_last_const;
+                                        state_out = kf_output.x_;
+                                        p_nmea->processNMEA(nmea_cur, state_out);
+                                        nmeaClearCycleIfRealignComplete();
+                                    }
+                                    else
                                     {
                                         if (dt_cov > 0.0)
                                         {
@@ -1046,7 +1256,6 @@ int main(int argc, char** argv)
                                         time_update_last = time_predict_last_const;
                                         p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                         p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                        // p_gnss->sqrt_lidar *= 0.002;
                                         update_nmea = p_nmea->Evaluate(kf_output.x_);
                                         const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                         const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
@@ -1071,39 +1280,12 @@ int main(int argc, char** argv)
                                             flg_reset = true;
                                             break;
                                         }
-                                        if (!p_nmea->nmea_ready)
-                                        {
-                                            flg_reset = true;
-                                            p_nmea->nmea_msg.pop();
-                                            if(!p_nmea->nmea_msg.empty())
-                                            {
-                                                nmea_cur = p_nmea->nmea_msg.front();
-                                            }
-                                            break; // ?
-                                        }
 
                                         if (update_nmea)
                                         {
                                             kf_output.update_iterated_dyn_share_NMEA();
                                             if (!runtime_pos_log) cout_state_to_file_nmea();
                                         }
-                                    }
-                                    else
-                                    {
-                                        if (dt_cov > 0.0)
-                                        {
-                                            kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                        }
-                                        
-                                        kf_output.predict(dt, Q_output, input_in, true, false);
-
-                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
-                                        time_update_last = time_predict_last_const;
-                                        state_out = kf_output.x_;
-                                        // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
-                                        // state_out.pos = state_out.pos;
-                                        // state_out.vel = state_out.vel;
-                                        p_nmea->processNMEA(nmea_cur, state_out);
                                     }
                                     p_nmea->nmea_msg.pop();
                                     if(!p_nmea->nmea_msg.empty())
@@ -1309,7 +1491,23 @@ int main(int argc, char** argv)
                         {
                             double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
                             double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
-                            if (p_nmea->nmea_ready)
+
+                            nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+
+                            if (!p_nmea->nmea_ready)
+                            {
+                                if (dt_cov > 0.0)
+                                {
+                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
+                                }
+                                kf_output.predict(dt, Q_output, input_in, true, false);
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                time_update_last = time_predict_last_const;
+                                state_out = kf_output.x_;
+                                p_nmea->processNMEA(nmea_cur, state_out);
+                                nmeaClearCycleIfRealignComplete();
+                            }
+                            else
                             {
                                 if (dt_cov > 0.0)
                                 {
@@ -1321,7 +1519,6 @@ int main(int argc, char** argv)
                                 time_update_last = time_predict_last_const;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                // p_gnss->sqrt_lidar *= 0.002;
                                 update_nmea = p_nmea->Evaluate(kf_output.x_);
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
@@ -1346,37 +1543,12 @@ int main(int argc, char** argv)
                                     flg_reset = true;
                                     break;
                                 }
-                                if (!p_nmea->nmea_ready)
-                                {
-                                    flg_reset = true;
-                                    p_nmea->nmea_msg.pop();
-                                    if(!p_nmea->nmea_msg.empty())
-                                    {
-                                        nmea_cur = p_nmea->nmea_msg.front();
-                                    }
-                                    break; // ?
-                                }
 
                                 if (update_nmea)
                                 {
                                     kf_output.update_iterated_dyn_share_NMEA();
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
                                 }
-                            }
-                            else
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                }
-                                kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
-                                time_update_last = time_predict_last_const;
-                                state_out = kf_output.x_;
-                                // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
-                                // state_out.pos = state_out.pos;
-                                // state_out.vel = state_out.vel;
-                                p_nmea->processNMEA(nmea_cur, state_out);
                             }
                             p_nmea->nmea_msg.pop();
                             if(!p_nmea->nmea_msg.empty())
@@ -1434,6 +1606,8 @@ int main(int argc, char** argv)
                         /******* Publish odometry *******/
 
                         publish_odometry(pubOdomAftMapped, tf_br);
+                        try_publish_fused_enu_position(pubEnuPosition);
+                        try_publish_fused_global_nav_sat(pubGlobalNavSat);
                         if (runtime_pos_log)
                         {
                             euler_cur = SO3ToEuler(kf_output.x_.rot);
@@ -1754,7 +1928,39 @@ int main(int argc, char** argv)
                             double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
                             double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
 
-                            if (p_nmea->nmea_ready)
+                            nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+
+                            if (!p_nmea->nmea_ready)
+                            {
+                                if (dt_cov > 0.0)
+                                {
+                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
+                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                }
+                                kf_output.predict(dt, Q_output, input_in, true, false);
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                p_nmea->processNMEA(nmea_cur, kf_output.x_);
+                                if (p_nmea->nmea_ready)
+                                {
+                                    if (nolidar)
+                                    {
+                                        Eigen::Matrix3d R_enu_local;
+                                        R_enu_local = Eigen::AngleAxisd(p_nmea->yaw_enu_local, Eigen::Vector3d::UnitZ()); 
+                                        kf_output.x_.pos = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(0); // p_gnss->anc_ecef - p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end * p_gnss->Tex_imu_r;
+                                        kf_output.x_.rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_nmea->frame_num-1)).matrix(); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end;
+                                        kf_output.x_.vel = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(3); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.vel_end; // Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
+                                        kf_output.x_.ba = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
+                                        kf_output.x_.bg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
+                                        kf_output.x_.omg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
+                                        kf_output.x_.gravity = R_enu_local * kf_output.x_.gravity; // * R_enu_local_ 
+                                        kf_output.x_.acc = kf_output.x_.rot.transpose() * (-kf_output.x_.gravity); // R_ecef_enu * state.vel_end;.conjugate().normalized()
+                                        
+                                        kf_output.P_ = MD(24,24)::Identity() * INIT_COV;
+                                    }
+                                }
+                                nmeaClearCycleIfRealignComplete();
+                            }
+                            else
                             {
                                 if (dt_cov > 0.0)
                                 {
@@ -1793,16 +1999,6 @@ int main(int argc, char** argv)
                                     flg_reset = true;
                                     break;
                                 }
-                                if (!p_nmea->nmea_ready)
-                                {
-                                    flg_reset = true;
-                                    p_nmea->nmea_msg.pop();
-                                    if(!p_nmea->nmea_msg.empty())
-                                    {
-                                        nmea_cur = p_nmea->nmea_msg.front();
-                                    }
-                                    break; // ?
-                                }
                                 if (update_nmea)
                                 {
                                     if (!nolidar)
@@ -1811,35 +2007,6 @@ int main(int argc, char** argv)
                                         // reset_cov_output(kf_output.P_);
                                     }
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
-                                }
-                            }
-                            else
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
-                                }
-                                kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
-                                p_nmea->processNMEA(nmea_cur, kf_output.x_);
-                                if (p_nmea->nmea_ready)
-                                {
-                                    if (nolidar)
-                                    {
-                                        Eigen::Matrix3d R_enu_local;
-                                        R_enu_local = Eigen::AngleAxisd(p_nmea->yaw_enu_local, Eigen::Vector3d::UnitZ()); 
-                                        kf_output.x_.pos = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(0); // p_gnss->anc_ecef - p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end * p_gnss->Tex_imu_r;
-                                        kf_output.x_.rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_nmea->frame_num-1)).matrix(); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end;
-                                        kf_output.x_.vel = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(3); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.vel_end; // Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.ba = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.bg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.omg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.gravity = R_enu_local * kf_output.x_.gravity; // * R_enu_local_ 
-                                        kf_output.x_.acc = kf_output.x_.rot.transpose() * (-kf_output.x_.gravity); // R_ecef_enu * state.vel_end;.conjugate().normalized()
-                                        
-                                        kf_output.P_ = MD(24,24)::Identity() * INIT_COV;
-                                    }
                                 }
                             }
                             p_nmea->nmea_msg.pop();
@@ -1901,6 +2068,8 @@ int main(int argc, char** argv)
             if (!publish_odometry_without_downsample)
             {
                 publish_odometry(pubOdomAftMapped, tf_br);
+                try_publish_fused_enu_position(pubEnuPosition);
+                try_publish_fused_global_nav_sat(pubGlobalNavSat);
             }
 
             /*** add the feature points to map ***/

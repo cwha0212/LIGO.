@@ -118,6 +118,11 @@ extern std::string gt_fname, ephem_fname, ppp_fname;
 extern std::string gnss_tp_info_topic, local_trigger_info_topic, rtk_pvt_topic, rtk_lla_topic;
 extern std::string nmea_meas_topic;
 extern std::string nmea_input_type;
+extern std::string enu_position_topic;
+extern std::string enu_position_frame_id;
+extern std::string global_position_topic;
+extern bool nmea_global_anchor_ready;
+extern Eigen::Vector3d nmea_global_anchor_lla;
 extern std::vector<double> default_gnss_iono_params;
 extern double gnss_local_time_diff, gnss_ekf_noise;
 extern bool next_pulse_time_valid, update_gnss, update_nmea;
@@ -153,4 +158,8 @@ void open_file();
 Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &orient);
 void cout_state_to_file(Eigen::Vector3d &pos_enu);
 void cout_state_to_file_nmea();
+/** Fused IMU position in ENU (same geometry as @ref cout_state_to_file_nmea). False if NMEA inactive or not ready. */
+bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu);
+/** WGS84 geodetic (lat, lon deg; alt m) from fused ENU + anchor. False if no anchor data. */
+bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla);
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output);
