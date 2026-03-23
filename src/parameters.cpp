@@ -36,7 +36,6 @@
 
 #include "parameters.h"
 #include <fstream>
-#include <chrono>
 #include <rclcpp/exceptions.hpp>
 
 typename curvefitter::TrajectoryManager<4>::Ptr traj_manager = std::make_shared<curvefitter::TrajectoryManager<4>>();
@@ -211,9 +210,6 @@ void readParameters(rclcpp::Node * node)
 #else
   GNSS_ENABLE = get_param("gnss.gnss_enable", false);
   cout << "gnss enable:" << GNSS_ENABLE << endl;
-  // #region agent log
-  { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"parameters.cpp:197\",\"message\":\"GNSS_ENABLE loaded\",\"data\":{\"value\":" << (GNSS_ENABLE ? "true" : "false") << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H1\"}\n"; }
-  // #endregion
   if (GNSS_ENABLE)
   {
     p_gnss->relative_sqrt_info = get_param("gnss.psr_dopp_weight", 10.0);

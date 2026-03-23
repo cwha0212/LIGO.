@@ -36,15 +36,7 @@
 
 #include "GNSS_Processing_fg.h"
 #include <rclcpp/rclcpp.hpp>
-#include <fstream>
-#include <chrono>
 
-// #region agent log — factor debug
-#define LIGO_LOG_FACTOR(factor_name, frame_num) do { \
-  std::ofstream _lf("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app); \
-  if (_lf.is_open()) { _lf << "{\"sessionId\":\"288b39\",\"message\":\"factor_added\",\"data\":{\"factor\":\"" << (factor_name) << "\",\"frame_num\":" << (frame_num) << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n"; _lf.close(); } \
-} while(0)
-// #endregion
 
 GNSSProcess::GNSSProcess()
     : diff_t_gnss_local(0.0)
@@ -204,16 +196,6 @@ void GNSSProcess::processGNSS(const std::vector<ObsPtr> &gnss_meas, state_output
     updateGNSSStatistics(pos_gnss);
   }
   p_assign->processGNSSBase(gnss_meas, psr_meas_hatch_filter, valid_meas, valid_ephems, gnss_ready, ecef_pos, last_gnss_time);
-
-  // #region agent log
-  {
-    std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app);
-    if (f.is_open()) {
-      f << "{\"sessionId\":\"288b39\",\"location\":\"GNSS_Processing_fg.cpp:processGNSS_after_base\",\"message\":\"GNSS valid meas after processGNSSBase\",\"data\":{\"gnss_meas_input\":" << gnss_meas.size() << ",\"valid_meas\":" << valid_meas.size() << ",\"valid_ephems\":" << valid_ephems.size() << ",\"gnss_ready\":" << (gnss_ready ? 1 : 0) << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n";
-      f.close();
-    }
-  }
-  // #endregion
 
   if (!gnss_ready)
   {
@@ -1007,12 +989,10 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       if (frame_num < delete_thred)
       {      
         p_assign->gtSAMgraph.add(ligo::GnssPsrDoppFactorNoR(A(frame_num), B(frame_num), C(frame_num), E(0), P(0), balance, values, sys_idx, rot * hat_omg_T, p_assign->robustpsrdoppNoise_init));
-        LIGO_LOG_FACTOR("GnssPsrDoppFactorNoR", frame_num);
       }
       else
       {
         p_assign->gtSAMgraph.add(ligo::GnssPsrDoppFactorNoR(A(frame_num), B(frame_num), C(frame_num), E(0), P(0), balance, values, sys_idx, rot * hat_omg_T, p_assign->robustpsrdoppNoise));
-        LIGO_LOG_FACTOR("GnssPsrDoppFactorNoR", frame_num);
       }
       // p_assign->gtSAMgraph.add(ligo::GnssPsrDoppFactorNoR(A(frame_num), B(frame_num), C(frame_num), E(0), P(0), invalid_lidar, values, sys_idx, rot * hat_omg_T, p_assign->robustpsrdoppNoise));
       // p_assign->gtSAMgraph.add(ligo::GnssPsrDoppFactor(R(frame_num), A(frame_num), B(frame_num), C(frame_num), E(0), P(0), invalid_lidar, values, sys_idx, hat_omg_T, p_assign->robustpsrdoppNoise));
@@ -1023,12 +1003,10 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       if (frame_num < delete_thred)
       {
         p_assign->gtSAMgraph.add(ligo::GnssPsrDoppFactorNolidar(R(frame_num), F(frame_num), B(frame_num), C(frame_num), values, sys_idx, hat_omg_T, p_assign->robustpsrdoppNoise_init)); // not work
-        LIGO_LOG_FACTOR("GnssPsrDoppFactorNolidar", frame_num);
       }
       else
       {
         p_assign->gtSAMgraph.add(ligo::GnssPsrDoppFactorNolidar(R(frame_num), F(frame_num), B(frame_num), C(frame_num), values, sys_idx, hat_omg_T, p_assign->robustpsrdoppNoise)); // not work
-        LIGO_LOG_FACTOR("GnssPsrDoppFactorNolidar", frame_num);
       } 
     }
     factor_id_cur.push_back(id_accumulate);
@@ -1048,11 +1026,9 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
   // else
   // {
     p_assign->gtSAMgraph.add(ligo::DdtSmoothFactor(C(frame_num-1), C(frame_num), p_assign->ddtNoise));
-    LIGO_LOG_FACTOR("DdtSmoothFactor", frame_num);
     // p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector1>(C(frame_num), gtsam::Vector1(rcv_ddt), p_assign->ddtNoise));
   
   p_assign->gtSAMgraph.add(ligo::DtDdtFactor(B(frame_num-1), B(frame_num), C(frame_num-1), C(frame_num), rcv_sys, delta_t, p_assign->dtNoise)); // not work
-  LIGO_LOG_FACTOR("DtDdtFactor", frame_num);
   // }
   {
   // if (frame_num > 1)
@@ -1082,7 +1058,6 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     {
       // p_assign->gtSAMgraph.add(ligo::GnssLioHardFactorNoR(A(frame_num), ba, bg, sqrt_lidar, no_weight, p_assign->odomNoise)); //LioNoise)); // odomNoiseIMU));
       p_assign->gtSAMgraph.add(ligo::GnssLioFactor(P(0), E(0), R(frame_num), A(frame_num), O(frame_num), G(frame_num), gravity_init, state_gravity, pos, vel, rot, ba, bg, acc, omg, sqrt_lidar, p_assign->odomNoise)); //LioNoise)); // odomNoiseIMU));
-      LIGO_LOG_FACTOR("GnssLioFactor", frame_num);
     }
       // p_assign->gtSAMgraph.add(ligo::GnssLioHardFactor(R(frame_num), A(frame_num), ba, bg, rot, sqrt_lidar, no_weight, p_assign->odomNoise)); //LioNoise)); // odomNoiseIMU));
     factor_id_cur.push_back(id_accumulate);
@@ -1092,7 +1067,6 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
   {
     p_assign->gtSAMgraph.add(ligo::GnssLioFactorNolidar(R(frame_num-1), F(frame_num-1), R(frame_num), F(frame_num), rel_rot, rel_pos, rel_vel, 
                   state_gravity, delta_t, ba, bg, pre_integration, p_assign->odomNoiseIMU));
-    LIGO_LOG_FACTOR("GnssLioFactorNolidar", frame_num);
     p_assign->factor_id_frame[frame_num-1-frame_delete].push_back(id_accumulate);
     id_accumulate += 1;
   }
@@ -1115,12 +1089,10 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       if (frame_num < delete_thred)
       {
         p_assign->gtSAMgraph.add(ligo::GnssCpFactorNoR(E(0), P(0), A(meas_index_sats_final[j]), A(frame_num), B(meas_index_sats_final[j]), B(frame_num), sys_idx_cp[j], invalid_lidar, values, meas_RTex_sats_final[j], p_assign->robustcpNoise_init));
-        LIGO_LOG_FACTOR("GnssCpFactorNoR", frame_num);
       }
       else
       {
         p_assign->gtSAMgraph.add(ligo::GnssCpFactorNoR(E(0), P(0), A(meas_index_sats_final[j]), A(frame_num), B(meas_index_sats_final[j]), B(frame_num), sys_idx_cp[j], invalid_lidar, values, meas_RTex_sats_final[j], p_assign->robustcpNoise));
-        LIGO_LOG_FACTOR("GnssCpFactorNoR", frame_num);
       }
       // p_assign->gtSAMgraph.add(ligo::GnssCpFactorNoR(E(0), P(0), A(meas_index_sats_final[j]), A(frame_num), B(meas_index_sats_final[j]), B(frame_num), sys_idx_cp[j], invalid_lidar, values, meas_RTex_sats_final[j], p_assign->robustcpNoise));
     }
@@ -1129,12 +1101,10 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       if (frame_num < delete_thred)
       {
         p_assign->gtSAMgraph.add(ligo::GnssCpFactorNolidar(R(meas_index_sats_final[j]), F(meas_index_sats_final[j]), R(frame_num), F(frame_num), B(meas_index_sats_final[j]), B(frame_num), sys_idx_cp[j], values, p_assign->robustcpNoise_init)); // not work
-        LIGO_LOG_FACTOR("GnssCpFactorNolidar", frame_num);
       }
       else
       {// p_assign->gtSAMgraph.add(ligo::GnssCpFactorNolidar(R(meas_index_sats_final[j]), F(meas_index_sats_final[j]), R(frame_num), F(frame_num), sys_idx_cp[j], values, p_assign->robustcpNoise)); // not work
         p_assign->gtSAMgraph.add(ligo::GnssCpFactorNolidar(R(meas_index_sats_final[j]), F(meas_index_sats_final[j]), R(frame_num), F(frame_num), B(meas_index_sats_final[j]), B(frame_num), sys_idx_cp[j], values, p_assign->robustcpNoise)); // not work
-        LIGO_LOG_FACTOR("GnssCpFactorNolidar", frame_num);
       }// Eigen::Matrix3d rot_before = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(meas_index_sats_final[j])).matrix();
       // p_assign->gtSAMgraph.add(ligo::GnssCpFactorNolidarPos(F(meas_index_sats_final[j]), F(frame_num), values, rot_before, rot_pos, p_assign->robustcpNoise)); // not work
     }
@@ -1142,16 +1112,6 @@ bool GNSSProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     p_assign->factor_id_frame[meas_index_sats_final[j]-frame_delete].push_back(id_accumulate);
     id_accumulate += 1;
   }
-
-  // #region agent log
-  {
-    std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app);
-    if (f.is_open()) {
-      f << "{\"sessionId\":\"288b39\",\"location\":\"GNSS_Processing_fg.cpp:gnss_factors_per_frame\",\"message\":\"GNSS factors added\",\"data\":{\"frame_num\":" << frame_num << ",\"psr_dopp\":" << curr_obs.size() << ",\"cp\":" << meas_index_sats_final.size() << ",\"gnss_lio\":1},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n";
-      f.close();
-    }
-  }
-  // #endregion
 
   {
     p_assign->factor_id_frame.push_back(factor_id_cur);
@@ -1216,7 +1176,6 @@ void GNSSProcess::SetInit()
     p_assign->gtSAMgraph.add(init_vel_);
     p_assign->gtSAMgraph.add(init_bias_);
     p_assign->gtSAMgraph.add(init_grav_);
-    LIGO_LOG_FACTOR("init_rot_ext_gnss", -1); LIGO_LOG_FACTOR("init_pos_ext_gnss", -1); LIGO_LOG_FACTOR("init_dt", -1); LIGO_LOG_FACTOR("init_ddt", -1); LIGO_LOG_FACTOR("init_rot_gnss", -1); LIGO_LOG_FACTOR("init_vel_gnss", -1); LIGO_LOG_FACTOR("init_bias_gnss", -1); LIGO_LOG_FACTOR("init_grav_gnss", -1);
     p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1, 2, 3, 4, 5, 6, 7});
     id_accumulate += 8;
   }
@@ -1239,7 +1198,6 @@ void GNSSProcess::SetInit()
     p_assign->gtSAMgraph.add(init_vel_bias);
     p_assign->gtSAMgraph.add(init_dt);
     p_assign->gtSAMgraph.add(init_ddt);
-    LIGO_LOG_FACTOR("init_rot_nolidar_gnss", -1); LIGO_LOG_FACTOR("init_vel_bias_gnss", -1); LIGO_LOG_FACTOR("init_dt_nolidar", -1); LIGO_LOG_FACTOR("init_ddt_nolidar", -1);
     p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1, 2, 3}); //{i * 4, i * 4 + 1, i * 4  + 2, i * 4 + 3});
     p_assign->initialEstimate.insert(R(0), gtsam::Rot3(R_ecef_enu * rot_window[wind_size])); // R_enu_local_ * 
     p_assign->initialEstimate.insert(F(0), gtsam::Vector12(init_vel_bias_vector));

@@ -53,27 +53,6 @@
 #include <malloc.h>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
-#include <fstream>
-#include <chrono>
-#include <chrono>
-
-// #region agent log
-static inline void ligo_dbg62_map(const char* location, const char* message, const std::string& data_json,
-                                  const char* hypothesisId, const char* runId = "pre-fix") {
-    try {
-        std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-62f312.log", std::ios::app);
-        if (!f.is_open()) return;
-        const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        f << "{\"sessionId\":\"62f312\",\"runId\":\"" << runId << "\",\"hypothesisId\":\"" << hypothesisId
-          << "\",\"location\":\"" << location << "\",\"message\":\"" << message << "\",\"data\":" << data_json
-          << ",\"timestamp\":" << ts << "}\n";
-    } catch (...) {}
-}
-// #endregion
-
-
-
 #define PUBFRAME_PERIOD     (20)
 
 const float MOV_THRESHOLD = 1.5f;
@@ -405,9 +384,6 @@ int main(int argc, char** argv)
     rclcpp::SubscriptionBase::SharedPtr sub_nmea_meas;
     if (GNSS_ENABLE)
     {
-        // #region agent log
-        { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_subscriptions\",\"message\":\"GNSS subscriptions created\",\"data\":{\"active\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H5\"}\n"; }
-        // #endregion
         rclcpp::QoS qos_gnss(10000);
         sub_ephem = node->create_subscription<gnss_comm::msg::GnssEphemMsg>(gnss_ephem_topic, qos_gnss, gnss_ephem_callback);
         sub_glo_ephem = node->create_subscription<gnss_comm::msg::GnssGloEphemMsg>(gnss_glo_ephem_topic, qos_gnss, gnss_glo_ephem_callback);
@@ -574,24 +550,12 @@ int main(int argc, char** argv)
             sub_nmea_meas = node->create_subscription<sensor_msgs::msg::NavSatFix>(
                 nmea_meas_topic, qos_nmea, gpsHandler);
             RCLCPP_INFO(node->get_logger(), "NMEA subscription active (NavSatFix->Odom bridge): %s", nmea_meas_topic.c_str());
-            // #region agent log
-            ligo_dbg62_map("laserMapping.cpp:subscribe_nmea", "Subscribed NMEA as NavSatFix (bridge)",
-                           std::string("{\"topic\":\"") + nmea_meas_topic + "\",\"nmea_input_type\":\"" + nmea_input_type +
-                           "\",\"NMEA_ENABLE\":" + (NMEA_ENABLE ? "true" : "false") + "}",
-                           "H8");
-            // #endregion
         }
         else
         {
             sub_nmea_meas = node->create_subscription<nav_msgs::msg::Odometry>(
                 nmea_meas_topic, qos_nmea, nmea_meas_callback);
             RCLCPP_INFO(node->get_logger(), "NMEA subscription active (Odometry): %s", nmea_meas_topic.c_str());
-            // #region agent log
-            ligo_dbg62_map("laserMapping.cpp:subscribe_nmea", "Subscribed NMEA as Odometry",
-                           std::string("{\"topic\":\"") + nmea_meas_topic + "\",\"nmea_input_type\":\"" + nmea_input_type +
-                           "\",\"NMEA_ENABLE\":" + (NMEA_ENABLE ? "true" : "false") + "}",
-                           "H8");
-            // #endregion
         }
     }
 
@@ -617,14 +581,6 @@ int main(int argc, char** argv)
             ligo::indoor::updateIndoorLocalizationPlaceholder(state_out.pos, state_out.rot, time_current);
             // TODO(indoor): enable real graph insertion after localization module is implemented.
             // ligo::indoor::addIndoorFactorToGraphStubCommented();
-            // #region agent log
-            ligo_dbg62_map("laserMapping.cpp:main_loop", "sync_packages returned true",
-                           std::string("{\"GNSS_ENABLE\":") + (GNSS_ENABLE ? "true" : "false") +
-                           ",\"NMEA_ENABLE\":" + (NMEA_ENABLE ? "true" : "false") +
-                           ",\"gnss_msg_size\":" + std::to_string(p_gnss->gnss_msg.size()) +
-                           ",\"nmea_msg_size\":" + std::to_string(p_nmea->nmea_msg.size()) + "}",
-                           "H9");
-            // #endregion
             if (flg_reset)
             {
                 if (flg_reset_indoor_reloc)
@@ -946,9 +902,6 @@ int main(int argc, char** argv)
                                         // p_gnss->processIMUOutput(dt, kf_output.x_.acc, kf_output.x_.omg);
                                         time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
                                         time_update_last = time_predict_last_const;
-                                        // #region agent log
-                                        { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
-                                        // #endregion
                                         p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                         p_gnss->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                         // p_gnss->sqrt_lidar *= 0.002;
@@ -968,9 +921,6 @@ int main(int argc, char** argv)
                                         {
                                             state_output out_state = kf_output.x_;
                                             kf_output.update_iterated_dyn_share_GNSS();
-                                            // #region agent log
-                                            { double _pd = (out_state.pos - kf_output.x_.pos).norm(); std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_effect\",\"message\":\"GNSS update applied\",\"data\":{\"update_gnss\":true,\"pos_delta_norm\":" << _pd << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_EFFECT\"}\n"; }
-                                            // #endregion
                                             Eigen::Vector3d pos_enu;
                                             if (!runtime_pos_log) cout_state_to_file(pos_enu);
                                             // sensor_msgs::NavSatFix gnss_lla_msg;
@@ -1036,9 +986,6 @@ int main(int argc, char** argv)
                                         // state_out.rot.normalize();
                                         // state_out.pos = state_out.pos;
                                         // state_out.vel = state_out.vel;
-                                        // #region agent log
-                                        { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
-                                        // #endregion
                                         p_gnss->processGNSS(gnss_cur, state_out);
                                         if (p_gnss->gnss_ready)
                                         {
@@ -1070,14 +1017,6 @@ int main(int argc, char** argv)
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {   
                                 nmea_cur = p_nmea->nmea_msg.front();
-                                // #region agent log
-                                ligo_dbg62_map("laserMapping.cpp:nmea_entry", "Entered NMEA processing block",
-                                               std::string("{\"nmea_msg_size\":") + std::to_string(p_nmea->nmea_msg.size()) +
-                                               ",\"nmea_ready\":" + (p_nmea->nmea_ready ? "true" : "false") +
-                                               ",\"time_diff_nmea_local\":" + std::to_string(time_diff_nmea_local) +
-                                               ",\"time_predict_last_const\":" + std::to_string(time_predict_last_const) + "}",
-                                               "H10");
-                                // #endregion
                                 while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
                                 {
                                     p_nmea->nmea_msg.pop();
@@ -1105,9 +1044,6 @@ int main(int argc, char** argv)
                                         kf_output.predict(dt, Q_output, input_in, true, false);
                                         time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                         time_update_last = time_predict_last_const;
-                                        // #region agent log
-                                        { static int _call = 0; _call++; if (_call <= 5 || _call % 100 == 0) { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-c94fba.log", std::ios::app); _f << "{\"sessionId\":\"c94fba\",\"location\":\"laserMapping.cpp:before processNMEA\",\"message\":\"calling processNMEA\",\"data\":{\"call\":" << _call << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H5\"}\n"; } }
-                                        // #endregion
                                         p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                         p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                         // p_gnss->sqrt_lidar *= 0.002;
@@ -1135,12 +1071,6 @@ int main(int argc, char** argv)
                                             flg_reset = true;
                                             break;
                                         }
-                                        // #region agent log
-                                        ligo_dbg62_map("laserMapping.cpp:nmea_eval", "Evaluate returned",
-                                                       std::string("{\"update_nmea\":") + (update_nmea ? "true" : "false") +
-                                                       ",\"nmea_ready\":" + (p_nmea->nmea_ready ? "true" : "false") + "}",
-                                                       "H11");
-                                        // #endregion
                                         if (!p_nmea->nmea_ready)
                                         {
                                             flg_reset = true;
@@ -1254,9 +1184,6 @@ int main(int argc, char** argv)
 
                                 time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
                                 time_update_last = time_predict_last_const;
-                                // #region agent log
-                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
-                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                 p_gnss->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                 // p_gnss->sqrt_lidar *= 0.002;
@@ -1276,9 +1203,6 @@ int main(int argc, char** argv)
                                 {
                                     state_output out_state = kf_output.x_;
                                     kf_output.update_iterated_dyn_share_GNSS();
-                                    // #region agent log
-                                    { double _pd = (out_state.pos - kf_output.x_.pos).norm(); std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_effect\",\"message\":\"GNSS update applied\",\"data\":{\"update_gnss\":true,\"pos_delta_norm\":" << _pd << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_EFFECT\"}\n"; }
-                                    // #endregion
                                     // reset_cov_output(kf_output.P_);
                                     Eigen::Vector3d pos_enu;
                                     if (!runtime_pos_log) cout_state_to_file(pos_enu);
@@ -1337,9 +1261,6 @@ int main(int argc, char** argv)
                                 // state_out.rot.normalize();
                                 // state_out.pos = state_out.pos;
                                 // state_out.vel = state_out.vel;
-                                // #region agent log
-                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
-                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, state_out);
                                 if (p_gnss->gnss_ready)
                                 {
@@ -1685,9 +1606,6 @@ int main(int argc, char** argv)
                                 p_gnss->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); //acc_avr_norm, angvel_avr); 
                                 // change to state_const.omg and state_const.acc? 
                                 time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                // #region agent log
-                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
-                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                 if (!nolidar)
                                 {
@@ -1710,9 +1628,6 @@ int main(int argc, char** argv)
                                     {
                                         state_output out_state = kf_output.x_;
                                         kf_output.update_iterated_dyn_share_GNSS();
-                                        // #region agent log
-                                        { double _pd = (out_state.pos - kf_output.x_.pos).norm(); std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:GNSS_effect\",\"message\":\"GNSS update applied\",\"data\":{\"update_gnss\":true,\"pos_delta_norm\":" << _pd << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_EFFECT\"}\n"; }
-                                        // #endregion
                                         // reset_cov_output(kf_output.P_);
                                         if ((out_state.pos - kf_output.x_.pos).norm() > 0.1 && pose_graph_key_pose.size() > 4)
                                         {                                    
@@ -1774,9 +1689,6 @@ int main(int argc, char** argv)
                                 }
                                 // kf_output.predict(dt, Q_output, input_in, true, false);
                                 time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                // #region agent log
-                                { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/.cursor/debug-75b37d.log", std::ios::app); _f << "{\"sessionId\":\"75b37d\",\"location\":\"laserMapping.cpp:processGNSS\",\"message\":\"processGNSS called\",\"data\":{\"gnss_used\":true},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"GNSS_TOTAL\"}\n"; }
-                                // #endregion
                                 p_gnss->processGNSS(gnss_cur, kf_output.x_);
                                 if (p_gnss->gnss_ready)
                                 {
