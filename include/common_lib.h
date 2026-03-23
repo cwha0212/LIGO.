@@ -50,16 +50,6 @@
 #include <boost/optional.hpp>
 #include <gtsam/nonlinear/NonlinearFactor.h>
 
-// GTSAM API compatibility: some code uses OptionalMatrixType/OptionalNone.
-// On older GTSAM (e.g., Ubuntu packaged), factors use boost::optional<Matrix&>.
-#ifndef LIGO_GTSAM_OPTIONAL_COMPAT
-#define LIGO_GTSAM_OPTIONAL_COMPAT
-namespace gtsam {
-using OptionalMatrixType = boost::optional<Matrix&>;
-}  // namespace gtsam
-static const boost::none_t OptionalNone = boost::none;
-#endif
-
 using namespace std;
 using namespace Eigen;
 
@@ -204,10 +194,10 @@ where A0_i = [x_i, y_i, z_i], x0 = [A/D, B/D, C/D]^T, b0 = [-1, ..., -1]^T
 normvec:  normalized x0
 */
 template<typename T>
-bool esti_normvector(Matrix<T, 3, 1> &normvec, const PointVector &point, const T &threshold, const int &point_num)
+bool esti_normvector(Eigen::Matrix<T, 3, 1> &normvec, const PointVector &point, const T &threshold, const int &point_num)
 {
-    MatrixXf A(point_num, 3);
-    MatrixXf b(point_num, 1);
+    Eigen::MatrixXf A(point_num, 3);
+    Eigen::MatrixXf b(point_num, 1);
     b.setOnes();
     b *= -1.0f;
 
@@ -232,10 +222,10 @@ bool esti_normvector(Matrix<T, 3, 1> &normvec, const PointVector &point, const T
 }
 
 template<typename T>
-bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &threshold)
+bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &threshold)
 {
-    Matrix<T, NUM_MATCH_POINTS, 3> A;
-    Matrix<T, NUM_MATCH_POINTS, 1> b;
+    Eigen::Matrix<T, NUM_MATCH_POINTS, 3> A;
+    Eigen::Matrix<T, NUM_MATCH_POINTS, 1> b;
     A.setZero();
     b.setOnes();
     b *= -1.0f;
@@ -247,7 +237,7 @@ bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &
         A(j,2) = point[j].z;
     }
 
-    Matrix<T, 3, 1> normvec = A.colPivHouseholderQr().solve(b);
+    Eigen::Matrix<T, 3, 1> normvec = A.colPivHouseholderQr().solve(b);
 
     T n = normvec.norm();
     pca_result(0) = normvec(0) / n;

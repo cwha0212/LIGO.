@@ -86,14 +86,22 @@
                     0.0, 0.0, 1.0 ]            # extrinsics of the GNSS receiver to IMU represented in IMU frame
 
     nmea:
+      # true: gpsHandler가 nmea_meas_buf에 넣는 stamp 진단을 /ligo/nmea_stamp_diag 로 퍼블리시 (navsatfix 경로만)
+      publish_stamp_diag: true
       nmea_enable: true # enable fuse ppp results of gnss observations
       posit_odo_topic: "/ublox_driver/receiver_lla" # "/mavros/local_position/odom" # ppp solutions topic
       nmea_input_type: "navsatfix" # "odometry" (nav_msgs/Odometry) or "navsatfix" (sensor_msgs/NavSatFix -> internal Odom)
-      ppp_std_thres: 0.1 # ppp solution std thred
+      ppp_std_thres: 20.0 # 너무 작으면 NMEA가 계속 reject되어 초기화가 안 됨
+      # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
+      init_min_lio_total_move_m: 20.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
+      init_min_nmea_total_move_m: 20.0
+      init_icp_max_iterations: 80
+      init_icp_max_fitness: 50.0
       pos_noise: 1.0 # factor cov for position (x,y)
       pos_noise_z: 20.0 # factor cov for position z (GNSS/PPP vertical error is larger; increase to trust z less)
       nmea_weight: 1000.0 
       nmea_local_time_diff: 0.0 # 27.062 # difference between PPP solution and local time (s)
+      nmea_gps_latency: 0.0     # 수신지연(초). 0이면 init에서 추정값 사용. Fusion 보정용.
       ppp_file_name: "deg2.pos" # "deg2.pos" # ""
       ppp_anc: [3959058.559396, -87615.730649, 4983325.235812] # logo 
              # [-2152900.934855,4380649.467661,4091851.462459] # bri 

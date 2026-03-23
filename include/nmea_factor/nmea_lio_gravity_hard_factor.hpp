@@ -58,8 +58,8 @@ class NmeaLioGravHardFactor : public gtsam::NoiseModelFactor3<gtsam::Rot3, gtsam
         virtual ~NmeaLioGravHardFactor() {}
 
         gtsam::Vector evaluateError(const gtsam::Rot3 &rot_ext, const gtsam::Rot3 &rot, const gtsam::Vector6 &pos_vel,
-        boost::optional<gtsam::Matrix&> H1 = boost::none, boost::optional<gtsam::Matrix&> H2 = boost::none,
-        boost::optional<gtsam::Matrix&> H3 = boost::none) const override
+        gtsam::OptionalMatrixType H1 = OptionalNone, gtsam::OptionalMatrixType H2 = OptionalNone,
+        gtsam::OptionalMatrixType H3 = OptionalNone) const override
         {
             Eigen::Matrix3d res_R = rot_lio.transpose() * rot.matrix();
             Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));

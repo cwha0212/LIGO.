@@ -39,6 +39,17 @@
 #define RETURN0     0x00
 #define RETURN0AND1 0x10
 
+namespace {
+inline bool has_field(const sensor_msgs::msg::PointCloud2 &msg, const char *name)
+{
+  for (const auto &f : msg.fields)
+  {
+    if (f.name == name) return true;
+  }
+  return false;
+}
+} // namespace
+
 Preprocess::Preprocess()
   :lidar_type(AVIA), blind(0.01), point_filter_num(1), det_range(1000)
 {
@@ -219,6 +230,56 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::SharedPtr
     pl_corn.clear();
     pl_full.clear();
 
+    const bool has_ring = has_field(*msg, "ring");
+    const bool has_time = has_field(*msg, "time");
+    if (!has_ring || !has_time)
+    {
+      pcl::PointCloud<pcl::PointXYZI> pl_xyzi;
+      pcl::fromROSMsg(*msg, pl_xyzi);
+      const int plsize = pl_xyzi.points.size();
+      if (plsize == 0) return;
+      pl_surf.reserve(plsize);
+
+      // Missing ring/time fields: fall back to XYZI parsing without verbose PCL warnings.
+      const double omega_l = 0.361 * SCAN_RATE;
+      bool is_first = true;
+      double yaw_fp = 0.0;
+      float time_last = 0.0f;
+      for (int i = 0; i < plsize; i++)
+      {
+        PointType added_pt;
+        added_pt.normal_x = 0;
+        added_pt.normal_y = 0;
+        added_pt.normal_z = 0;
+        added_pt.x = pl_xyzi.points[i].x;
+        added_pt.y = pl_xyzi.points[i].y;
+        added_pt.z = pl_xyzi.points[i].z;
+        added_pt.intensity = pl_xyzi.points[i].intensity;
+        if (i % point_filter_num != 0 || std::isnan(added_pt.x) || std::isnan(added_pt.y) || std::isnan(added_pt.z)) continue;
+
+        const double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957;
+        if (is_first)
+        {
+          yaw_fp = yaw_angle;
+          is_first = false;
+          added_pt.curvature = 0.0f;
+          time_last = added_pt.curvature;
+          continue;
+        }
+        if (yaw_angle < yaw_fp) added_pt.curvature = (yaw_fp - yaw_angle) / omega_l;
+        else added_pt.curvature = (yaw_fp - yaw_angle + 360.0) / omega_l;
+        if (added_pt.curvature < time_last) added_pt.curvature += 360.0 / omega_l;
+        time_last = added_pt.curvature;
+
+        const double dist = added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z;
+        if (dist > (blind * blind) && dist < (det_range * det_range))
+        {
+          pl_surf.points.push_back(added_pt);
+        }
+      }
+      return;
+    }
+
     pcl::PointCloud<velodyne_ros::Point> pl_orig;
     pcl::fromROSMsg(*msg, pl_orig);
     int plsize = pl_orig.points.size();
@@ -323,6 +384,55 @@ void Preprocess::hesai_handler(const sensor_msgs::msg::PointCloud2::SharedPtr &m
     pl_surf.clear();
     pl_corn.clear();
     pl_full.clear();
+
+    const bool has_ring = has_field(*msg, "ring");
+    const bool has_timestamp = has_field(*msg, "timestamp");
+    if (!has_ring || !has_timestamp)
+    {
+      pcl::PointCloud<pcl::PointXYZI> pl_xyzi;
+      pcl::fromROSMsg(*msg, pl_xyzi);
+      const int plsize = pl_xyzi.points.size();
+      if (plsize == 0) return;
+      pl_surf.reserve(plsize);
+
+      const double omega_l = 0.361 * SCAN_RATE;
+      bool is_first = true;
+      double yaw_fp = 0.0;
+      float time_last = 0.0f;
+      for (int i = 0; i < plsize; i++)
+      {
+        PointType added_pt;
+        added_pt.normal_x = 0;
+        added_pt.normal_y = 0;
+        added_pt.normal_z = 0;
+        added_pt.x = pl_xyzi.points[i].x;
+        added_pt.y = pl_xyzi.points[i].y;
+        added_pt.z = pl_xyzi.points[i].z;
+        added_pt.intensity = pl_xyzi.points[i].intensity;
+        if (i % point_filter_num != 0 || std::isnan(added_pt.x) || std::isnan(added_pt.y) || std::isnan(added_pt.z)) continue;
+
+        const double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957;
+        if (is_first)
+        {
+          yaw_fp = yaw_angle;
+          is_first = false;
+          added_pt.curvature = 0.0f;
+          time_last = added_pt.curvature;
+          continue;
+        }
+        if (yaw_angle <= yaw_fp) added_pt.curvature = (yaw_fp - yaw_angle) / omega_l;
+        else added_pt.curvature = (yaw_fp - yaw_angle + 360.0) / omega_l;
+        if (added_pt.curvature < time_last) added_pt.curvature += 360.0 / omega_l;
+        time_last = added_pt.curvature;
+
+        const double dist = added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z;
+        if (dist > (blind * blind) && dist < (det_range * det_range))
+        {
+          pl_surf.points.push_back(added_pt);
+        }
+      }
+      return;
+    }
 
     pcl::PointCloud<hesai_ros::Point> pl_orig;
     pcl::fromROSMsg(*msg, pl_orig);

@@ -65,7 +65,7 @@ IN THE SOFTWARE.
 #pragma once
 
 #include <ceres/ceres.h>
-// #include <ceres/local_parameterization.h>
+#include <ceres/local_parameterization.h>
 #include <sophus/se3.hpp>
 
 namespace basalt {
@@ -73,7 +73,7 @@ namespace basalt {
 /// @brief Local parametrization for ceres that can be used with Sophus Lie
 /// group implementations.
 template <class Groupd>
-class LieLocalParameterization : public ceres::Manifold {
+class LieLocalParameterization : public ceres::LocalParameterization {
  public:
   virtual ~LieLocalParameterization() {}
 
@@ -105,7 +105,7 @@ class LieLocalParameterization : public ceres::Manifold {
   ///      | -x -y -z |
   ///       \        /
   virtual bool PlusJacobian(double const* T_raw,
-                               double* jacobian_raw) const {
+                            double* jacobian_raw) const {
     Eigen::Map<Groupd const> T(T_raw);
     Eigen::Map<Eigen::Matrix<double, Groupd::num_parameters, Groupd::DoF,
                              Eigen::RowMajor>>
@@ -120,28 +120,18 @@ class LieLocalParameterization : public ceres::Manifold {
     return true;
   }
 
+  /// @brief Jacobian callback for Ceres 1.x LocalParameterization API
+  virtual bool ComputeJacobian(double const* T_raw,
+                               double* jacobian_raw) const {
+    return PlusJacobian(T_raw, jacobian_raw);
+  }
+
   ///@brief Global size
   virtual int GlobalSize() const { return Groupd::num_parameters; }
 
   ///@brief Local size
   virtual int LocalSize() const { return Groupd::DoF; }
 
-  virtual int AmbientSize() const {return Groupd::num_parameters;};
-
-  virtual int TangentSize() const {return Groupd::DoF;};
-
-  // virtual bool PlusJacobian(const double* x, double* jacobian); // const {return true;};
-
-  virtual bool RightMultiplyByPlusJacobian(const double* x,
-                                           const int num_rows,
-                                           const double* ambient_matrix,
-                                           double* tangent_matrix) const {return true;};
-
-  virtual bool Minus(const double* y,
-                     const double* x,
-                     double* y_minus_x) const {return true;};
-
-  virtual bool MinusJacobian(const double* x, double* jacobian) const {return true;};
 };
 
 }  // namespace basalt

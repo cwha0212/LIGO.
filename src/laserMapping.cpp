@@ -39,6 +39,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker.hpp>
+#include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
@@ -49,6 +50,10 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include "li_initialization.h"
+
+/** Implemented in li_initialization.cpp (not declared in li_initialization.h to avoid include-order / GTSAM issues). */
+void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> node);
+
 #include <malloc.h>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
@@ -100,6 +105,9 @@ V3D euler_cur;
 nav_msgs::msg::Path path;
 nav_msgs::msg::Odometry odomAftMapped;
 geometry_msgs::msg::PoseStamped msg_body_pose;
+nav_msgs::msg::Path nmea_aligned_path;
+nav_msgs::msg::Odometry nmea_aligned_odom;
+geometry_msgs::msg::PoseStamped nmea_aligned_pose;
 
 void SigHandle(int sig)
 {
@@ -308,18 +316,370 @@ void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPat
     }
 }        
 
+void publish_nmea_aligned(
+    const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubNmeaAlignedOdom,
+    const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubNmeaAlignedPath)
+{
+#ifndef LIGO_WITHOUT_GNSS
+    static int skip_log_count = 0;
+    if (!NMEA_ENABLE || !p_nmea)
+    {
+        return;
+    }
+    if (!nmea_cur)
+    {
+        if (++skip_log_count % 200 == 0)
+        {
+            RCLCPP_INFO(
+                rclcpp::get_logger("ligo"),
+                "[nmea/aligned] no publish yet: nmea_ready=%d nmea_cur=%d nmea_msg_buf=%zu",
+                p_nmea->nmea_ready ? 1 : 0,
+                nmea_cur ? 1 : 0,
+                p_nmea->nmea_msg.size());
+        }
+        return;
+    }
+    const Eigen::Vector3d p_enu(
+        nmea_cur->pose.pose.position.x,
+        nmea_cur->pose.pose.position.y,
+        nmea_cur->pose.pose.position.z);
+    Eigen::Vector3d p_local = p_enu;
+    if (p_nmea->icp_tf_ready)
+    {
+        // Use exact inverse of ICP transform: p_enu = R * p_local + t
+        p_local = p_nmea->icp_R_local_to_enu.transpose() * (p_enu - p_nmea->icp_t_local_to_enu);
+    }
+    else if (++skip_log_count % 200 == 0)
+    {
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "[nmea/aligned] fallback publish(un-aligned): ICP transform not ready yet");
+    }
+
+    nmea_aligned_odom.header = nmea_cur->header;
+    nmea_aligned_odom.header.frame_id = "camera_init";
+    // 시간 보정: GPS 수신지연(L) 적용 → stamp를 T-L로 하여 LIO 시각축과 정렬
+    const double nmea_lat = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
+    if (nmea_lat > 0.01)
+    {
+        const double t_raw = rclcpp::Time(nmea_cur->header.stamp).seconds();
+        const double t_corrected = t_raw - nmea_lat;
+        nmea_aligned_odom.header.stamp.sec = static_cast<int32_t>(std::floor(t_corrected));
+        nmea_aligned_odom.header.stamp.nanosec = static_cast<uint32_t>(std::round((t_corrected - std::floor(t_corrected)) * 1e9));
+    }
+    nmea_aligned_odom.child_frame_id = p_nmea->icp_tf_ready ? "nmea_aligned" : "nmea_unaligned";
+    nmea_aligned_odom.pose.pose.position.x = p_local.x();
+    nmea_aligned_odom.pose.pose.position.y = p_local.y();
+    nmea_aligned_odom.pose.pose.position.z = p_local.z();
+    nmea_aligned_odom.pose.pose.orientation.w = 1.0;
+    pubNmeaAlignedOdom->publish(nmea_aligned_odom);
+
+    nmea_aligned_pose.header = nmea_aligned_odom.header;
+    nmea_aligned_pose.pose = nmea_aligned_odom.pose.pose;
+    nmea_aligned_path.header = nmea_aligned_odom.header;
+    nmea_aligned_path.header.frame_id = "camera_init";
+    nmea_aligned_path.poses.emplace_back(nmea_aligned_pose);
+    if (nmea_aligned_path.poses.size() > 5000)
+    {
+        nmea_aligned_path.poses.erase(nmea_aligned_path.poses.begin());
+    }
+    pubNmeaAlignedPath->publish(nmea_aligned_path);
+#endif
+}
+
+void publish_icp_pairs_marker(
+    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pubIcpPairs)
+{
+#ifndef LIGO_WITHOUT_GNSS
+    if (!NMEA_ENABLE || !p_nmea || !p_nmea->icp_tf_ready) return;
+    if (p_nmea->icp_pairs_lio.empty() || p_nmea->icp_pairs_nmea_local.empty()) return;
+    const size_t n = std::min(p_nmea->icp_pairs_lio.size(), p_nmea->icp_pairs_nmea_local.size());
+    if (n == 0) return;
+
+    const auto stamp = rclcpp::Time(0);
+
+    // 1) Lines connecting LIO <-> GPS pairs
+    visualization_msgs::msg::Marker line_marker;
+    line_marker.header.frame_id = "camera_init";
+    line_marker.header.stamp = stamp;
+    line_marker.ns = "icp_lines";
+    line_marker.id = 0;
+    line_marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+    line_marker.action = visualization_msgs::msg::Marker::ADD;
+    line_marker.scale.x = 0.04;
+    line_marker.color.r = 1.0;
+    line_marker.color.g = 0.5;
+    line_marker.color.b = 0.0;
+    line_marker.color.a = 1.0;
+    line_marker.points.clear();
+    for (size_t i = 0; i < n; ++i)
+    {
+        geometry_msgs::msg::Point pt_lio, pt_nmea;
+        pt_lio.x = p_nmea->icp_pairs_lio[i].x();
+        pt_lio.y = p_nmea->icp_pairs_lio[i].y();
+        pt_lio.z = p_nmea->icp_pairs_lio[i].z();
+        pt_nmea.x = p_nmea->icp_pairs_nmea_local[i].x();
+        pt_nmea.y = p_nmea->icp_pairs_nmea_local[i].y();
+        pt_nmea.z = p_nmea->icp_pairs_nmea_local[i].z();
+        line_marker.points.push_back(pt_lio);
+        line_marker.points.push_back(pt_nmea);
+    }
+    pubIcpPairs->publish(line_marker);
+
+    // 2) LIO points (green spheres)
+    visualization_msgs::msg::Marker lio_marker;
+    lio_marker.header.frame_id = "camera_init";
+    lio_marker.header.stamp = stamp;
+    lio_marker.ns = "icp_lio";
+    lio_marker.id = 0;
+    lio_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+    lio_marker.action = visualization_msgs::msg::Marker::ADD;
+    lio_marker.scale.x = lio_marker.scale.y = lio_marker.scale.z = 0.12;
+    lio_marker.color.r = 0.0;
+    lio_marker.color.g = 1.0;
+    lio_marker.color.b = 0.0;
+    lio_marker.color.a = 1.0;
+    lio_marker.points.clear();
+    for (size_t i = 0; i < n; ++i)
+    {
+        geometry_msgs::msg::Point pt;
+        pt.x = p_nmea->icp_pairs_lio[i].x();
+        pt.y = p_nmea->icp_pairs_lio[i].y();
+        pt.z = p_nmea->icp_pairs_lio[i].z();
+        lio_marker.points.push_back(pt);
+    }
+    pubIcpPairs->publish(lio_marker);
+
+    // 3) GPS points (red spheres)
+    visualization_msgs::msg::Marker gps_marker;
+    gps_marker.header.frame_id = "camera_init";
+    gps_marker.header.stamp = stamp;
+    gps_marker.ns = "icp_gps";
+    gps_marker.id = 0;
+    gps_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+    gps_marker.action = visualization_msgs::msg::Marker::ADD;
+    gps_marker.scale.x = gps_marker.scale.y = gps_marker.scale.z = 0.12;
+    gps_marker.color.r = 1.0;
+    gps_marker.color.g = 0.0;
+    gps_marker.color.b = 0.0;
+    gps_marker.color.a = 1.0;
+    gps_marker.points.clear();
+    for (size_t i = 0; i < n; ++i)
+    {
+        geometry_msgs::msg::Point pt;
+        pt.x = p_nmea->icp_pairs_nmea_local[i].x();
+        pt.y = p_nmea->icp_pairs_nmea_local[i].y();
+        pt.z = p_nmea->icp_pairs_nmea_local[i].z();
+        gps_marker.points.push_back(pt);
+    }
+    pubIcpPairs->publish(gps_marker);
+#endif
+}
+
+void publish_init_pairs_marker_from_gps_move(
+    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub)
+{
+#ifndef LIGO_WITHOUT_GNSS
+  if (!NMEA_ENABLE || !p_nmea) return;
+  if (!p_nmea->init_start_set || p_nmea->init_pos_buf.size() < 2 ||
+      p_nmea->init_nmea_buf.size() != p_nmea->init_pos_buf.size() ||
+      p_nmea->init_lio_time_buf.size() != p_nmea->init_pos_buf.size())
+    return;
+
+  const auto &init_pos = p_nmea->init_pos_buf;
+  const auto &init_nmea = p_nmea->init_nmea_buf;
+  const auto &init_lio_time = p_nmea->init_lio_time_buf;
+  const Eigen::Vector3d &start_lio = p_nmea->init_start_lio;
+  const Eigen::Vector3d &start_nmea = p_nmea->init_start_nmea;
+  const int n_valid = static_cast<int>(init_pos.size());
+
+  // 변위, 지연 추정 (NMEALIAlign과 동일 로직)
+  std::vector<double> lio_disp(n_valid), gps_disp(n_valid);
+  for (int i = 0; i < n_valid; ++i)
+  {
+    lio_disp[i] = (init_pos[i] - start_lio).norm();
+    Eigen::Vector3d gv(init_nmea[i]->pose.pose.position.x, init_nmea[i]->pose.pose.position.y, init_nmea[i]->pose.pose.position.z);
+    gps_disp[i] = (gv - start_nmea).norm();
+  }
+  int first_lio_03 = -1, first_gps_03 = -1;
+  constexpr double THRESH_03 = 0.3;
+  for (int i = 0; i < n_valid; ++i)
+  {
+    if (first_lio_03 < 0 && lio_disp[i] >= THRESH_03) first_lio_03 = i;
+    if (first_gps_03 < 0 && gps_disp[i] >= THRESH_03) first_gps_03 = i;
+  }
+  double latency_est = 0.0;
+  if (first_lio_03 >= 0 && first_gps_03 >= 0)
+  {
+    latency_est = rclcpp::Time(init_nmea[first_gps_03]->header.stamp).seconds() - init_lio_time[first_lio_03];
+    latency_est = std::max(0.0, latency_est);  // 추정값 그대로 사용 (상한 제거)
+    { static int _n = 0; if (++_n <= 2) RCLCPP_INFO(rclcpp::get_logger("ligo"),
+      "[nmea/pair_dbg] first_lio_03=%d first_gps_03=%d L=%.3f | lio_disp[fl03]=%.3f gps_disp[fg03]=%.3f",
+      first_lio_03, first_gps_03, latency_est, lio_disp[first_lio_03], gps_disp[first_gps_03]); }
+  }
+
+  auto get_lio_at_time = [&](double t_want) -> Eigen::Vector3d {
+    if (t_want <= init_lio_time.front()) return init_pos.front();
+    if (t_want >= init_lio_time.back()) return init_pos.back();
+    for (int j = 0; j + 1 < n_valid; ++j)
+    {
+      if (init_lio_time[j] <= t_want && t_want <= init_lio_time[j + 1])
+      {
+        double a = (init_lio_time[j + 1] - init_lio_time[j]) > 1e-9 ? (t_want - init_lio_time[j]) / (init_lio_time[j + 1] - init_lio_time[j]) : 0;
+        return (1 - a) * init_pos[j] + a * init_pos[j + 1];
+      }
+    }
+    return init_pos.back();
+  };
+  auto get_lio_at_time_dbg = [&](double t_want, int src_i, bool is_first) -> Eigen::Vector3d {
+    Eigen::Vector3d ret = get_lio_at_time(t_want);
+    static int dbg_count = 0;
+    if (is_first && (++dbg_count <= 3))
+    {
+      RCLCPP_INFO(rclcpp::get_logger("ligo"),
+        "[nmea/pair_dbg] first_pair: src_i=%d t_want=%.3f L=%.3f stamp_i=%.3f | lio_time[fl03]=%.3f | ret_disp=%.3f",
+        src_i, t_want, latency_est, src_i < n_valid ? rclcpp::Time(init_nmea[src_i]->header.stamp).seconds() : -1.0,
+        first_lio_03 >= 0 && first_lio_03 < n_valid ? init_lio_time[first_lio_03] : -1.0,
+        (ret - start_lio).norm());
+    }
+    return ret;
+  };
+
+  // 0.3m 이후: 보정 시각(T-L)으로 (LIO, GPS) pair. 같은 위치 = 같은 시각대.
+  std::vector<Eigen::Vector3d> lio_pts, gps_local_pts;
+  for (int i = 0; i < n_valid; ++i)
+  {
+    if (lio_disp[i] < THRESH_03 || gps_disp[i] < THRESH_03) continue;
+    const double t_want = rclcpp::Time(init_nmea[i]->header.stamp).seconds() - latency_est;
+    Eigen::Vector3d lio_pt = (latency_est > 0.01)
+        ? get_lio_at_time_dbg(t_want, i, lio_pts.empty())
+        : init_pos[i];
+    Eigen::Vector3d gps_enu(init_nmea[i]->pose.pose.position.x, init_nmea[i]->pose.pose.position.y, init_nmea[i]->pose.pose.position.z);
+    Eigen::Vector3d gps_local = (gps_enu - start_nmea) + start_lio;
+    lio_pts.push_back(lio_pt);
+    gps_local_pts.push_back(gps_local);
+  }
+  if (lio_pts.empty()) return;
+
+  const size_t n_vis = lio_pts.size();
+  const auto stamp = rclcpp::Time(0);
+
+  // 각 pair 변위 로그 (50회마다 또는 pair수 변경 시). lio>>gps면 LIO가 더 이동한 시점에 연결된 것
+  {
+    static size_t last_n_vis = 0;
+    static int log_count = 0;
+    if (last_n_vis != n_vis || (++log_count % 50 == 1))
+    {
+      last_n_vis = n_vis;
+      double sum_gap = 0.0;
+      for (size_t i = 0; i < n_vis; ++i)
+      {
+        const double gap = (lio_pts[i] - start_lio).norm() - (gps_local_pts[i] - start_lio).norm();
+        sum_gap += std::fabs(gap);
+      }
+      const double mean_gap = n_vis > 0 ? sum_gap / n_vis : 0.0;
+      if (n_vis >= 1)
+      {
+        const double l0 = (lio_pts[0] - start_lio).norm();
+        const double g0 = (gps_local_pts[0] - start_lio).norm();
+        RCLCPP_INFO(rclcpp::get_logger("ligo"),
+          "[nmea/pair_disp] n=%zu first: lio=%.3f gps=%.3f gap=%.3f | mean_|gap|=%.3f",
+          n_vis, l0, g0, l0 - g0, mean_gap);
+      }
+    }
+  }
+
+  // 1) Lines: 0.3m 이후 보정된 pair. LIO(T-L)↔GPS(stamp T) = 같은 시각대 = 같은 위치
+  visualization_msgs::msg::Marker line_marker;
+  line_marker.header.frame_id = "camera_init";
+  line_marker.header.stamp = stamp;
+  line_marker.ns = "init_pairs_lines";
+  line_marker.id = 0;
+  line_marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+  line_marker.action = visualization_msgs::msg::Marker::ADD;
+  line_marker.scale.x = 0.04;
+  line_marker.color.r = 1.0;
+  line_marker.color.g = 0.5;
+  line_marker.color.b = 0.0;
+  line_marker.color.a = 1.0;
+  line_marker.points.clear();
+  for (size_t i = 0; i < n_vis; ++i)
+  {
+    geometry_msgs::msg::Point pt_lio, pt_gps;
+    pt_lio.x = lio_pts[i].x();
+    pt_lio.y = lio_pts[i].y();
+    pt_lio.z = lio_pts[i].z();
+    pt_gps.x = gps_local_pts[i].x();
+    pt_gps.y = gps_local_pts[i].y();
+    pt_gps.z = gps_local_pts[i].z();
+    line_marker.points.push_back(pt_lio);
+    line_marker.points.push_back(pt_gps);
+  }
+  pub->publish(line_marker);
+
+  // 2) LIO points (green)
+  visualization_msgs::msg::Marker lio_marker;
+  lio_marker.header.frame_id = "camera_init";
+  lio_marker.header.stamp = stamp;
+  lio_marker.ns = "init_pairs_lio";
+  lio_marker.id = 0;
+  lio_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+  lio_marker.action = visualization_msgs::msg::Marker::ADD;
+  lio_marker.scale.x = lio_marker.scale.y = lio_marker.scale.z = 0.1;
+  lio_marker.color.r = 0.0;
+  lio_marker.color.g = 1.0;
+  lio_marker.color.b = 0.0;
+  lio_marker.color.a = 1.0;
+  lio_marker.points.clear();
+  for (size_t i = 0; i < n_vis; ++i)
+  {
+    geometry_msgs::msg::Point pt;
+    pt.x = lio_pts[i].x();
+    pt.y = lio_pts[i].y();
+    pt.z = lio_pts[i].z();
+    lio_marker.points.push_back(pt);
+  }
+  pub->publish(lio_marker);
+
+  // 3) GPS points (red)
+  visualization_msgs::msg::Marker gps_marker;
+  gps_marker.header.frame_id = "camera_init";
+  gps_marker.header.stamp = stamp;
+  gps_marker.ns = "init_pairs_gps";
+  gps_marker.id = 0;
+  gps_marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+  gps_marker.action = visualization_msgs::msg::Marker::ADD;
+  gps_marker.scale.x = gps_marker.scale.y = gps_marker.scale.z = 0.1;
+  gps_marker.color.r = 1.0;
+  gps_marker.color.g = 0.0;
+  gps_marker.color.b = 0.0;
+  gps_marker.color.a = 1.0;
+  gps_marker.points.clear();
+  for (size_t i = 0; i < n_vis; ++i)
+  {
+    geometry_msgs::msg::Point pt;
+    pt.x = gps_local_pts[i].x();
+    pt.y = gps_local_pts[i].y();
+    pt.z = gps_local_pts[i].z();
+    gps_marker.points.push_back(pt);
+  }
+  pub->publish(gps_marker);
+#endif
+}
+
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<rclcpp::Node>("laserMapping");
     readParameters(node.get());
-    cout<<"lidar_type: "<<lidar_type<<endl;
+    RCLCPP_INFO(node->get_logger(), "lidar_type: %d", lidar_type);
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
     ivox_last_ = std::make_shared<IVoxType>(ivox_options_);
     
     path.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
     path.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     path.header.frame_id ="camera_init";
+    nmea_aligned_path.header = path.header;
 
     /*** variables definition for counting ***/
     int frame_num = 0;
@@ -576,6 +936,7 @@ int main(int argc, char** argv)
                            "H8");
             // #endregion
         }
+        ligo_try_create_nmea_stamp_diag_publisher(node);
     }
 
     rclcpp::QoS qos_pub(1000);
@@ -585,6 +946,11 @@ int main(int argc, char** argv)
     auto pubLaserCloudMap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/Laser_map", qos_pub);
     auto pubOdomAftMapped = node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_to_init", qos_pub);
     auto pubPath = node->create_publisher<nav_msgs::msg::Path>("/path", qos_pub);
+    auto pubNmeaAlignedOdom = node->create_publisher<nav_msgs::msg::Odometry>("/nmea_aligned_to_init", qos_pub);
+    auto pubNmeaAlignedPath = node->create_publisher<nav_msgs::msg::Path>("/nmea_aligned_path", qos_pub);
+    auto pubIcpPairs = node->create_publisher<visualization_msgs::msg::Marker>("/icp_pairs_marker", qos_pub);
+    auto pubInitPairsFromGpsMove = node->create_publisher<visualization_msgs::msg::Marker>(
+        "/init_pairs_from_gps_move_marker", qos_pub);
     auto plane_pub = node->create_publisher<visualization_msgs::msg::Marker>("/planner_normal", qos_pub);
 
     signal(SIGINT, SigHandle);
@@ -1028,6 +1394,7 @@ int main(int argc, char** argv)
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {   
                                 nmea_cur = p_nmea->nmea_msg.front();
+                                const double nmea_lat = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
                                 // #region agent log
                                 ligo_dbg62_map("laserMapping.cpp:nmea_entry", "Entered NMEA processing block",
                                                std::string("{\"nmea_msg_size\":") + std::to_string(p_nmea->nmea_msg.size()) +
@@ -1036,7 +1403,7 @@ int main(int argc, char** argv)
                                                ",\"time_predict_last_const\":" + std::to_string(time_predict_last_const) + "}",
                                                "H10");
                                 // #endregion
-                                while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
+                                while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat < time_predict_last_const)
                                 {
                                     p_nmea->nmea_msg.pop();
                                     if(!p_nmea->nmea_msg.empty())
@@ -1049,10 +1416,10 @@ int main(int argc, char** argv)
                                     }
                                 }
                                 if (p_nmea->nmea_msg.empty()) break;
-                                while ((rclcpp::Time(imu_next.header.stamp).seconds() >= rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local) && (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local >= time_predict_last_const))
+                                while ((rclcpp::Time(imu_next.header.stamp).seconds() >= rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat) && (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat >= time_predict_last_const))
                                 {
-                                    double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
-                                    double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
+                                    double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat - time_predict_last_const;
+                                    double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat - time_update_last;
 
                                     if (p_nmea->nmea_ready)
                                     {
@@ -1061,7 +1428,7 @@ int main(int argc, char** argv)
                                             kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                         }
                                         kf_output.predict(dt, Q_output, input_in, true, false);
-                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat;
                                         time_update_last = time_predict_last_const;
                                         // #region agent log
                                         { static int _call = 0; _call++; if (_call <= 5 || _call % 100 == 0) { std::ofstream _f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-c94fba.log", std::ios::app); _f << "{\"sessionId\":\"c94fba\",\"location\":\"laserMapping.cpp:before processNMEA\",\"message\":\"calling processNMEA\",\"data\":{\"call\":" << _call << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"hypothesisId\":\"H5\"}\n"; } }
@@ -1102,7 +1469,7 @@ int main(int argc, char** argv)
                                         
                                         kf_output.predict(dt, Q_output, input_in, true, false);
 
-                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat;
                                         time_update_last = time_predict_last_const;
                                         state_out = kf_output.x_;
                                         // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
@@ -1306,7 +1673,8 @@ int main(int argc, char** argv)
                     if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                     {
                         nmea_cur = p_nmea->nmea_msg.front();
-                        while ( rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
+                        const double nmea_lat2 = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
+                        while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 < time_predict_last_const)
                         {
                             p_nmea->nmea_msg.pop();
                             if(!p_nmea->nmea_msg.empty())
@@ -1319,10 +1687,10 @@ int main(int argc, char** argv)
                             }
                         }
                         if (p_nmea->nmea_msg.empty()) break;
-                        while (time_current >= rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local && rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local >= time_predict_last_const)
+                        while (time_current >= rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 && rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 >= time_predict_last_const)
                         {
-                            double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
-                            double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
+                            double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_predict_last_const;
+                            double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_update_last;
                             if (p_nmea->nmea_ready)
                             {
                                 if (dt_cov > 0.0)
@@ -1331,7 +1699,7 @@ int main(int argc, char** argv)
                                 }
                                 kf_output.predict(dt, Q_output, input_in, true, false);
 
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2;
                                 time_update_last = time_predict_last_const;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
@@ -1361,7 +1729,7 @@ int main(int argc, char** argv)
                                     kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                 }
                                 kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2;
                                 time_update_last = time_predict_last_const;
                                 state_out = kf_output.x_;
                                 // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
@@ -1496,8 +1864,9 @@ int main(int argc, char** argv)
                             else if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
+                                const double nmea_lat_sync = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
                                 double front_nmea_ts = rclcpp::Time(nmea_cur->header.stamp).seconds(); // take time
-                                time_current = front_nmea_ts - time_diff_nmea_local;
+                                time_current = front_nmea_ts - time_diff_nmea_local - nmea_lat_sync;
                                 while (rclcpp::Time(imu_next.header.stamp).seconds() < time_current) // 0.05
                                 {
                                     RCLCPP_WARN(node->get_logger(), "throw IMU, only should happen at the beginning 2510");
@@ -1736,7 +2105,8 @@ int main(int argc, char** argv)
                         if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                         {
                             nmea_cur = p_nmea->nmea_msg.front();
-                            while ( rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
+                            const double nmea_lat3 = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
+                            while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 < time_predict_last_const)
                             {
                                 p_nmea->nmea_msg.pop();
                                 if(!p_nmea->nmea_msg.empty())
@@ -1749,21 +2119,21 @@ int main(int argc, char** argv)
                                 }
                             }
                             if (p_nmea->nmea_msg.empty()) break;
-                        while ((time_current > rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local) && (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local >= time_predict_last_const))
+                        while ((time_current > rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3) && (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 >= time_predict_last_const))
                         {
-                            double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
-                            double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
+                            double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 - time_predict_last_const;
+                            double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 - time_update_last;
 
                             if (p_nmea->nmea_ready)
                             {
                                 if (dt_cov > 0.0)
                                 {
                                     // kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
                                 }
                                 // kf_output.predict(dt, Q_output, input_in, true, false);
                                 p_nmea->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); //acc_avr_norm, angvel_avr); 
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 if (!nolidar)
                                 {
@@ -1795,10 +2165,10 @@ int main(int argc, char** argv)
                                 if (dt_cov > 0.0)
                                 {
                                     kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
                                 }
                                 kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 if (p_nmea->nmea_ready)
                                 {
@@ -1888,6 +2258,9 @@ int main(int argc, char** argv)
 
             t5 = omp_get_wtime();
             /******* Publish points *******/
+            publish_nmea_aligned(pubNmeaAlignedOdom, pubNmeaAlignedPath);
+            publish_icp_pairs_marker(pubIcpPairs);
+            publish_init_pairs_marker_from_gps_move(pubInitPairsFromGpsMove);
             if (path_en)                         publish_path(pubPath);
             if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFullRes);
             if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFullRes_body);

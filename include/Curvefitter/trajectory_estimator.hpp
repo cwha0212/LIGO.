@@ -62,7 +62,6 @@ class TrajectoryEstimator {
   static ceres::Problem::Options DefaultProblemOptions() {
     ceres::Problem::Options options;
     options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
-    options.manifold_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
     return options;
   }
 
