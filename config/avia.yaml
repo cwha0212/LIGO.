@@ -33,8 +33,8 @@
       match_s: 81.0 # parameter for matching check, the larger, the harder to manifest a match
       ivox_grid_resolution: 1.0 # length (m) of voxels for grid map
       gravity: [0.0, 0.0, -9.81] # 
-      init_with_imu: true
-      gravity_init: [0.0, 0.0, 9.810] # preknown gravity in IMU frame. used when it is impossible to estimate it from acc measurements, i.e., init_with_imu is false
+      init_with_imu: false
+      gravity_init: [0.0, 0.0, -9.810] # preknown gravity in IMU frame. used when it is impossible to estimate it from acc measurements, i.e., init_with_imu is false
       extrinsic_T: [0.04165, 0.02326, -0.0284] # mid360[0.04165, 0.02326, -0.0284] # avia # 
       extrinsic_R: [1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -93,15 +93,15 @@
       nmea_input_type: "navsatfix" # "odometry" (nav_msgs/Odometry) or "navsatfix" (sensor_msgs/NavSatFix -> internal Odom)
       ppp_std_thres: 20.0 # 너무 작으면 NMEA가 계속 reject되어 초기화가 안 됨
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
-      init_min_lio_total_move_m: 20.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
-      init_min_nmea_total_move_m: 20.0
+      init_min_lio_total_move_m: 5.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
+      init_min_nmea_total_move_m: 5.0
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
       pos_noise: 1.0 # factor cov for position (x,y)
       pos_noise_z: 20.0 # factor cov for position z (GNSS/PPP vertical error is larger; increase to trust z less)
       nmea_weight: 1000.0 
       nmea_local_time_diff: 0.0 # 27.062 # difference between PPP solution and local time (s)
-      nmea_gps_latency: 0.0     # 수신지연(초). 0이면 init에서 추정값 사용. Fusion 보정용.
+      nmea_gps_latency: 0.0     # latency 없음 가정 (코드에서 항상 0 사용)
       ppp_file_name: "deg2.pos" # "deg2.pos" # ""
       ppp_anc: [3959058.559396, -87615.730649, 4983325.235812] # logo 
              # [-2152900.934855,4380649.467661,4091851.462459] # bri 

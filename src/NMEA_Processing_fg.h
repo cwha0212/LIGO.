@@ -130,6 +130,15 @@ class NMEAProcess
   Eigen::Vector3d init_start_nmea = Eigen::Vector3d::Zero();
   static constexpr double GPS_MOVE_START_THRESH_M = 0.3;  // GPS 변위 이 값 초과 시 "이동 시작"으로 간주
   double nmea_gps_latency_estimated = 0.0;  // 초기 추정 수신지연(초). 0=미추정. Fusion phase 보정에 사용.
+  double sum_nmea_lio_err_sq_xy = 0.0;      // ICP 이후 전체 경로 pair 오차² 누적
+  int n_nmea_fusion_count = 0;               // fusion 횟수
+  // 0.3m 시점 LIO-GPS 비교 (latency 진단용). icp_tf_ready 시 한 번 설정됨.
+  bool diag_03m_valid = false;
+  double diag_03m_latency_s = 0.0;           // t_gps - t_lio (초)
+  double diag_03m_t_lio = 0.0, diag_03m_t_gps = 0.0;
+  Eigen::Vector3d diag_03m_lio_pos = Eigen::Vector3d::Zero();
+  Eigen::Vector3d diag_03m_gps_at_t_lio = Eigen::Vector3d::Zero();  // t_lio 시점 GPS 보간
+  double diag_03m_lio_disp = 0.0, diag_03m_gps_disp_at_t_lio = 0.0;  // start 대비 변위
   double init_min_lio_total_move_m = 3.0;
   double init_min_nmea_total_move_m = 3.0;
   int init_icp_max_iterations = 80;

@@ -41,6 +41,8 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -274,9 +276,33 @@ void set_posestamp(T & out)
     }
 }
 
+/** LIO pose를 ENU로 변환. icp_tf_ready일 때만 사용 */
+template<typename T>
+void set_posestamp_enu(T & out)
+{
+    if (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready)
+    {
+        const Eigen::Vector3d p_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+        const Eigen::Matrix3d R_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+        out.position.x = p_enu.x();
+        out.position.y = p_enu.y();
+        out.position.z = p_enu.z();
+        Eigen::Quaterniond q(R_enu);
+        out.orientation.x = q.coeffs()[0];
+        out.orientation.y = q.coeffs()[1];
+        out.orientation.z = q.coeffs()[2];
+        out.orientation.w = q.coeffs()[3];
+    }
+    else
+    {
+        set_posestamp(out);
+    }
+}
+
 void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr & pubOdomAftMapped, tf2_ros::TransformBroadcaster & br)
 {
-    odomAftMapped.header.frame_id = "camera_init";
+    const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+    odomAftMapped.header.frame_id = use_enu ? "map" : "camera_init";
     odomAftMapped.child_frame_id = "aft_mapped";
     if (publish_odometry_without_downsample)
     {
@@ -288,7 +314,7 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
         odomAftMapped.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
         odomAftMapped.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     }
-    set_posestamp(odomAftMapped.pose.pose);
+    set_posestamp_enu(odomAftMapped.pose.pose);
     
     pubOdomAftMapped->publish(odomAftMapped);
 
@@ -300,14 +326,41 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     transform.transform.translation.z = odomAftMapped.pose.pose.position.z;
     transform.transform.rotation = odomAftMapped.pose.pose.orientation;
     br.sendTransform(transform);
+    if (use_enu)
+    {
+        geometry_msgs::msg::TransformStamped tf_enu_cam;
+        tf_enu_cam.header = odomAftMapped.header;
+        tf_enu_cam.header.frame_id = "map";
+        tf_enu_cam.child_frame_id = "camera_init";
+        const Eigen::Matrix3d Rt = p_nmea->icp_R_local_to_enu.transpose();
+        const Eigen::Vector3d tt = -Rt * p_nmea->icp_t_local_to_enu;
+        tf_enu_cam.transform.translation.x = tt.x();
+        tf_enu_cam.transform.translation.y = tt.y();
+        tf_enu_cam.transform.translation.z = tt.z();
+        Eigen::Quaterniond q(Rt);
+        tf_enu_cam.transform.rotation.x = q.coeffs()[0];
+        tf_enu_cam.transform.rotation.y = q.coeffs()[1];
+        tf_enu_cam.transform.rotation.z = q.coeffs()[2];
+        tf_enu_cam.transform.rotation.w = q.coeffs()[3];
+        br.sendTransform(tf_enu_cam);
+    }
 }
 
 void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
 {
-    set_posestamp(msg_body_pose.pose);
+    const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+    static bool was_enu = false;
+    if (use_enu && !was_enu)
+    {
+        was_enu = true;
+        path.poses.clear();  // ENU 전환 시 기존 camera_init 경로 제거
+    }
+    if (!use_enu) was_enu = false;
+    set_posestamp_enu(msg_body_pose.pose);
     msg_body_pose.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
     msg_body_pose.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
-    msg_body_pose.header.frame_id = "camera_init";
+    msg_body_pose.header.frame_id = use_enu ? "map" : "camera_init";
+    path.header.frame_id = msg_body_pose.header.frame_id;
     static int jjj = 0;
     jjj++;
     {
@@ -322,6 +375,7 @@ void publish_nmea_aligned(
 {
 #ifndef LIGO_WITHOUT_GNSS
     static int skip_log_count = 0;
+    static bool icp_path_was_ready = false;
     if (!NMEA_ENABLE || !p_nmea)
     {
         return;
@@ -343,13 +397,12 @@ void publish_nmea_aligned(
         nmea_cur->pose.pose.position.x,
         nmea_cur->pose.pose.position.y,
         nmea_cur->pose.pose.position.z);
-    Eigen::Vector3d p_local = p_enu;
-    if (p_nmea->icp_tf_ready)
+    if (p_nmea->icp_tf_ready && !icp_path_was_ready)
     {
-        // Use exact inverse of ICP transform: p_enu = R * p_local + t
-        p_local = p_nmea->icp_R_local_to_enu.transpose() * (p_enu - p_nmea->icp_t_local_to_enu);
+        icp_path_was_ready = true;
+        nmea_aligned_path.poses.clear();
     }
-    else if (++skip_log_count % 200 == 0)
+    else if (!p_nmea->icp_tf_ready && ++skip_log_count % 200 == 0)
     {
         RCLCPP_INFO(
             rclcpp::get_logger("ligo"),
@@ -357,10 +410,10 @@ void publish_nmea_aligned(
     }
 
     nmea_aligned_odom.header = nmea_cur->header;
-    nmea_aligned_odom.header.frame_id = "camera_init";
-    // 시간 보정: GPS 수신지연(L) 적용 → stamp를 T-L로 하여 LIO 시각축과 정렬
-    const double nmea_lat = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
-    if (nmea_lat > 0.01)
+    nmea_aligned_odom.header.frame_id = "map";
+    // latency 없음 가정: 보정 안 함
+    const double nmea_lat = 0.0;
+    if (false)  // nmea_lat always 0
     {
         const double t_raw = rclcpp::Time(nmea_cur->header.stamp).seconds();
         const double t_corrected = t_raw - nmea_lat;
@@ -368,27 +421,33 @@ void publish_nmea_aligned(
         nmea_aligned_odom.header.stamp.nanosec = static_cast<uint32_t>(std::round((t_corrected - std::floor(t_corrected)) * 1e9));
     }
     nmea_aligned_odom.child_frame_id = p_nmea->icp_tf_ready ? "nmea_aligned" : "nmea_unaligned";
-    nmea_aligned_odom.pose.pose.position.x = p_local.x();
-    nmea_aligned_odom.pose.pose.position.y = p_local.y();
-    nmea_aligned_odom.pose.pose.position.z = p_local.z();
+    nmea_aligned_odom.pose.pose.position.x = p_enu.x();
+    nmea_aligned_odom.pose.pose.position.y = p_enu.y();
+    nmea_aligned_odom.pose.pose.position.z = p_enu.z();
     nmea_aligned_odom.pose.pose.orientation.w = 1.0;
     pubNmeaAlignedOdom->publish(nmea_aligned_odom);
 
-    nmea_aligned_pose.header = nmea_aligned_odom.header;
-    nmea_aligned_pose.pose = nmea_aligned_odom.pose.pose;
+    // ICP 적용된 GPS 경로만 시각화 (icp_tf_ready일 때만 path에 누적). ENU 좌표계
     nmea_aligned_path.header = nmea_aligned_odom.header;
-    nmea_aligned_path.header.frame_id = "camera_init";
-    nmea_aligned_path.poses.emplace_back(nmea_aligned_pose);
-    if (nmea_aligned_path.poses.size() > 5000)
+    nmea_aligned_path.header.frame_id = "map";
+    if (p_nmea->icp_tf_ready)
     {
-        nmea_aligned_path.poses.erase(nmea_aligned_path.poses.begin());
+        nmea_aligned_pose.header = nmea_aligned_odom.header;
+        nmea_aligned_pose.pose = nmea_aligned_odom.pose.pose;
+        nmea_aligned_path.poses.emplace_back(nmea_aligned_pose);
+        if (nmea_aligned_path.poses.size() > 5000)
+        {
+            nmea_aligned_path.poses.erase(nmea_aligned_path.poses.begin());
+        }
     }
     pubNmeaAlignedPath->publish(nmea_aligned_path);
 #endif
 }
 
 void publish_icp_pairs_marker(
-    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pubIcpPairs)
+    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pubIcpPairs,
+    const rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr &pubNmeaLioErrorXy,
+    const rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr &pubNmea03mDiag)
 {
 #ifndef LIGO_WITHOUT_GNSS
     if (!NMEA_ENABLE || !p_nmea || !p_nmea->icp_tf_ready) return;
@@ -396,11 +455,44 @@ void publish_icp_pairs_marker(
     const size_t n = std::min(p_nmea->icp_pairs_lio.size(), p_nmea->icp_pairs_nmea_local.size());
     if (n == 0) return;
 
-    const auto stamp = rclcpp::Time(0);
+    // ICP 이후 전체 경로 pair 2D RMSE (xy) 퍼블리시
+    if (pubNmeaLioErrorXy && p_nmea->n_nmea_fusion_count > 0)
+    {
+        std_msgs::msg::Float64 err_msg;
+        err_msg.data = std::sqrt(p_nmea->sum_nmea_lio_err_sq_xy / p_nmea->n_nmea_fusion_count);
+        pubNmeaLioErrorXy->publish(err_msg);
+    }
 
-    // 1) Lines connecting LIO <-> GPS pairs
+    // 0.3m 시점 LIO-GPS 비교 (latency 진단). icp 완료 시 1회 퍼블리시
+    if (pubNmea03mDiag)
+    {
+        static bool diag_03m_published = false;
+        if (!p_nmea->diag_03m_valid) diag_03m_published = false;
+        else if (!diag_03m_published)
+        {
+            std_msgs::msg::Float64MultiArray diag;
+            diag.layout.dim.resize(1);
+            diag.layout.dim[0].label = "latency_s,t_lio,t_gps,lio_x,lio_y,lio_z,gps_x,gps_y,gps_z,lio_disp,gps_disp_at_t_lio";
+            diag.layout.dim[0].size = 11;
+            diag.layout.dim[0].stride = 11;
+            diag.data = {
+                p_nmea->diag_03m_latency_s, p_nmea->diag_03m_t_lio, p_nmea->diag_03m_t_gps,
+                p_nmea->diag_03m_lio_pos.x(), p_nmea->diag_03m_lio_pos.y(), p_nmea->diag_03m_lio_pos.z(),
+                p_nmea->diag_03m_gps_at_t_lio.x(), p_nmea->diag_03m_gps_at_t_lio.y(), p_nmea->diag_03m_gps_at_t_lio.z(),
+                p_nmea->diag_03m_lio_disp, p_nmea->diag_03m_gps_disp_at_t_lio
+            };
+            pubNmea03mDiag->publish(diag);
+            diag_03m_published = true;
+        }
+    }
+
+    const auto stamp = rclcpp::Time(0);
+    const Eigen::Matrix3d &Ricp = p_nmea->icp_R_local_to_enu;
+    const Eigen::Vector3d &ticp = p_nmea->icp_t_local_to_enu;
+
+    // 1) Lines connecting LIO <-> GPS pairs (ENU 좌표계)
     visualization_msgs::msg::Marker line_marker;
-    line_marker.header.frame_id = "camera_init";
+    line_marker.header.frame_id = "map";
     line_marker.header.stamp = stamp;
     line_marker.ns = "icp_lines";
     line_marker.id = 0;
@@ -414,21 +506,19 @@ void publish_icp_pairs_marker(
     line_marker.points.clear();
     for (size_t i = 0; i < n; ++i)
     {
+        const Eigen::Vector3d pl_enu = Ricp * p_nmea->icp_pairs_lio[i] + ticp;
+        const Eigen::Vector3d pn_enu = Ricp * p_nmea->icp_pairs_nmea_local[i] + ticp;
         geometry_msgs::msg::Point pt_lio, pt_nmea;
-        pt_lio.x = p_nmea->icp_pairs_lio[i].x();
-        pt_lio.y = p_nmea->icp_pairs_lio[i].y();
-        pt_lio.z = p_nmea->icp_pairs_lio[i].z();
-        pt_nmea.x = p_nmea->icp_pairs_nmea_local[i].x();
-        pt_nmea.y = p_nmea->icp_pairs_nmea_local[i].y();
-        pt_nmea.z = p_nmea->icp_pairs_nmea_local[i].z();
+        pt_lio.x = pl_enu.x(); pt_lio.y = pl_enu.y(); pt_lio.z = pl_enu.z();
+        pt_nmea.x = pn_enu.x(); pt_nmea.y = pn_enu.y(); pt_nmea.z = pn_enu.z();
         line_marker.points.push_back(pt_lio);
         line_marker.points.push_back(pt_nmea);
     }
     pubIcpPairs->publish(line_marker);
 
-    // 2) LIO points (green spheres)
+    // 2) LIO points (green spheres, ENU)
     visualization_msgs::msg::Marker lio_marker;
-    lio_marker.header.frame_id = "camera_init";
+    lio_marker.header.frame_id = "map";
     lio_marker.header.stamp = stamp;
     lio_marker.ns = "icp_lio";
     lio_marker.id = 0;
@@ -442,17 +532,16 @@ void publish_icp_pairs_marker(
     lio_marker.points.clear();
     for (size_t i = 0; i < n; ++i)
     {
+        const Eigen::Vector3d pl_enu = Ricp * p_nmea->icp_pairs_lio[i] + ticp;
         geometry_msgs::msg::Point pt;
-        pt.x = p_nmea->icp_pairs_lio[i].x();
-        pt.y = p_nmea->icp_pairs_lio[i].y();
-        pt.z = p_nmea->icp_pairs_lio[i].z();
+        pt.x = pl_enu.x(); pt.y = pl_enu.y(); pt.z = pl_enu.z();
         lio_marker.points.push_back(pt);
     }
     pubIcpPairs->publish(lio_marker);
 
-    // 3) GPS points (red spheres)
+    // 3) GPS points (red spheres, ENU)
     visualization_msgs::msg::Marker gps_marker;
-    gps_marker.header.frame_id = "camera_init";
+    gps_marker.header.frame_id = "map";
     gps_marker.header.stamp = stamp;
     gps_marker.ns = "icp_gps";
     gps_marker.id = 0;
@@ -466,13 +555,37 @@ void publish_icp_pairs_marker(
     gps_marker.points.clear();
     for (size_t i = 0; i < n; ++i)
     {
+        const Eigen::Vector3d pn_enu = Ricp * p_nmea->icp_pairs_nmea_local[i] + ticp;
         geometry_msgs::msg::Point pt;
-        pt.x = p_nmea->icp_pairs_nmea_local[i].x();
-        pt.y = p_nmea->icp_pairs_nmea_local[i].y();
-        pt.z = p_nmea->icp_pairs_nmea_local[i].z();
+        pt.x = pn_enu.x(); pt.y = pn_enu.y(); pt.z = pn_enu.z();
         gps_marker.points.push_back(pt);
     }
     pubIcpPairs->publish(gps_marker);
+
+    // 4) GPS path as LINE_STRIP (ENU, 이미 nmea_aligned_path가 ENU)
+    visualization_msgs::msg::Marker gps_path_marker;
+    gps_path_marker.header.frame_id = "map";
+    gps_path_marker.header.stamp = stamp;
+    gps_path_marker.ns = "gps_path";
+    gps_path_marker.id = 0;
+    gps_path_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    gps_path_marker.action = visualization_msgs::msg::Marker::ADD;
+    gps_path_marker.scale.x = 0.06;
+    gps_path_marker.color.r = 0.0;
+    gps_path_marker.color.g = 0.5;
+    gps_path_marker.color.b = 1.0;
+    gps_path_marker.color.a = 1.0;
+    gps_path_marker.points.clear();
+    for (const auto &ps : nmea_aligned_path.poses)
+    {
+        geometry_msgs::msg::Point pt;
+        pt.x = ps.pose.position.x;
+        pt.y = ps.pose.position.y;
+        pt.z = ps.pose.position.z;
+        gps_path_marker.points.push_back(pt);
+    }
+    if (!gps_path_marker.points.empty())
+        pubIcpPairs->publish(gps_path_marker);
 #endif
 }
 
@@ -678,7 +791,7 @@ int main(int argc, char** argv)
     
     path.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
     path.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
-    path.header.frame_id ="camera_init";
+    path.header.frame_id = "camera_init";  // publish_path에서 ICP 시 enu로 전환
     nmea_aligned_path.header = path.header;
 
     /*** variables definition for counting ***/
@@ -948,6 +1061,13 @@ int main(int argc, char** argv)
     auto pubPath = node->create_publisher<nav_msgs::msg::Path>("/path", qos_pub);
     auto pubNmeaAlignedOdom = node->create_publisher<nav_msgs::msg::Odometry>("/nmea_aligned_to_init", qos_pub);
     auto pubNmeaAlignedPath = node->create_publisher<nav_msgs::msg::Path>("/nmea_aligned_path", qos_pub);
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pubNmeaLioErrorXy;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pubNmea03mDiag;
+    if (NMEA_ENABLE)
+    {
+        pubNmeaLioErrorXy = node->create_publisher<std_msgs::msg::Float64>("/ligo/nmea_lio_error_xy", qos_pub);
+        pubNmea03mDiag = node->create_publisher<std_msgs::msg::Float64MultiArray>("/ligo/nmea_03m_diag", qos_pub);
+    }
     auto pubIcpPairs = node->create_publisher<visualization_msgs::msg::Marker>("/icp_pairs_marker", qos_pub);
     auto pubInitPairsFromGpsMove = node->create_publisher<visualization_msgs::msg::Marker>(
         "/init_pairs_from_gps_move_marker", qos_pub);
@@ -1394,7 +1514,7 @@ int main(int argc, char** argv)
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {   
                                 nmea_cur = p_nmea->nmea_msg.front();
-                                const double nmea_lat = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
+                                const double nmea_lat = 0.0;  // latency 없음 가정
                                 // #region agent log
                                 ligo_dbg62_map("laserMapping.cpp:nmea_entry", "Entered NMEA processing block",
                                                std::string("{\"nmea_msg_size\":") + std::to_string(p_nmea->nmea_msg.size()) +
@@ -1436,7 +1556,28 @@ int main(int argc, char** argv)
                                         p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                         p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                         // p_gnss->sqrt_lidar *= 0.002;
-                                        update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                        // ICP 이후 LIO-GPS 2D 오차 (ENU): Evaluate 직전에 계산
+                                        double err_sq_xy_pre = 0.0;
+                                        if (p_nmea->icp_tf_ready)
+                                        {
+                                            const Eigen::Vector3d p_gps_enu(nmea_cur->pose.pose.position.x, nmea_cur->pose.pose.position.y, nmea_cur->pose.pose.position.z);
+                                            const Eigen::Vector3d p_lio_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+                                            const double dx = p_lio_enu.x() - p_gps_enu.x(), dy = p_lio_enu.y() - p_gps_enu.y();
+                                            err_sq_xy_pre = dx * dx + dy * dy;
+                                        }
+                                        try
+                                        {
+                                            update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                        }
+                                        catch (const std::exception &e)
+                                        {
+                                            RCLCPP_ERROR(
+                                                rclcpp::get_logger("ligo"),
+                                                "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
+                                                e.what());
+                                            update_nmea = false;
+                                            p_nmea->nmea_ready = true;
+                                        }
                                         // #region agent log
                                         ligo_dbg62_map("laserMapping.cpp:nmea_eval", "Evaluate returned",
                                                        std::string("{\"update_nmea\":") + (update_nmea ? "true" : "false") +
@@ -1456,6 +1597,7 @@ int main(int argc, char** argv)
 
                                         if (update_nmea)
                                         {
+                                            if (p_nmea->icp_tf_ready) { p_nmea->sum_nmea_lio_err_sq_xy += err_sq_xy_pre; p_nmea->n_nmea_fusion_count++; }
                                             kf_output.update_iterated_dyn_share_NMEA();
                                             if (!runtime_pos_log) cout_state_to_file_nmea();
                                         }
@@ -1673,7 +1815,7 @@ int main(int argc, char** argv)
                     if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                     {
                         nmea_cur = p_nmea->nmea_msg.front();
-                        const double nmea_lat2 = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
+                        const double nmea_lat2 = 0.0;  // latency 없음 가정
                         while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 < time_predict_last_const)
                         {
                             p_nmea->nmea_msg.pop();
@@ -1703,8 +1845,28 @@ int main(int argc, char** argv)
                                 time_update_last = time_predict_last_const;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                // p_gnss->sqrt_lidar *= 0.002;
-                                update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                // ICP 이후 LIO-GPS 2D 오차 (ENU): Evaluate 직전에 계산
+                                double err_sq_xy_pre2 = 0.0;
+                                if (p_nmea->icp_tf_ready)
+                                {
+                                    const Eigen::Vector3d p_gps_enu(nmea_cur->pose.pose.position.x, nmea_cur->pose.pose.position.y, nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d p_lio_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+                                    const double dx = p_lio_enu.x() - p_gps_enu.x(), dy = p_lio_enu.y() - p_gps_enu.y();
+                                    err_sq_xy_pre2 = dx * dx + dy * dy;
+                                }
+                                try
+                                {
+                                    update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                }
+                                catch (const std::exception &e)
+                                {
+                                    RCLCPP_ERROR(
+                                        rclcpp::get_logger("ligo"),
+                                        "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
+                                        e.what());
+                                    update_nmea = false;
+                                    p_nmea->nmea_ready = true;
+                                }
                                 if (!p_nmea->nmea_ready)
                                 {
                                     flg_reset = true;
@@ -1718,6 +1880,7 @@ int main(int argc, char** argv)
 
                                 if (update_nmea)
                                 {
+                                    if (p_nmea->icp_tf_ready) { p_nmea->sum_nmea_lio_err_sq_xy += err_sq_xy_pre2; p_nmea->n_nmea_fusion_count++; }
                                     kf_output.update_iterated_dyn_share_NMEA();
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
                                 }
@@ -1864,7 +2027,7 @@ int main(int argc, char** argv)
                             else if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
-                                const double nmea_lat_sync = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
+                                const double nmea_lat_sync = 0.0;  // latency 없음 가정
                                 double front_nmea_ts = rclcpp::Time(nmea_cur->header.stamp).seconds(); // take time
                                 time_current = front_nmea_ts - time_diff_nmea_local - nmea_lat_sync;
                                 while (rclcpp::Time(imu_next.header.stamp).seconds() < time_current) // 0.05
@@ -2105,7 +2268,7 @@ int main(int argc, char** argv)
                         if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                         {
                             nmea_cur = p_nmea->nmea_msg.front();
-                            const double nmea_lat3 = (p_nmea->nmea_gps_latency_estimated > 0) ? p_nmea->nmea_gps_latency_estimated : nmea_gps_latency;
+                            const double nmea_lat3 = 0.0;  // latency 없음 가정
                             while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 < time_predict_last_const)
                             {
                                 p_nmea->nmea_msg.pop();
@@ -2139,7 +2302,28 @@ int main(int argc, char** argv)
                                 {
                                     p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                 }
-                                update_nmea = p_nmea->Evaluate(kf_output.x_); 
+                                // ICP 이후 LIO-GPS 2D 오차 (ENU): Evaluate 직전에 계산
+                                double err_sq_xy_pre3 = 0.0;
+                                if (p_nmea->icp_tf_ready)
+                                {
+                                    const Eigen::Vector3d p_gps_enu(nmea_cur->pose.pose.position.x, nmea_cur->pose.pose.position.y, nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d p_lio_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+                                    const double dx = p_lio_enu.x() - p_gps_enu.x(), dy = p_lio_enu.y() - p_gps_enu.y();
+                                    err_sq_xy_pre3 = dx * dx + dy * dy;
+                                }
+                                try
+                                {
+                                    update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                }
+                                catch (const std::exception &e)
+                                {
+                                    RCLCPP_ERROR(
+                                        rclcpp::get_logger("ligo"),
+                                        "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
+                                        e.what());
+                                    update_nmea = false;
+                                    p_nmea->nmea_ready = true;
+                                }
                                 if (!p_nmea->nmea_ready)
                                 {
                                     flg_reset = true;
@@ -2152,6 +2336,7 @@ int main(int argc, char** argv)
                                 }
                                 if (update_nmea)
                                 {
+                                    if (p_nmea->icp_tf_ready) { p_nmea->sum_nmea_lio_err_sq_xy += err_sq_xy_pre3; p_nmea->n_nmea_fusion_count++; }
                                     if (!nolidar)
                                     {
                                         kf_output.update_iterated_dyn_share_NMEA();
@@ -2172,7 +2357,9 @@ int main(int argc, char** argv)
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 if (p_nmea->nmea_ready)
                                 {
-                                    if (nolidar)
+                                    if (nolidar && p_nmea->frame_num > 0 &&
+                                        p_nmea->p_assign->isamCurrentEstimate.exists(F(p_nmea->frame_num-1)) &&
+                                        p_nmea->p_assign->isamCurrentEstimate.exists(R(p_nmea->frame_num-1)))
                                     {
                                         Eigen::Matrix3d R_enu_local;
                                         R_enu_local = Eigen::AngleAxisd(p_nmea->yaw_enu_local, Eigen::Vector3d::UnitZ()); 
@@ -2259,7 +2446,7 @@ int main(int argc, char** argv)
             t5 = omp_get_wtime();
             /******* Publish points *******/
             publish_nmea_aligned(pubNmeaAlignedOdom, pubNmeaAlignedPath);
-            publish_icp_pairs_marker(pubIcpPairs);
+            publish_icp_pairs_marker(pubIcpPairs, pubNmeaLioErrorXy, pubNmea03mDiag);
             publish_init_pairs_marker_from_gps_move(pubInitPairsFromGpsMove);
             if (path_en)                         publish_path(pubPath);
             if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFullRes);

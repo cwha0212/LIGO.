@@ -92,6 +92,9 @@ void NMEAProcess::Reset()
   icp_R_local_to_enu.setIdentity();
   icp_t_local_to_enu.setZero();
   icp_tf_ready = false;
+  sum_nmea_lio_err_sq_xy = 0.0;
+  n_nmea_fusion_count = 0;
+  diag_03m_valid = false;
   icp_pairs_lio.clear();
   icp_pairs_nmea_local.clear();
   init_start_set = false;
@@ -241,39 +244,54 @@ void NMEAProcess::runISAM2opt(void) //
 {
   gtsam::FactorIndices delete_factor;
   gtsam::FactorIndices().swap(delete_factor);
+  // Temporary safety: disable NMEA marginalization to avoid underconstrained
+  // states during factor deletion (e.g., IndeterminantLinearSystemException at r31).
+  // This keeps graph growing, but prioritizes runtime stability.
+  const bool disable_nmea_marginalization = true;
 
-  if (nmea_ready)
+  try
   {
-    bool delete_happen = false;
-    if (frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 4000)
+    if (nmea_ready)
     {
-      delete_happen = true;
-    while (frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 3000)
-    { 
-      if (!p_assign->factor_id_frame.empty())       
+      bool delete_happen = false;
+      if (!disable_nmea_marginalization && frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 4000)
       {
-        // if (frame_delete > 0)
+        delete_happen = true;
+      while (frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 3000)
+      { 
+        if (!p_assign->factor_id_frame.empty())       
         {
-        for (size_t i = 0; i < p_assign->factor_id_frame[0].size(); i++)
-        {
-          // if (p_assign->factor_id_frame[0][i] != 0 && p_assign->factor_id_frame[0][i] != 1 || nolidar)
+          // if (frame_delete > 0)
           {
-            delete_factor.push_back(p_assign->factor_id_frame[0][i]);
+          for (size_t i = 0; i < p_assign->factor_id_frame[0].size(); i++)
+          {
+            // if (p_assign->factor_id_frame[0][i] != 0 && p_assign->factor_id_frame[0][i] != 1 || nolidar)
+            {
+              delete_factor.push_back(p_assign->factor_id_frame[0][i]);
+            }
           }
+          // index_delete += p_assign->factor_id_frame[0].size();
+          }
+        
+          p_assign->factor_id_frame.pop_front();
+          frame_delete ++;
         }
-        // index_delete += p_assign->factor_id_frame[0].size();
-        }
-      
-        p_assign->factor_id_frame.pop_front();
-        frame_delete ++;
+        if (p_assign->factor_id_frame.empty()) break;
       }
-      if (p_assign->factor_id_frame.empty()) break;
-    }
-    }
+      }
 
-    if (delete_happen)
-    {
-      p_assign->delete_variables(nolidar, frame_delete, frame_num, id_accumulate, delete_factor);
+      if (delete_happen)
+      {
+        p_assign->delete_variables(nolidar, frame_delete, frame_num, id_accumulate, delete_factor);
+      }
+      else
+      {
+        p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
+        p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
+        p_assign->initialEstimate.clear();
+        p_assign->isam.update();
+      }
+      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
     }
     else
     {
@@ -281,19 +299,25 @@ void NMEAProcess::runISAM2opt(void) //
       p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
       p_assign->initialEstimate.clear();
       p_assign->isam.update();
+      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
     }
-    p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
   }
-  else
+  catch (const std::exception &e)
   {
-    p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
-    p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
+    RCLCPP_ERROR(
+        rclcpp::get_logger("ligo"),
+        "[nmea/isam] exception in runISAM2opt: %s. Drop current NMEA factors and keep running.",
+        e.what());
+    // Do not call Reset() here: it sets nmea_ready=false and triggers full pipeline reset
+    // (including IMU re-initialization) from laserMapping. Instead, drop only current
+    // pending factors/initial values and keep last valid estimate.
+    p_assign->gtSAMgraph.resize(0);
     p_assign->initialEstimate.clear();
-    p_assign->isam.update();
-    p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
+    return;
   }
   
-  if (nolidar) // || invalid_lidar)
+  if (nolidar && frame_num > 0 &&
+      p_assign->isamCurrentEstimate.exists(F(frame_num-1))) // || invalid_lidar)
   {
     pre_integration->repropagate(p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(6),
                                 p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(9));
@@ -423,16 +447,56 @@ bool NMEAProcess::NMEALIAlign()
     if (first_lio_03 < 0 && lio_disp[i] >= THRESH_03) first_lio_03 = i;
     if (first_gps_03 < 0 && gps_disp[i] >= THRESH_03) first_gps_03 = i;
   }
+  // latency 없음 가정: 항상 0 사용
   double latency_est = 0.0;
+  nmea_gps_latency_estimated = 0.0;
   if (first_lio_03 >= 0 && first_gps_03 >= 0)
   {
     const double t_lio = init_lio_time_buf[first_lio_03];
     const double t_gps = rclcpp::Time(init_nmea_buf[first_gps_03]->header.stamp).seconds();
-    latency_est = t_gps - t_lio;  // GPS stamp가 늦음 → 지연 L (추정값 그대로 사용, 상한 제거)
-    latency_est = std::max(0.0, latency_est);
-    nmea_gps_latency_estimated = latency_est;
-    RCLCPP_INFO(logger, "[nmea/init] first_move: lio_0.3m=idx%d(t=%.1f) gps_0.3m=idx%d(t=%.1f) → latency=%.3fs",
-                first_lio_03, t_lio, first_gps_03, t_gps, latency_est);
+    RCLCPP_INFO(logger, "[nmea/init] first_move: lio_0.3m=idx%d(t=%.1f) gps_0.3m=idx%d(t=%.1f) latency=0(assumed)",
+                first_lio_03, t_lio, first_gps_03, t_gps);
+  }
+  // 0.3m 시점 진단: t_lio에 LIO vs GPS 비교 (latency 유무 확인용)
+  if (first_lio_03 >= 0)
+  {
+    auto get_nmea_at_time = [&](double t_want) -> Eigen::Vector3d {
+      if (n_valid < 1) return Eigen::Vector3d::Zero();
+      if (t_want <= rclcpp::Time(init_nmea_buf.front()->header.stamp).seconds())
+        return Eigen::Vector3d(init_nmea_buf.front()->pose.pose.position.x,
+                               init_nmea_buf.front()->pose.pose.position.y,
+                               init_nmea_buf.front()->pose.pose.position.z);
+      if (t_want >= rclcpp::Time(init_nmea_buf.back()->header.stamp).seconds())
+        return Eigen::Vector3d(init_nmea_buf.back()->pose.pose.position.x,
+                               init_nmea_buf.back()->pose.pose.position.y,
+                               init_nmea_buf.back()->pose.pose.position.z);
+      for (int j = 0; j + 1 < n_valid; ++j)
+      {
+        const double t0 = rclcpp::Time(init_nmea_buf[j]->header.stamp).seconds();
+        const double t1 = rclcpp::Time(init_nmea_buf[j + 1]->header.stamp).seconds();
+        if (t0 <= t_want && t_want <= t1)
+        {
+          const double alpha = (t1 - t0) > 1e-9 ? (t_want - t0) / (t1 - t0) : 0.0;
+          Eigen::Vector3d p0(init_nmea_buf[j]->pose.pose.position.x, init_nmea_buf[j]->pose.pose.position.y, init_nmea_buf[j]->pose.pose.position.z);
+          Eigen::Vector3d p1(init_nmea_buf[j + 1]->pose.pose.position.x, init_nmea_buf[j + 1]->pose.pose.position.y, init_nmea_buf[j + 1]->pose.pose.position.z);
+          return (1.0 - alpha) * p0 + alpha * p1;
+        }
+      }
+      return Eigen::Vector3d(init_nmea_buf.back()->pose.pose.position.x,
+                             init_nmea_buf.back()->pose.pose.position.y,
+                             init_nmea_buf.back()->pose.pose.position.z);
+    };
+    const double t_lio = init_lio_time_buf[first_lio_03];
+    diag_03m_lio_pos = init_pos_buf[first_lio_03];
+    diag_03m_gps_at_t_lio = get_nmea_at_time(t_lio);
+    diag_03m_lio_disp = (diag_03m_lio_pos - init_start_lio).norm();
+    diag_03m_gps_disp_at_t_lio = (diag_03m_gps_at_t_lio - init_start_nmea).norm();
+    diag_03m_latency_s = latency_est;
+    diag_03m_t_lio = t_lio;
+    diag_03m_t_gps = first_gps_03 >= 0 ? rclcpp::Time(init_nmea_buf[first_gps_03]->header.stamp).seconds() : 0.0;
+    diag_03m_valid = true;
+    RCLCPP_INFO(logger, "[nmea/03m] t_lio=%.3fs lio_disp=%.3fm gps_disp_at_t_lio=%.3fm latency=%.3fs",
+                t_lio, diag_03m_lio_disp, diag_03m_gps_disp_at_t_lio, diag_03m_latency_s);
   }
 
   // 2) 0.3m 이후: 보정된 시각(T-L)으로 비슷한 시간대 pair. GPS stamp T = 시각 T-L의 위치 → LIO도 T-L로 보간
@@ -747,8 +811,18 @@ bool NMEAProcess::Evaluate(state_output &state)
     return false;
   }
   
+  if (frame_num <= 0)
+  {
+    return false;
+  }
+
   if (nolidar)
   {
+    if (!p_assign->isamCurrentEstimate.exists(R(frame_num-1)) ||
+        !p_assign->isamCurrentEstimate.exists(F(frame_num-1)))
+    {
+      return false;
+    }
     state.rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num-1)).matrix();
     state.pos = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(0);
     state.vel = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(3);
@@ -758,6 +832,12 @@ bool NMEAProcess::Evaluate(state_output &state)
   }
   else
   {
+    if (!p_assign->isamCurrentEstimate.exists(R(frame_num-1)) ||
+        !p_assign->isamCurrentEstimate.exists(A(frame_num-1)) ||
+        !p_assign->isamCurrentEstimate.exists(P(0)))
+    {
+      return false;
+    }
     state_const_.rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num-1)).matrix();
     state_const_.pos = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(frame_num-1)).segment<3>(0);
     state_const_.vel = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(frame_num-1)).segment<3>(3);
@@ -887,6 +967,21 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
                   state_gravity, delta_t, ba, bg, pre_integration, p_assign->odomNoiseIMU));
     LIGO_LOG_FACTOR("GnssLioFactorNolidar", frame_num);
     p_assign->factor_id_frame[frame_num-1-frame_delete].push_back(id_accumulate);
+    id_accumulate += 1;
+  }
+  // Stabilize rotation DOF: always add a weak prior on R(frame_num)
+  // to avoid occasional underconstrained rotation states (e.g., r31).
+  if (!nolidar)
+  {
+    static gtsam::noiseModel::Base::shared_ptr weak_rot_prior = []() {
+      gtsam::Vector v(3);
+      v << 1e4, 1e4, 1e4;  // weak constraint
+      return gtsam::noiseModel::Diagonal::Variances(v);
+    }();
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(
+        R(frame_num), gtsam::Rot3(rot), weak_rot_prior));
+    LIGO_LOG_FACTOR("PriorFactor_R_weak", frame_num);
+    factor_id_cur.push_back(id_accumulate);
     id_accumulate += 1;
   }
   {
