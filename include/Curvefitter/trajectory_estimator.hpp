@@ -45,7 +45,7 @@
 // #include <factor/auto_diff/motion_factor.h>
 // #include <factor/auto_diff/vicon_factor.h>
 #include <utils/ceres_callbacks.h>
-#include <basalt/spline/ceres_local_param.hpp>
+#include <ceres/manifold.h>
 #include <memory>
 #include <thread>
 #include <Curvefitter/se3_trajectory.hpp>
@@ -70,7 +70,7 @@ class TrajectoryEstimator {
                     //   CalibParamManager::Ptr calib_param)
       : trajectory_(trajectory), traj_locked_(false) {
     problem_ = std::make_shared<ceres::Problem>(DefaultProblemOptions());
-    local_parameterization = new basalt::LieLocalParameterization<Sophus::SO3<double> >();
+    so3_manifold_ = std::make_unique<ceres::EigenQuaternionManifold>();
   }
 
   void SetProblem(std::shared_ptr<ceres::Problem> problem_in) {
@@ -108,8 +108,7 @@ class TrajectoryEstimator {
 
   std::shared_ptr<Trajectory<_N>> trajectory_;
   std::shared_ptr<ceres::Problem> problem_;
-  // ceres::Manifold* local_parameterization;
-  basalt::LieLocalParameterization<Sophus::SO3d>* local_parameterization;
+  std::unique_ptr<ceres::Manifold> so3_manifold_;
 
   bool traj_locked_;
 
@@ -132,8 +131,8 @@ void TrajectoryEstimator<_N>::AddControlPoints(
         problem_->AddParameterBlock(trajectory_->getKnotPos(i).data(), 3);
       } else {
         vec.emplace_back(trajectory_->getKnotSO3(i).data());
-        problem_->AddParameterBlock(trajectory_->getKnotSO3(i).data(), 4, //
-                                    local_parameterization);
+        problem_->AddParameterBlock(trajectory_->getKnotSO3(i).data(), 4,
+                                    so3_manifold_.get());
       }
       // if (IsLocked() || (fixed_control_point_index_ >= 0 &&
       //                    i <= fixed_control_point_index_)) {
@@ -183,7 +182,7 @@ void TrajectoryEstimator<_N>::SetTrajectorControlPointVariable(
             << max_s + _N - 1 << "\n";
   for (size_t i = min_s; i < (max_s + _N); i++) {
     problem_->AddParameterBlock(trajectory_->getKnotSO3(i).data(), 4,
-                                local_parameterization);
+                                so3_manifold_.get());
     problem_->SetParameterBlockVariable(trajectory_->getKnotSO3(i).data());
 
     problem_->AddParameterBlock(trajectory_->getKnotPos(i).data(), 3);

@@ -144,6 +144,10 @@ endif()
 
 add_executable(ligo_mapping ${ligo_sources})
 
+# GTSAM 4.1 API: OptionalMatrixType / default Jacobian args (see ligo_gtsam_compat.h)
+target_compile_options(ligo_mapping PRIVATE
+  "-include${CMAKE_CURRENT_SOURCE_DIR}/include/ligo_gtsam_compat.h")
+
 ament_target_dependencies(ligo_mapping
   rclcpp
   sensor_msgs

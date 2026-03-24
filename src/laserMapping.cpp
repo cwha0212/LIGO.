@@ -1694,22 +1694,13 @@ int main(int argc, char** argv)
 #endif
 #ifndef LIGO_WITHOUT_GNSS
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
-                            {   
+                            {
                                 nmea_cur = p_nmea->nmea_msg.front();
                                 const double nmea_lat = 0.0;  // latency 없음 가정
-                                // #region agent log
-                                ligo_dbg62_map("laserMapping.cpp:nmea_entry", "Entered NMEA processing block",
-                                               std::string("{\"nmea_msg_size\":") + std::to_string(p_nmea->nmea_msg.size()) +
-                                               ",\"nmea_ready\":" + (p_nmea->nmea_ready ? "true" : "false") +
-                                               ",\"time_diff_nmea_local\":" + std::to_string(time_diff_nmea_local) +
-                                               ",\"time_predict_last_const\":" + std::to_string(time_predict_last_const) + "}",
-                                               "H10");
-                                // #endregion
                                 while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat < time_predict_last_const)
-                                while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local < time_predict_last_const)
                                 {
                                     p_nmea->nmea_msg.pop();
-                                    if(!p_nmea->nmea_msg.empty())
+                                    if (!p_nmea->nmea_msg.empty())
                                     {
                                         nmea_cur = p_nmea->nmea_msg.front();
                                     }
@@ -1732,11 +1723,8 @@ int main(int argc, char** argv)
                                         {
                                             kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                         }
-
                                         kf_output.predict(dt, Q_output, input_in, true, false);
                                         time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat;
-
-                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                         time_update_last = time_predict_last_const;
                                         state_out = kf_output.x_;
                                         p_nmea->processNMEA(nmea_cur, state_out);
@@ -1749,12 +1737,10 @@ int main(int argc, char** argv)
                                             kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                         }
                                         kf_output.predict(dt, Q_output, input_in, true, false);
-                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat;
                                         time_update_last = time_predict_last_const;
                                         p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                         p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                        // p_gnss->sqrt_lidar *= 0.002;
-                                        // ICP 이후 LIO-GPS 2D 오차 (ENU): Evaluate 직전에 계산
                                         double err_sq_xy_pre = 0.0;
                                         if (p_nmea->icp_tf_ready)
                                         {
@@ -1776,22 +1762,17 @@ int main(int argc, char** argv)
                                             update_nmea = false;
                                             p_nmea->nmea_ready = true;
                                         }
-                                        // #region agent log
-                                        ligo_dbg62_map("laserMapping.cpp:nmea_eval", "Evaluate returned",
-                                                       std::string("{\"update_nmea\":") + (update_nmea ? "true" : "false") +
-                                                       ",\"nmea_ready\":" + (p_nmea->nmea_ready ? "true" : "false") + "}",
-                                                       "H11");
-                                        // #endregion
                                         if (!p_nmea->nmea_ready)
                                         {
                                             flg_reset = true;
                                             p_nmea->nmea_msg.pop();
-                                            if(!p_nmea->nmea_msg.empty())
+                                            if (!p_nmea->nmea_msg.empty())
                                             {
                                                 nmea_cur = p_nmea->nmea_msg.front();
                                             }
-                                            break; // ?
-                                        update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                            break;
+                                        }
+
                                         const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                         const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
                                         const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
@@ -1823,25 +1804,8 @@ int main(int argc, char** argv)
                                             if (!runtime_pos_log) cout_state_to_file_nmea();
                                         }
                                     }
-                                    else
-                                    {
-                                        if (dt_cov > 0.0)
-                                        {
-                                            kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                        }
-                                        
-                                        kf_output.predict(dt, Q_output, input_in, true, false);
-
-                                        time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat;
-                                        time_update_last = time_predict_last_const;
-                                        state_out = kf_output.x_;
-                                        // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
-                                        // state_out.pos = state_out.pos;
-                                        // state_out.vel = state_out.vel;
-                                        p_nmea->processNMEA(nmea_cur, state_out);
-                                    }
                                     p_nmea->nmea_msg.pop();
-                                    if(!p_nmea->nmea_msg.empty())
+                                    if (!p_nmea->nmea_msg.empty())
                                     {
                                         nmea_cur = p_nmea->nmea_msg.front();
                                     }
@@ -2031,7 +1995,7 @@ int main(int argc, char** argv)
                         while (rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 < time_predict_last_const)
                         {
                             p_nmea->nmea_msg.pop();
-                            if(!p_nmea->nmea_msg.empty())
+                            if (!p_nmea->nmea_msg.empty())
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
                             }
@@ -2045,9 +2009,6 @@ int main(int argc, char** argv)
                         {
                             double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_predict_last_const;
                             double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_update_last;
-                            if (p_nmea->nmea_ready)
-                            double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_predict_last_const;
-                            double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - time_update_last;
 
                             nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
 
@@ -2058,7 +2019,7 @@ int main(int argc, char** argv)
                                     kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                 }
                                 kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
+                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2;
                                 time_update_last = time_predict_last_const;
                                 state_out = kf_output.x_;
                                 p_nmea->processNMEA(nmea_cur, state_out);
@@ -2076,7 +2037,6 @@ int main(int argc, char** argv)
                                 time_update_last = time_predict_last_const;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
                                 p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                // ICP 이후 LIO-GPS 2D 오차 (ENU): Evaluate 직전에 계산
                                 double err_sq_xy_pre2 = 0.0;
                                 if (p_nmea->icp_tf_ready)
                                 {
@@ -2102,12 +2062,13 @@ int main(int argc, char** argv)
                                 {
                                     flg_reset = true;
                                     p_nmea->nmea_msg.pop();
-                                    if(!p_nmea->nmea_msg.empty())
+                                    if (!p_nmea->nmea_msg.empty())
                                     {
                                         nmea_cur = p_nmea->nmea_msg.front();
                                     }
-                                    break; // ?
-                                update_nmea = p_nmea->Evaluate(kf_output.x_);
+                                    break;
+                                }
+
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
                                 const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
@@ -2139,23 +2100,8 @@ int main(int argc, char** argv)
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
                                 }
                             }
-                            else
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                }
-                                kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2;
-                                time_update_last = time_predict_last_const;
-                                state_out = kf_output.x_;
-                                // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
-                                // state_out.pos = state_out.pos;
-                                // state_out.vel = state_out.vel;
-                                p_nmea->processNMEA(nmea_cur, state_out);
-                            }
                             p_nmea->nmea_msg.pop();
-                            if(!p_nmea->nmea_msg.empty())
+                            if (!p_nmea->nmea_msg.empty())
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
                             }
@@ -2783,6 +2729,7 @@ int main(int argc, char** argv)
                     }
                 }
             }
+        }
         }
         status = rclcpp::ok();
         loop_rate.sleep();

@@ -291,52 +291,7 @@ void NMEAProcess::runISAM2opt(void) //
     p_assign->initialEstimate.clear();
     return;
   }
-  
-  if (nolidar && frame_num > 0 &&
-      p_assign->isamCurrentEstimate.exists(F(frame_num-1))) // || invalid_lidar)
-    if (delete_happen)
-    {
-      p_assign->delete_variables(nolidar, frame_delete, frame_num, id_accumulate, delete_factor);
-    }
-    else
-    {
-      try
-      {
-        p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
-        p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
-        p_assign->initialEstimate.clear();
-        p_assign->isam.update();
-      }
-      catch (const gtsam::IndeterminantLinearSystemException &)
-      {
-        throw;
-      }
-    }
-    try
-    {
-      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
-    }
-    catch (const gtsam::IndeterminantLinearSystemException &)
-    {
-      throw;
-    }
-  }
-  else
-  {
-    try
-    {
-      p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
-      p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
-      p_assign->initialEstimate.clear();
-      p_assign->isam.update();
-      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
-    }
-    catch (const gtsam::IndeterminantLinearSystemException &)
-    {
-      throw;
-    }
-  }
-  
+
   if (nolidar) // || invalid_lidar)
   {
     pre_integration->repropagate(p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(6),
@@ -986,7 +941,6 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     }();
     p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(
         R(frame_num), gtsam::Rot3(rot), weak_rot_prior));
-    LIGO_LOG_FACTOR("PriorFactor_R_weak", frame_num);
     factor_id_cur.push_back(id_accumulate);
     id_accumulate += 1;
   }

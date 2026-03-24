@@ -173,14 +173,9 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
             // gtsam::PriorFactor<gtsam::Vector12> init_vel(F(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector12>(F(frame_delete+j)), updatedPosNoise); // margposNoise);
             gtsam::PriorFactor<gtsam::Vector6> init_vel(A(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector6>(A(frame_delete+j)), margposNoise); // updatedPosNoise); // 
             gtsam::PriorFactor<gtsam::Vector3> init_grav(G(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector3>(G(frame_delete+j)), priorGravNoise);
-            gtsam::PriorFactor<gtsam::Vector3> init_grav(G(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector3>(G(frame_delete+j)), priorGravNoise);
             gtsam::PriorFactor<gtsam::Vector12> init_oth(O(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector12>(O(frame_delete+j)), priorBiasNoise);
             gtSAMgraph.add(init_rot);
             gtSAMgraph.add(init_vel);
-            gtSAMgraph.add(init_grav);
-            factor_id_frame[0].push_back(id_accumulate+(j)*3);
-            factor_id_frame[0].push_back(id_accumulate+1+(j)*3);
-            factor_id_frame[0].push_back(id_accumulate+2+(j)*3);
             gtSAMgraph.add(init_grav);
             gtSAMgraph.add(init_oth);
             factor_id_frame[0].push_back(id_accumulate+(j)*4);
@@ -188,7 +183,6 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
             factor_id_frame[0].push_back(id_accumulate+2+(j)*4);
             factor_id_frame[0].push_back(id_accumulate+3+(j)*4);
         }
-        id_accumulate += j * 3;
         id_accumulate += j * 4;
       }
       try
