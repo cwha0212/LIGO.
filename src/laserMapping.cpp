@@ -876,6 +876,32 @@ static void try_publish_fused_global_nav_sat(
 #endif
 }
 
+static void try_publish_fused_ecef_position(
+    const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr &pubEcefPosition)
+{
+#ifdef LIGO_WITH_NMEA
+    if (flg_exit || !rclcpp::ok())
+        return;
+    if (!pubEcefPosition)
+        return;
+    Eigen::Vector3d p_ecef;
+    if (!compute_fused_imu_position_ecef(p_ecef))
+        return;
+    geometry_msgs::msg::PointStamped msg;
+    msg.header.frame_id = ecef_position_frame_id;
+    const double ts = publish_odometry_without_downsample ? time_current : lidar_end_time;
+    msg.header.stamp.sec = static_cast<int32_t>(std::floor(ts));
+    msg.header.stamp.nanosec =
+        static_cast<uint32_t>(std::round((ts - std::floor(ts)) * 1e9));
+    msg.point.x = p_ecef(0);
+    msg.point.y = p_ecef(1);
+    msg.point.z = p_ecef(2);
+    pubEcefPosition->publish(msg);
+#else
+    (void)pubEcefPosition;
+#endif
+}
+
 void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
 {
     if (flg_exit || !rclcpp::ok())
@@ -1465,6 +1491,7 @@ int main(int argc, char** argv)
     auto plane_pub = node->create_publisher<visualization_msgs::msg::Marker>("/planner_normal", qos_pub);
 #ifdef LIGO_WITH_NMEA
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEcefPosition;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
     if (NMEA_ENABLE)
     {
@@ -1476,9 +1503,14 @@ int main(int argc, char** argv)
             node->create_publisher<sensor_msgs::msg::NavSatFix>(global_position_topic, qos_pub);
         RCLCPP_INFO(node->get_logger(), "Global WGS84 position (NavSatFix): topic=%s (anchor auto-detected at NMEA init)",
                     global_position_topic.c_str());
+        pubEcefPosition =
+            node->create_publisher<geometry_msgs::msg::PointStamped>(ecef_position_topic, qos_pub);
+        RCLCPP_INFO(node->get_logger(), "ECEF position: topic=%s frame_id=%s", ecef_position_topic.c_str(),
+                    ecef_position_frame_id.c_str());
     }
 #else
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEcefPosition;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
 #endif
 
@@ -2095,6 +2127,7 @@ int main(int argc, char** argv)
                         publish_odometry(pubOdomAftMapped, tf_br);
                         try_publish_fused_enu_position(pubEnuPosition);
                         try_publish_fused_global_nav_sat(pubGlobalNavSat);
+                        try_publish_fused_ecef_position(pubEcefPosition);
                         if (runtime_pos_log)
                         {
                             euler_cur = SO3ToEuler(kf_output.x_.rot);
@@ -2407,6 +2440,7 @@ int main(int argc, char** argv)
                 publish_odometry(pubOdomAftMapped, tf_br);
                 try_publish_fused_enu_position(pubEnuPosition);
                 try_publish_fused_global_nav_sat(pubGlobalNavSat);
+                try_publish_fused_ecef_position(pubEcefPosition);
             }
 
             /*** add the feature points to map ***/
@@ -2476,6 +2510,7 @@ int main(int argc, char** argv)
     pubInitPairsFromGpsMove.reset();
     plane_pub.reset();
     pubEnuPosition.reset();
+    pubEcefPosition.reset();
     pubGlobalNavSat.reset();
     ligo_reset_nmea_stamp_diag_publisher();
 

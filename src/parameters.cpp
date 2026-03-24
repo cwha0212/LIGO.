@@ -89,6 +89,8 @@ bool nmea_publish_stamp_diag = false;
 std::string enu_position_topic = "/ligo/enu_position";
 std::string enu_position_frame_id = "enu";
 std::string global_position_topic = "/ligo/global_position";
+std::string ecef_position_topic = "/ligo/ecef_position";
+std::string ecef_position_frame_id = "ecef";
 bool nmea_global_anchor_ready = false;
 Eigen::Vector3d nmea_global_anchor_lla = Eigen::Vector3d::Zero();
 std::vector<double> default_gnss_iono_params(8, 0.0);
@@ -263,6 +265,8 @@ void readParameters(rclcpp::Node * node)
     enu_position_topic = get_param("ligo.enu_position_topic", enu_position_topic);
     enu_position_frame_id = get_param("ligo.enu_position_frame_id", enu_position_frame_id);
     global_position_topic = get_param("ligo.global_position_topic", global_position_topic);
+    ecef_position_topic = get_param("ligo.ecef_position_topic", ecef_position_topic);
+    ecef_position_frame_id = get_param("ligo.ecef_position_frame_id", ecef_position_frame_id);
   }
 
   if (indoor_flag)
@@ -395,6 +399,25 @@ bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla)
     return true;
 #else
     (void)out_lla;
+    return false;
+#endif
+}
+
+bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef)
+{
+#ifdef LIGO_WITH_NMEA
+    Eigen::Vector3d p_enu;
+    if (!compute_fused_imu_position_enu(p_enu))
+        return false;
+    if (!nmea_global_anchor_ready) {
+        return false;
+    }
+    const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+    const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+    out_ecef = anchor_ecef + R_ecef_enu * p_enu;
+    return true;
+#else
+    (void)out_ecef;
     return false;
 #endif
 }

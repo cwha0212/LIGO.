@@ -122,6 +122,8 @@ extern bool nmea_publish_stamp_diag;
 extern std::string enu_position_topic;
 extern std::string enu_position_frame_id;
 extern std::string global_position_topic;
+extern std::string ecef_position_topic;
+extern std::string ecef_position_frame_id;
 extern bool nmea_global_anchor_ready;
 extern Eigen::Vector3d nmea_global_anchor_lla;
 extern std::vector<double> default_gnss_iono_params;
@@ -164,4 +166,6 @@ void cout_state_to_file_nmea();
 bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu);
 /** WGS84 geodetic (lat, lon deg; alt m) from fused ENU + anchor. False if no anchor data. */
 bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla);
+/** WGS84 ECEF (m) from fused ENU + anchor. False if no anchor data. */
+bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef);
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output);

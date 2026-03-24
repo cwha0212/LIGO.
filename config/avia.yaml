@@ -69,6 +69,8 @@
 
     ligo:
       global_position_topic: "/ligo/global_position"
+      ecef_position_topic: "/ligo/ecef_position"
+      ecef_position_frame_id: "ecef"
 
     nmea:
       # true: gpsHandler가 nmea_meas_buf에 넣는 stamp 진단을 /ligo/nmea_stamp_diag 로 퍼블리시 (navsatfix 경로만)
