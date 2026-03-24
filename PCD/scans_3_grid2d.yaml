@@ -1,0 +1,16 @@
+image: /home/tae/test_NAVI/src/LIGO./PCD/scans_3_grid2d.pgm
+resolution: 1.000000000000
+origin: [-3059264.000000000000, 4046067.000000000000, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+mode: trinary
+source_pcd: /home/tae/test_NAVI/src/LIGO./PCD/scans_3.pcd
+frame_id: ecef
+grid_type: occupancy_2d_raycast
+min_points_per_cell: 3
+z_filter_m: [-1000000000.000000000000, 1000000000.000000000000]
+width_cells: 1080
+height_cells: 3264
+num_cells_total: 49541
+num_cells_occupied: 35415
