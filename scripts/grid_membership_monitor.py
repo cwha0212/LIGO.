@@ -122,7 +122,7 @@ class GridMembershipMonitor(Node):
     def __init__(self) -> None:
         super().__init__("grid_membership_monitor")
 
-        self.declare_parameter("map_dir", "/home/tae/test_NAVI/src/LIGO./PCD")
+        self.declare_parameter("map_dir", "/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD")
         self.declare_parameter("gps_quality_topic", "/ublox_driver/receiver_lla")
         self.declare_parameter("position_topic", "/ligo/global_position")
         self.declare_parameter("gps_cov_bad_threshold_m2", 50.0)

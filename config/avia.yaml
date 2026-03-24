@@ -76,16 +76,16 @@
       nmea_enable: true
       posit_odo_topic: "/ublox_driver/receiver_lla"
       nmea_input_type: "navsatfix"
-      ppp_std_thres: 0.1
+      ppp_std_thres: 0.01
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
       init_min_lio_total_move_m: 5.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
       init_min_nmea_total_move_m: 5.0
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
-      pos_noise: 1.0
+      pos_noise: 5.0
       pos_noise_z: 30000.0
-      rot_noise: 1.0
-      vel_noise: 1.0
+      rot_noise: 5.0
+      vel_noise: 5.0
       nmea_weight: 1000.0 
       nmea_local_time_diff: 0.0
       nmea_gps_latency: 0.0
@@ -103,6 +103,6 @@
       scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
 
     pcd_save:
-      pcd_save_en: true
+      pcd_save_en: false
       interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.

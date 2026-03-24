@@ -78,6 +78,7 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
 void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg);
 void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in);
 bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg);
+void ligo_reset_nmea_stamp_diag_publisher();
 #ifdef LIGO_WITH_NMEA
 void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg);
 void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg);

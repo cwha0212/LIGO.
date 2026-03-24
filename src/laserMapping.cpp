@@ -108,13 +108,6 @@ nav_msgs::msg::Path nmea_aligned_path;
 nav_msgs::msg::Odometry nmea_aligned_odom;
 geometry_msgs::msg::PoseStamped nmea_aligned_pose;
 
-void SigHandle(int sig)
-{
-    flg_exit = true;
-    RCLCPP_WARN(rclcpp::get_logger("ligo"), "catch sig %d", sig);
-    sig_buffer.notify_all();
-}
-
 static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr &msg,
                                         double threshold)
 {
@@ -645,7 +638,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
 
                 const Eigen::Matrix3d R_local_to_enu = p_nmea->icp_R_local_to_enu;
                 const Eigen::Vector3d t_local_to_enu = p_nmea->icp_t_local_to_enu;
-                const Eigen::Matrix3d R_ecef_enu = ecef2rotation(first_gps_ecef);
+                const Eigen::Matrix3d R_ecef_enu = gnss_comm::ecef2rotation(first_gps_ecef);
                 const Eigen::Vector3d origin_local = kf_output.x_.pos;
                 const Eigen::Vector3d origin_enu = R_local_to_enu * origin_local + t_local_to_enu;
                 const Eigen::Vector3d origin_ecef = R_ecef_enu * origin_enu + first_gps_ecef;
@@ -779,6 +772,10 @@ void set_posestamp_enu(T & out)
 
 void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr & pubOdomAftMapped, tf2_ros::TransformBroadcaster & br)
 {
+    if (flg_exit || !rclcpp::ok())
+    {
+        return;
+    }
     const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
     odomAftMapped.header.frame_id = use_enu ? "map" : "camera_init";
     odomAftMapped.child_frame_id = "aft_mapped";
@@ -828,6 +825,8 @@ static void try_publish_fused_enu_position(
     const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr &pubEnuPosition)
 {
 #ifdef LIGO_WITH_NMEA
+    if (flg_exit || !rclcpp::ok())
+        return;
     if (!pubEnuPosition)
         return;
     Eigen::Vector3d p_enu;
@@ -852,6 +851,8 @@ static void try_publish_fused_global_nav_sat(
     const rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr &pubGlobalFix)
 {
 #ifdef LIGO_WITH_NMEA
+    if (flg_exit || !rclcpp::ok())
+        return;
     if (!pubGlobalFix)
         return;
     Eigen::Vector3d lla;
@@ -877,6 +878,10 @@ static void try_publish_fused_global_nav_sat(
 
 void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
 {
+    if (flg_exit || !rclcpp::ok())
+    {
+        return;
+    }
     const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
     static bool was_enu = false;
     if (use_enu && !was_enu)
@@ -903,6 +908,10 @@ void publish_nmea_aligned(
     const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubNmeaAlignedPath)
 {
 #ifdef LIGO_WITH_NMEA
+    if (flg_exit || !rclcpp::ok())
+    {
+        return;
+    }
     static int skip_log_count = 0;
     static bool icp_path_was_ready = false;
     if (!NMEA_ENABLE || !p_nmea)
@@ -979,6 +988,10 @@ void publish_icp_pairs_marker(
     const rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr &pubNmea03mDiag)
 {
 #ifdef LIGO_WITH_NMEA
+    if (flg_exit || !rclcpp::ok())
+    {
+        return;
+    }
     if (!NMEA_ENABLE || !p_nmea || !p_nmea->icp_tf_ready) return;
     if (p_nmea->icp_pairs_lio.empty() || p_nmea->icp_pairs_nmea_local.empty()) return;
     const size_t n = std::min(p_nmea->icp_pairs_lio.size(), p_nmea->icp_pairs_nmea_local.size());
@@ -1122,6 +1135,7 @@ void publish_init_pairs_marker_from_gps_move(
     const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub)
 {
 #ifdef LIGO_WITH_NMEA
+  if (flg_exit || !rclcpp::ok()) return;
   if (!NMEA_ENABLE || !p_nmea) return;
   if (!p_nmea->init_start_set || p_nmea->init_pos_buf.size() < 2 ||
       p_nmea->init_nmea_buf.size() != p_nmea->init_pos_buf.size() ||
@@ -1468,13 +1482,14 @@ int main(int argc, char** argv)
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
 #endif
 
-    signal(SIGINT, SigHandle);
+    rclcpp::on_shutdown([]() {
+        flg_exit = true;
+        ligo_reset_nmea_stamp_diag_publisher();
+    });
     tf2_ros::TransformBroadcaster tf_br(node);
     rclcpp::Rate loop_rate(500);
-    bool status = rclcpp::ok();
-    while (status)
+    while (rclcpp::ok() && !flg_exit)
     {
-        if (flg_exit) break;
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
@@ -2073,7 +2088,7 @@ int main(int argc, char** argv)
                     
                     // solve_start = omp_get_wtime();
                         
-                    if (publish_odometry_without_downsample)
+                    if (publish_odometry_without_downsample && !flg_exit && rclcpp::ok())
                     {
                         /******* Publish odometry *******/
 
@@ -2387,7 +2402,7 @@ int main(int argc, char** argv)
             }
             
             /******* Publish odometry downsample *******/
-            if (!publish_odometry_without_downsample)
+            if (!publish_odometry_without_downsample && !flg_exit && rclcpp::ok())
             {
                 publish_odometry(pubOdomAftMapped, tf_br);
                 try_publish_fused_enu_position(pubEnuPosition);
@@ -2402,12 +2417,15 @@ int main(int argc, char** argv)
 
             t5 = omp_get_wtime();
             /******* Publish points *******/
-            publish_nmea_aligned(pubNmeaAlignedOdom, pubNmeaAlignedPath);
-            publish_icp_pairs_marker(pubIcpPairs, pubNmeaLioErrorXy, pubNmea03mDiag);
-            publish_init_pairs_marker_from_gps_move(pubInitPairsFromGpsMove);
-            if (path_en)                         publish_path(pubPath);
-            if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFullRes);
-            if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFullRes_body);
+            if (!flg_exit && rclcpp::ok())
+            {
+                publish_nmea_aligned(pubNmeaAlignedOdom, pubNmeaAlignedPath);
+                publish_icp_pairs_marker(pubIcpPairs, pubNmeaLioErrorXy, pubNmea03mDiag);
+                publish_init_pairs_marker_from_gps_move(pubInitPairsFromGpsMove);
+                if (path_en)                         publish_path(pubPath);
+                if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFullRes);
+                if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFullRes_body);
+            }
             
             /*** Debug variables Logging ***/
             if (runtime_pos_log)
@@ -2436,9 +2454,31 @@ int main(int argc, char** argv)
                 }
             }
         }
-        status = rclcpp::ok();
         loop_rate.sleep();
     }
+    // Tear down ROS entities before context shutdown to avoid late publish during destruction.
+    sub_pcl.reset();
+    sub_imu.reset();
+#ifdef LIGO_WITH_NMEA
+    sub_nmea_meas.reset();
+#endif
+    pubLaserCloudFullRes.reset();
+    pubLaserCloudFullRes_body.reset();
+    pubLaserCloudEffect.reset();
+    pubLaserCloudMap.reset();
+    pubOdomAftMapped.reset();
+    pubPath.reset();
+    pubNmeaAlignedOdom.reset();
+    pubNmeaAlignedPath.reset();
+    pubNmeaLioErrorXy.reset();
+    pubNmea03mDiag.reset();
+    pubIcpPairs.reset();
+    pubInitPairsFromGpsMove.reset();
+    plane_pub.reset();
+    pubEnuPosition.reset();
+    pubGlobalNavSat.reset();
+    ligo_reset_nmea_stamp_diag_publisher();
+
     fout_out.close();
     //--------------------------save map-----------------------------------
     /* 1. make sure you have enough memories
@@ -2519,5 +2559,9 @@ int main(int argc, char** argv)
     fout_ppp.close();
     #endif
     
+    if (rclcpp::ok())
+    {
+        rclcpp::shutdown();
+    }
     return 0;
 }

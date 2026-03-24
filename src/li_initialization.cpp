@@ -56,6 +56,11 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #endif
 }
 
+void ligo_reset_nmea_stamp_diag_publisher()
+{
+    g_nmea_stamp_diag_pub.reset();
+}
+
 bool data_accum_finished = false, data_accum_start = false, online_calib_finish = false, refine_print = false;
 int frame_num_init = 0;
 double time_lag_IMU_wtr_lidar = 0.0, move_start_time = 0.0, online_calib_starts_time = 0.0; //, mean_acc_norm = 9.81;
@@ -165,6 +170,10 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
     nmea_meas_buf.push(std::make_shared<nav_msgs::msg::Odometry>(gps_odom));
     const double stamp_in_buf_sec = rclcpp::Time(gps_odom.header.stamp).seconds();
     // /ligo/nmea_stamp_diag: LIGO 내부에서 nmea_meas_buf에 넣는 stamp가 LiDAR 시간축과 맞는지 외부에서 검증용
+    if (!rclcpp::ok())
+    {
+        return;
+    }
     if (g_nmea_stamp_diag_pub)
     {
         std_msgs::msg::Float64MultiArray diag;
