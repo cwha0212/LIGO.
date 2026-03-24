@@ -809,7 +809,7 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
   }
   else
   {
-    p_assign->gtSAMgraph.add(ligo::GnssLioFactorNolidar(R(frame_num-1), F(frame_num-1), R(frame_num), F(frame_num), rel_rot, rel_pos, rel_vel, 
+    p_assign->gtSAMgraph.add(ligo::NmeaLioFactorNolidar(R(frame_num-1), F(frame_num-1), R(frame_num), F(frame_num), rel_rot, rel_pos, rel_vel, 
                   state_gravity, delta_t, ba, bg, pre_integration, p_assign->odomNoiseIMU));
     p_assign->factor_id_frame[frame_num-1-frame_delete].push_back(id_accumulate);
     id_accumulate += 1;

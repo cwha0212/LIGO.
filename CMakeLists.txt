@@ -52,12 +52,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 ament_export_dependencies(rosidl_default_runtime)
 
-# gnss_comm: optional. If not found, build without GNSS (LiDAR+IMU+NMEA only).
+# gnss_comm: optional. Required for NMEA factor pipeline; if not found, LiDAR+IMU stub only.
 find_package(gnss_comm QUIET)
-if(NOT gnss_comm_FOUND)
-  message(STATUS "ligo: gnss_comm not found - building without GNSS support")
-  add_compile_definitions(LIGO_WITHOUT_GNSS)
-endif()
 
 # Third-party
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
@@ -111,7 +107,7 @@ if(SMALL_GICP_INCLUDE_DIR)
   include_directories(${SMALL_GICP_INCLUDE_DIR})
 endif()
 
-# Source list (exclude GNSS/NMEA when building without gnss_comm)
+# Source list: NMEA (PPP) when gnss_comm is available; otherwise stub GNSSProcess/NMEAProcess.
 set(ligo_sources
   src/laserMapping.cpp
   src/li_initialization.cpp
@@ -123,19 +119,15 @@ set(ligo_sources
   src/IMU_Processing.cpp
 )
 if(gnss_comm_FOUND)
+  add_compile_definitions(LIGO_WITH_NMEA)
   list(APPEND ligo_sources
-    include/Urbannav_process/handler.cpp
-    src/GNSS_Assignment.cpp
-    src/GNSS_Initialization.cpp
-    src/GNSS_Processing_fg.cpp
     src/NMEA_Assignment.cpp
     src/NMEA_Processing_fg.cpp
   )
-  message(STATUS "ligo: building with gnss_comm")
+  message(STATUS "ligo: building with NMEA (gnss_comm)")
 else()
-  add_compile_definitions(LIGO_WITHOUT_GNSS)
   list(APPEND ligo_sources src/ligo_gnss_nmea_stub.cpp)
-  message(STATUS "ligo: building without gnss_comm (LiDAR+IMU only)")
+  message(STATUS "ligo: gnss_comm not found - LiDAR+IMU only (NMEA stub)")
 endif()
 if(LIGO_WITH_SMALL_GICP)
   list(APPEND ligo_sources src/Indoor_SmallGICP_Localizer.cpp)

@@ -59,13 +59,9 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/ISAM2.h>
 
-#include <gnss_factor/gnss_lio_factor_nolidar.hpp>
-#include <gnss_factor/gnss_lio_hard_factor.hpp>
-// #include <nmea_factor/nmea_lio_gravity_hard_factor.hpp>
+#include <nmea_factor/nmea_lio_factor_nolidar.hpp>
 #include <nmea_factor/nmea_lio_gravity_rel_factor.hpp>
-#include <gnss_factor/gnss_prior_factor.hpp>
 #include <nmea_factor/nmea_factor.hpp>
-#include <nmea_factor/nmea_lio_factor.hpp>
 #include <nmea_factor/nmea_factor_nolidar.hpp>
 
 using gtsam::symbol_shorthand::R; // Pose3 ()

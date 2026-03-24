@@ -42,49 +42,29 @@
                     0.0, 0.0, 1.0] # extrinsics of LiDAR to IMU represented in IMU frame
 
     gnss:
-      gnss_enable: false                  # enable fuse GNSS
-      ephem_from_rinex: false            # true: read ephem from rinex. false: get ephem from rosbag
-      ephem_file_name: " "
-      obs_from_rinex: false              # true: read gnss obs (e.g., pseudo range, doppler, carrier-phase) from rinex. false: get obs from rosbag
-      pvt_is_gt: true            # true: the rtk (ground truth) is solved online and saved in /ublox_driver/receiver_pvt topic. false: read rtk from local file  
       gt_file_name: " "
       gt_file_type: 1                    # 1: livox, 2: urban, 3: m2dgr
       outlier_rejection: true            # true: use robust function for gnss factors
-      psr_dopp_weight: 1.0 # 10
-      cp_weight: 10.0 
-      gnss_meas_topic: "/ublox_driver/range_meas"           # GNSS raw measurement topic
-      gnss_ephem_topic: "/ublox_driver/ephem"               # GPS, Galileo, BeiDou ephemeris
-      gnss_glo_ephem_topic: "/ublox_driver/glo_ephem"       # GLONASS ephemeris
-      gnss_iono_params_topic: "/ublox_driver/iono_params"   # GNSS broadcast ionospheric parameters
-      gnss_tp_info_topic: "/ublox_driver/time_pulse_info"   # PPS time info
-      rtk_pvt_topic: "/ublox_driver/receiver_pvt"           # gnss pvt soln msg
-      rtk_lla_topic: "/ublox_driver/receiver_lla"           # nav sat fix
-      gnss_elevation_thres: 30.0            # satellite elevation threshold (degree) 30
-      gnss_psr_std_thres: 30.0            # pseudo-range std threshold
-      gnss_dopp_std_thres: 30.0           # doppler std threshold
-      gnss_cp_std_thres: 30.0             # carrier phase std threshold
-      gnss_cp_time_thres: 100.0           # single-differenced carrier phase factor time threshold
       gtsam_variable_thres: 150            # the window size for GNSS obs
       gtsam_marg_variable_thres: 3
       gnss_sample_period: 0.1             # = 1 / frequency of GNSS obs
-      outlier_thres: 1.0 # 1                # parameter for robust function of GNSS factors
-      outlier_thres_init: 10.0 # 10         # parameter for robust fucntion of initial GNSS factors
+      outlier_thres: 1.0
+      outlier_thres_init: 10.0
       window_size: 10 # <= 10             # window size of GNSS observations used for intialization
-      prior_noise: 1000.0 # 100             # factor cov for initial factors
+      prior_noise: 1000.0
       marg_noise: 0.1                     # factor cov for marginalized factors
-      odo_noise: 0.1 # 0.1 10                # factor cov for LiDAR-Inertial factors
-      grav_noise: 0.1 # 0.1 0.5           # factor cov for gravity factors
-      psr_dopp_noise: 1.0                # factor cov for pseudo-range factors
-      cp_noise: 0.1                       # factor cov for carrier-phase factors
-      gnss_ekf_noise: 0.01 # 0.1          # measurement cov for gnss in ekf of front-end
-      gnss_local_online_sync: false                       # if perform online synchronization betwen GNSS and local time
-      local_trigger_info_topic: "/external_trigger"       # external trigger info of the local sensor, if `gnss_local_online_sync` is true
-      gnss_local_time_diff: 18.0 # 27.062                 # difference between GNSS and local time (s), if `gnss_local_online_sync` is false
-      gnss_iono_default_parameters: [0.1118E-07,  0.2235E-07, -0.4172E-06,  0.6557E-06, 0.1249E+06, -0.4424E+06,  0.1507E+07, -0.2621E+06]
-      gnss_extrinsic_T: [0.011, 0.03155, 0.02365] # h360 [-0.39765, 0.13204, 0.0284] # m300 [0.0055, 0.03626, 0.02212] #m360 
+      odo_noise: 0.1
+      grav_noise: 0.1
+      b_acc_noise: 0.10
+      b_omg_noise: 0.10
+      acc_noise: 0.10
+      omg_noise: 0.10
+      gnss_ekf_noise: 0.01
+      gnss_extrinsic_T: [0.011, 0.03155, 0.02365]
       gnss_extrinsic_R: [ 1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0 ]            # extrinsics of the GNSS receiver to IMU represented in IMU frame
+                    0.0, 0.0, 1.0 ]
+      nolidar: false
 
     ligo:
       global_position_topic: "/ligo/global_position"
@@ -92,21 +72,23 @@
     nmea:
       # true: gpsHandler가 nmea_meas_buf에 넣는 stamp 진단을 /ligo/nmea_stamp_diag 로 퍼블리시 (navsatfix 경로만)
       publish_stamp_diag: true
-      nmea_enable: true # enable fuse ppp results of gnss observations
-      posit_odo_topic: "/ublox_driver/receiver_lla" # "/mavros/local_position/odom" # ppp solutions topic
-      nmea_input_type: "navsatfix" # "odometry" (nav_msgs/Odometry) or "navsatfix" (sensor_msgs/NavSatFix -> internal Odom)
-      ppp_std_thres: 0.1 # ppp solution std thred
+      nmea_enable: true
+      posit_odo_topic: "/ublox_driver/receiver_lla"
+      nmea_input_type: "navsatfix"
+      ppp_std_thres: 0.1
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
       init_min_lio_total_move_m: 5.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
       init_min_nmea_total_move_m: 5.0
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
-      pos_noise: 1.0 # factor cov for position (x,y)
-      pos_noise_z: 30000.0 # factor cov for position z (GNSS/PPP vertical error is larger; increase to trust z less)
+      pos_noise: 1.0
+      pos_noise_z: 30000.0
+      rot_noise: 1.0
+      vel_noise: 1.0
       nmea_weight: 1000.0 
-      nmea_local_time_diff: 0.0 # 27.062 # difference between PPP solution and local time (s)
-      nmea_gps_latency: 0.0     # latency 없음 가정 (코드에서 항상 0 사용)
-      ppp_file_name: "deg2.pos" # "deg2.pos" # ""
+      nmea_local_time_diff: 0.0
+      nmea_gps_latency: 0.0
+      ppp_file_name: "deg2.pos"
       ppp_anc: [3959058.559396, -87615.730649, 4983325.235812] # logo 
              # [-2152900.934855,4380649.467661,4091851.462459] # bri 
              # [-2169505.899002,4385241.855870,4078231.236204] # out  

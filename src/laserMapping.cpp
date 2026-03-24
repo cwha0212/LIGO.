@@ -73,7 +73,6 @@ string root_dir = ROOT_DIR;
 int time_log_counter = 0; 
 
 bool init_map = false, flg_first_scan = true;
-std::vector<ObsPtr> gnss_cur;
 nav_msgs::msg::Odometry::SharedPtr nmea_cur;
 Eigen::Vector3d first_pvt_anc, first_lla_anc;
 Eigen::Vector3d first_pvt_used, first_lla_used;
@@ -118,7 +117,7 @@ static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr
            msg->pose.covariance[14] >= threshold;
 }
 
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
 // Matches NMEAProcess::processNMEA gate for collecting alignment window (reject if any diagonal > thr).
 static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
                                                         double threshold)
@@ -399,7 +398,7 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
 static void try_publish_fused_enu_position(
     const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr &pubEnuPosition)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     if (!pubEnuPosition)
         return;
     Eigen::Vector3d p_enu;
@@ -423,7 +422,7 @@ static void try_publish_fused_enu_position(
 static void try_publish_fused_global_nav_sat(
     const rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr &pubGlobalFix)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     if (!pubGlobalFix)
         return;
     Eigen::Vector3d lla;
@@ -474,7 +473,7 @@ void publish_nmea_aligned(
     const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubNmeaAlignedOdom,
     const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubNmeaAlignedPath)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     static int skip_log_count = 0;
     static bool icp_path_was_ready = false;
     if (!NMEA_ENABLE || !p_nmea)
@@ -550,7 +549,7 @@ void publish_icp_pairs_marker(
     const rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr &pubNmeaLioErrorXy,
     const rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr &pubNmea03mDiag)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     if (!NMEA_ENABLE || !p_nmea || !p_nmea->icp_tf_ready) return;
     if (p_nmea->icp_pairs_lio.empty() || p_nmea->icp_pairs_nmea_local.empty()) return;
     const size_t n = std::min(p_nmea->icp_pairs_lio.size(), p_nmea->icp_pairs_nmea_local.size());
@@ -693,7 +692,7 @@ void publish_icp_pairs_marker(
 void publish_init_pairs_marker_from_gps_move(
     const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
   if (!NMEA_ENABLE || !p_nmea) return;
   if (!p_nmea->init_start_set || p_nmea->init_pos_buf.size() < 2 ||
       p_nmea->init_nmea_buf.size() != p_nmea->init_pos_buf.size() ||
@@ -908,38 +907,18 @@ int main(int argc, char** argv)
 
     p_imu->lidar_type = p_pre->lidar_type = lidar_type;
     p_imu->imu_en = imu_en;
-#ifndef LIGO_WITHOUT_GNSS
-    if (GNSS_ENABLE)
-    {
-        std::copy(default_gnss_iono_params.begin(), default_gnss_iono_params.end(), 
-            std::back_inserter(p_gnss->p_assign->latest_gnss_iono_params));
-        p_gnss->Tex_imu_r << VEC_FROM_ARRAY(extrinT_gnss);
-        p_gnss->gnss_ready = false; // gnss_quick_init; // edit
-        p_gnss->nolidar = nolidar; // edit
-        p_gnss->pre_integration->setnoise();
-
-        if (p_gnss->p_assign->ephem_from_rinex)
-        {
-            p_gnss->p_assign->Ephemfromrinex(LOCAL_FILE_DIR(ephem_fname));
-        }
-    }
-    else if (NMEA_ENABLE)
+#ifdef LIGO_WITH_NMEA
+    if (NMEA_ENABLE)
     {
         p_nmea->Tex_imu_r << VEC_FROM_ARRAY(extrinT_gnss);
         p_nmea->Rex_imu_r << MAT_FROM_ARRAY(extrinR_gnss);
-        p_nmea->nmea_ready = false; // gnss_quick_init; // edit
-        p_nmea->nolidar = nolidar; // edit
+        p_nmea->nmea_ready = false;
+        p_nmea->nolidar = nolidar;
         p_nmea->pre_integration->setnoise();
     }
 #endif
-    if (NMEA_ENABLE)
-    {
-        kf_output.init_dyn_share_modified_3h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output, h_model_NMEA_output);
-    }
-    else
-    {
-        kf_output.init_dyn_share_modified_3h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output, h_model_GNSS_output);
-    }
+    // IMU uses h_dyn_share_modified_2; esekfom 2h does not assign slot 2 — always 3h (NMEA slot unused when !LIGO_WITH_NMEA / no NMEA updates).
+    kf_output.init_dyn_share_modified_3h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output, h_model_NMEA_output);
     Eigen::Matrix<double, 24, 24> P_init_output; // = MD(24, 24)::Identity() * 0.01;
     reset_cov_output(P_init_output);
     kf_output.change_P(P_init_output);
@@ -955,150 +934,17 @@ int main(int argc, char** argv)
         sub_pcl = node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, qos_lidar, standard_pcl_cbk);
     auto sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, qos_lidar, imu_cbk);
 
-#ifndef LIGO_WITHOUT_GNSS
-    rclcpp::SubscriptionBase::SharedPtr sub_ephem, sub_glo_ephem, sub_gnss_meas, sub_gnss_iono_params;
-    rclcpp::SubscriptionBase::SharedPtr sub_gnss_time_pluse_info, sub_local_trigger_info;
-    rclcpp::SubscriptionBase::SharedPtr sub_rtk_pvt_info, sub_rtk_lla_info;
+#ifdef LIGO_WITH_NMEA
     rclcpp::SubscriptionBase::SharedPtr sub_nmea_meas;
-    if (GNSS_ENABLE)
-    {
-        rclcpp::QoS qos_gnss(10000);
-        sub_ephem = node->create_subscription<gnss_comm::msg::GnssEphemMsg>(gnss_ephem_topic, qos_gnss, gnss_ephem_callback);
-        sub_glo_ephem = node->create_subscription<gnss_comm::msg::GnssGloEphemMsg>(gnss_glo_ephem_topic, qos_gnss, gnss_glo_ephem_callback);
-        #ifdef LIGO_WITH_URBANNAV_MSG
-        if (p_gnss->p_assign->obs_from_rinex)
-        {
-            sub_gnss_meas = node->create_subscription<nlosExclusion::GNSS_Raw_Array>("/gnss_preprocessor_node/GNSSPsrCarRov1", 200, gnss_meas_callback_urbannav);
-            sub_rtk_pvt_info = node->create_subscription<gnss_comm::msg::GnssPVTSolnMsg>("/gnss_preprocessor_node/ECEFSolutionRTK", 500, rtklibOdomHandler);
-        }
-        else
-        #endif
-        {
-            sub_gnss_meas = node->create_subscription<gnss_comm::msg::GnssMeasMsg>(gnss_meas_topic, qos_gnss, gnss_meas_callback);
-            sub_rtk_lla_info = node->create_subscription<sensor_msgs::msg::NavSatFix>(rtk_lla_topic, 1000, rtk_lla_callback);
-        }
-
-        if (p_gnss->p_assign->pvt_is_gt)
-        {
-            sub_rtk_pvt_info = node->create_subscription<gnss_comm::msg::GnssPVTSolnMsg>(rtk_pvt_topic, 1000, rtk_pvt_callback);
-        }
-        else
-        {
-            std::vector<Eigen::Vector4d> gt_holder;
-            if (gt_file_type == LIVOX)
-            {
-                GtfromTXT_LIVOX(LOCAL_FILE_DIR(gt_fname), gt_holder);
-            }
-            else if (gt_file_type == URBAN)
-            {
-                GtfromTXT_URBAN(LOCAL_FILE_DIR(gt_fname), gt_holder);
-            }
-            else if (gt_file_type == M2DGR)
-            {
-                GtfromTXT_M2DGR(LOCAL_FILE_DIR(gt_fname), gt_holder);
-            }
-            std::cout << "check gt size:" << gt_holder.size() << std::endl;
-            if (gt_file_type == M2DGR)
-            {
-                for (size_t i = 0; i < gt_holder.size(); i++)
-                {
-                    inputpvt_ecef(gt_holder[i][0], gt_holder[i][1], gt_holder[i][2], gt_holder[i][3], p_gnss->first_lla_pvt, p_gnss->first_xyz_ecef_pvt, p_gnss->pvt_time, 
-                            p_gnss->pvt_holder, p_gnss->diff_holder, p_gnss->float_holder); // 
-                }
-            }
-            else
-            {
-                for (size_t i = 0; i < gt_holder.size(); i++)
-                {
-                    inputpvt_lla(gt_holder[i][0], gt_holder[i][1], gt_holder[i][2], gt_holder[i][3], p_gnss->first_lla_pvt, p_gnss->first_xyz_ecef_pvt, p_gnss->pvt_time, 
-                            p_gnss->pvt_holder, p_gnss->diff_holder, p_gnss->float_holder); // 
-                }
-            }
-        }
-        sub_gnss_iono_params = node->create_subscription<gnss_comm::msg::StampedFloat64Array>(gnss_iono_params_topic, qos_gnss, gnss_iono_params_callback);
-
-        if (gnss_local_online_sync)
-        {
-            sub_gnss_time_pluse_info = node->create_subscription<gnss_comm::msg::GnssTimePulseInfoMsg>(gnss_tp_info_topic, 100, gnss_tp_info_callback);
-            sub_local_trigger_info = node->create_subscription<ligo::msg::LocalSensorExternalTrigger>(local_trigger_info_topic, 100, local_trigger_info_callback);
-        }
-        else
-        {
-            time_diff_gnss_local = gnss_local_time_diff; // 18.0
-            p_gnss->inputGNSSTimeDiff(time_diff_gnss_local);
-            time_diff_valid = true;
-        }
-    }
-    else
-    {
-        if (!NMEA_ENABLE)
-        {
-            sub_rtk_pvt_info = node->create_subscription<gnss_comm::msg::GnssPVTSolnMsg>(rtk_pvt_topic, 100, rtk_pvt_callback);
-        }
-    }
 #endif
     #ifdef process_ppp
-    if (NMEA_ENABLE)
-    {
-        std::vector<Eigen::Vector4d> gt_holder;
-        // GtfromTXT_DJI(string("/home/joannahe/NewDisk/self-collected/gt_deg2.txt"), gt_urbannav_holder);
-        // std::vector<Eigen::Vector4d>().swap(gt_urbannav_holder);
-        // GtfromTXT(string("/home/joannahe/NewDisk/gnss-lio/urbannav/gt/UrbanNav_TST_GT_raw.txt"), gt_urbannav_holder);
-        // GtfromTXT(string("/home/joannahe/NewDisk/gnss-lio/urbannav/gt/UrbanNav_whampoa_raw.txt"), gt_urbannav_holder);
-        // GtfromTXT(string("/home/joannahe/NewDisk/gnss-lio/urbannav/gt/UrbanNav_mongkok_GT_part_raw.txt"), gt_urbannav_holder);
-        // GtfromTXT(string("/home/joannahe/NewDisk/gnss-lio/urbannav/gt/UrbanNav_tunnel_GT_raw.txt"), gt_urbannav_holder);
-        // GtfromTXT_M2DGR(string("/home/joannahe/NewDisk/m2dgr/M2DGR-plus/gt/tree3x.txt"), gt_urbannav_holder);
-        // GtfromTXT_M2DGR(string("/home/joannahe/NewDisk/m2dgr/M2DGR-plus/gt/switch2_rawcut.txt"), gt_urbannav_holder);
-        if (gt_file_type == LIVOX)
-        {
-            GtfromTXT_LIVOX(LOCAL_FILE_DIR(gt_fname), gt_holder);
-        }
-        else if (gt_file_type == URBAN)
-        {
-            GtfromTXT_URBAN(LOCAL_FILE_DIR(gt_fname), gt_holder);
-        }
-        else if (gt_file_type == M2DGR)
-        {
-            GtfromTXT_M2DGR(LOCAL_FILE_DIR(gt_fname), gt_holder);
-        }
-        // GtfromTXT_M2DGR(string("/home/joannahe/NewDisk/m2dgr/M2DGR-plus/gt/parking2.txt"), gt_urbannav_holder);
-        // GtfromTXT_M2DGR(string("/home/joannahe/NewDisk/m2dgr/M2DGR-plus/gt/bridge2.txt"), gt_urbannav_holder);
-        if (gt_file_type == M2DGR)
-        {
-            for (size_t i = 0; i < gt_holder.size(); i++)
-            {
-                inputpvt_ecef(gt_holder[i][0], gt_holder[i][1], gt_holder[i][2], gt_holder[i][3], p_gnss->first_lla_pvt, p_gnss->first_xyz_ecef_pvt, p_gnss->pvt_time, 
-                        p_gnss->pvt_holder, p_gnss->diff_holder, p_gnss->float_holder); // 
-            }
-        }
-        else
-        {
-            for (size_t i = 0; i < gt_holder.size(); i++)
-            {
-                inputpvt_lla(gt_holder[i][0], gt_holder[i][1], gt_holder[i][2], gt_holder[i][3], p_gnss->first_lla_pvt, p_gnss->first_xyz_ecef_pvt, p_gnss->pvt_time, 
-                        p_gnss->pvt_holder, p_gnss->diff_holder, p_gnss->float_holder); // 
-            }
-        }
-    }
-    
     PPPfromTXT(LOCAL_FILE_DIR(ppp_fname), ppp_sol, ppp_ecef);
     if (NMEA_ENABLE)
     {
-
-        if (GNSS_ENABLE)
-        {
-            first_pvt_anc = p_gnss->first_xyz_ecef_pvt;
-            first_lla_anc = p_gnss->first_lla_pvt;
-        }
         if (ppp_ecef.size() > 0)
         {
-            if (GNSS_ENABLE && p_gnss->p_assign->pvt_is_gt)
-            {
-                first_pvt_anc << VEC_FROM_ARRAY(ppp_anc);
-                first_lla_anc = ecef2geo(first_pvt_anc);
-            }
             first_pvt_used = ppp_ecef[0].segment<3>(1);
-            first_lla_used = ecef2geo(first_pvt_used);
+            first_lla_used = gnss_comm::ecef2geo(first_pvt_used);
             if (!nmea_global_anchor_ready)
             {
                 nmea_global_anchor_lla = first_lla_used;
@@ -1125,6 +971,7 @@ int main(int argc, char** argv)
         }
     }
     #endif
+#ifdef LIGO_WITH_NMEA
     if (NMEA_ENABLE)
     {
         rclcpp::QoS qos_nmea(10000);
@@ -1142,6 +989,7 @@ int main(int argc, char** argv)
         }
         ligo_try_create_nmea_stamp_diag_publisher(node);
     }
+#endif
 
     rclcpp::QoS qos_pub(1000);
     auto pubLaserCloudFullRes = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", qos_pub);
@@ -1163,7 +1011,7 @@ int main(int argc, char** argv)
     auto pubInitPairsFromGpsMove = node->create_publisher<visualization_msgs::msg::Marker>(
         "/init_pairs_from_gps_move_marker", qos_pub);
     auto plane_pub = node->create_publisher<visualization_msgs::msg::Marker>("/planner_normal", qos_pub);
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
     if (NMEA_ENABLE)
@@ -1190,7 +1038,7 @@ int main(int argc, char** argv)
     {
         if (flg_exit) break;
         rclcpp::spin_some(node);
-        if(sync_packages(Measures, p_gnss->gnss_msg, p_nmea->nmea_msg)) 
+        if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
             if (!mapping_mode)
             {
@@ -1287,12 +1135,7 @@ int main(int argc, char** argv)
                     // p_imu->after_imu_init_ = true;
                 }  
                 G_m_s2 = std::sqrt(gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2]);
-                // if (GNSS_ENABLE)
-                // {   
-                //     // p_gnss->gnss_ready = true;
-                //     // p_gnss->gtSAMgraphMade = true;
-                //     set_gnss_offline_init(false);
-                // }         
+                // Legacy GNSS init path removed (NMEA-only).
             }
 
             double t0, t5;
@@ -1336,7 +1179,7 @@ int main(int argc, char** argv)
                     }
                     M3D rot_init;
                     p_imu->Set_init(tmp_gravity, rot_init);
-                    // p_gnss->Rot_gnss_init = rot_init;  
+                    // Legacy GNSS yaw init removed.
                     kf_output.x_.rot = rot_init;
                     // kf_output.x_.rot; //.normalize();
                     kf_output.x_.acc = - rot_init.transpose() * kf_output.x_.gravity;
@@ -1368,7 +1211,7 @@ int main(int argc, char** argv)
                     
                     init_feats_world.reset(new PointCloudXYZI());
                     init_map = true;
-                    if (GNSS_ENABLE || NMEA_ENABLE) traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
+                    if (NMEA_ENABLE) traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
                 }
                 continue;
             }
@@ -1403,15 +1246,14 @@ int main(int argc, char** argv)
             {     
                 effct_feat_num = 0;
                 /**** point by point update ****/
-                if (time_seq.size() > 0) // || (!GNSS_ENABLE && !NMEA_ENABLE) )
+                if (time_seq.size() > 0)
                 {
-#ifndef LIGO_WITHOUT_GNSS
-                    if (GNSS_ENABLE)  
-                    {p_gnss->p_assign->process_feat_num += time_seq.size();
-                    p_gnss->nolidar_cur = false;}
-                    if (NMEA_ENABLE)  
-                    {p_nmea->p_assign->process_feat_num += time_seq.size();
-                    p_nmea->nolidar_cur = false;}
+#ifdef LIGO_WITH_NMEA
+                    if (NMEA_ENABLE)
+                    {
+                        p_nmea->p_assign->process_feat_num += time_seq.size();
+                        p_nmea->nolidar_cur = false;
+                    }
 #endif
                 double pcl_beg_time = Measures.lidar_beg_time;
                 idx = -1;
@@ -1440,20 +1282,9 @@ int main(int argc, char** argv)
                             acc_avr   <<imu_last.linear_acceleration.x, imu_last.linear_acceleration.y, imu_last.linear_acceleration.z;
                             if (imu_deque.empty()) break;
                         }
-                        if (GNSS_ENABLE)
-                        {
-                            // std::vector<Eigen::Vector3d>().swap(p_gnss->norm_vec_holder);
-#ifndef LIGO_WITHOUT_GNSS
-                            p_gnss->p_assign->process_feat_num = 0;
-                            p_gnss->norm_vec_num = 0;
-#endif
-                            // acc_avr_norm = acc_avr * G_m_s2 / acc_norm;
-                            // p_gnss->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
-                            // p_gnss->pre_integration->setacc0gyr0(acc_avr_norm, angvel_avr);
-                        }
                         if (NMEA_ENABLE)
                         {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
                             p_nmea->p_assign->process_feat_num = 0;
                             p_nmea->norm_vec_num = 0;
 #endif
@@ -1485,152 +1316,7 @@ int main(int argc, char** argv)
                         bool imu_comes = time_current >= rclcpp::Time(imu_next.header.stamp).seconds();
                         while (imu_comes) 
                         {
-#ifndef LIGO_WITHOUT_GNSS
-                            if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
-                            {   
-                                gnss_cur = p_gnss->gnss_msg.front();
-                                // printf("%f, %f, %f\n", time2sec(gnss_cur[0]->time), time_diff_gnss_local, time_predict_last_const);
-                                while (time2sec(gnss_cur[0]->time) - time_diff_gnss_local < time_predict_last_const)
-                                {
-                                    p_gnss->gnss_msg.pop();
-                                    if(!p_gnss->gnss_msg.empty())
-                                    {
-                                        gnss_cur = p_gnss->gnss_msg.front();
-                                    }
-                                    else
-                                    {
-                                        break;
-                                    }
-                                }
-                                if (p_gnss->gnss_msg.empty()) break;
-                                while ((rclcpp::Time(imu_next.header.stamp).seconds() >= time2sec(gnss_cur[0]->time) - time_diff_gnss_local) && (time2sec(gnss_cur[0]->time) - time_diff_gnss_local >= time_predict_last_const))
-                                {
-                                    double dt = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_predict_last_const;
-                                    double dt_cov = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_update_last;
-
-                                    if (p_gnss->gnss_ready)
-                                    {
-                                        if (dt_cov > 0.0)
-                                        {
-                                            kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                        }
-                                        kf_output.predict(dt, Q_output, input_in, true, false);
-                                        // p_gnss->pre_integration->push_back(dt, kf_output.x_.acc + kf_output.x_.ba, kf_output.x_.omg + kf_output.x_.bg); // acc_avr, angvel_avr); 
-                                        // p_gnss->processIMUOutput(dt, kf_output.x_.acc, kf_output.x_.omg);
-                                        time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                        time_update_last = time_predict_last_const;
-                                        p_gnss->processGNSS(gnss_cur, kf_output.x_);
-                                        p_gnss->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                        // p_gnss->sqrt_lidar *= 0.002;
-                                        update_gnss = p_gnss->Evaluate(kf_output.x_);
-                                        if (!p_gnss->gnss_ready)
-                                        {
-                                            flg_reset = true;
-                                            p_gnss->gnss_msg.pop();
-                                            if(!p_gnss->gnss_msg.empty())
-                                            {
-                                                gnss_cur = p_gnss->gnss_msg.front();
-                                            }
-                                            break; // ?
-                                        }
-
-                                        if (update_gnss)
-                                        {
-                                            state_output out_state = kf_output.x_;
-                                            kf_output.update_iterated_dyn_share_GNSS();
-                                            Eigen::Vector3d pos_enu;
-                                            if (!runtime_pos_log) cout_state_to_file(pos_enu);
-                                            // sensor_msgs::NavSatFix gnss_lla_msg;
-                                            // gnss_lla_msg.header.stamp = ros::Time().fromSec(time_current);
-                                            // gnss_lla_msg.header.frame_id = "camera_init";
-                                            // gnss_lla_msg.latitude = pos_enu(0);
-                                            // gnss_lla_msg.longitude = pos_enu(1);
-                                            // gnss_lla_msg.altitude = pos_enu(2);
-                                            // pub_gnss_lla.publish(gnss_lla_msg);
-                                            if ((out_state.pos - kf_output.x_.pos).norm() > 0.1 && pose_graph_key_pose.size() > 4)
-                                            {                                                
-                                                curvefitter::PoseData pose_data;
-                                                pose_data.timestamp = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                                map_time = pose_data.timestamp;
-                                                pose_data.orientation = Sophus::SO3d(Eigen::Quaterniond(kf_output.x_.rot).normalized().toRotationMatrix());
-                                                pose_data.position = kf_output.x_.pos;
-                                                if (map_time > pose_graph_key_pose.back().timestamp) // + 1e-9)
-                                                {
-                                                    pose_time_vector.push_back(pose_data.timestamp);
-                                                    pose_graph_key_pose.emplace_back(pose_data);
-                                                }
-                                                else
-                                                // else if (map_time == pose_time_vector.back())
-                                                {
-                                                    pose_data.timestamp = pose_graph_key_pose.back().timestamp;
-                                                    pose_graph_key_pose.back() = pose_data;
-                                                }
-                                                // curvefitter::Trajectory<4> traj(0.1);
-                                                // std::shared_ptr<curvefitter::Trajectory<4> > Traj_ptr = std::make_shared<curvefitter::Trajectory<4> >(traj);  
-                                                traj_manager->SetTrajectory(std::make_shared<curvefitter::Trajectory<4> >(0.025));
-                                                traj_manager->FitCurve(pose_graph_key_pose[0].orientation.unit_quaternion(), pose_graph_key_pose[0].position, pose_time_vector[0], pose_time_vector.back(), pose_graph_key_pose);
-                                                updatedmap.resize(points_num);
-                                                updatedmap = traj_manager->GetUpdatedMapPoints(pose_time_vector, LiDAR_points);
-                                                ivox_last_->AddPoints(updatedmap);
-                                                ivox_->grids_map_ = ivox_last_->grids_map_;
-                                                // for (auto &t : ivox_last_->grids_map_)
-                                                // {
-                                                    // ivox_->grids_map_[t.first] = (t.second);
-                                                // }
-                                                // ivox_ = std::make_shared<IVoxType>(*ivox_last_);
-                                            }
-                                            else
-                                            {
-                                                ivox_last_->grids_map_ = ivox_->grids_map_;
-                                            }
-                                            // reset_cov_output(kf_output.P_);
-                                            traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        if (dt_cov > 0.0)
-                                        {
-                                            kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                        }
-                                        
-                                        kf_output.predict(dt, Q_output, input_in, true, false);
-
-                                        time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                        time_update_last = time_predict_last_const;
-                                        state_out = kf_output.x_;
-                                        // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
-                                        // state_out.rot.normalize();
-                                        // state_out.pos = state_out.pos;
-                                        // state_out.vel = state_out.vel;
-                                        p_gnss->processGNSS(gnss_cur, state_out);
-                                        if (p_gnss->gnss_ready)
-                                        {
-                                            // printf("time gnss ready: %f \n", time_predict_last_const);
-                                            Eigen::Vector3d pos_enu;
-                                            if (!runtime_pos_log) cout_state_to_file(pos_enu);
-                                            // sensor_msgs::NavSatFix gnss_lla_msg;
-                                            // gnss_lla_msg.header.stamp = ros::Time().fromSec(time_current);
-                                            // gnss_lla_msg.header.frame_id = "camera_init";
-                                            // gnss_lla_msg.latitude = pos_enu(0);
-                                            // gnss_lla_msg.longitude = pos_enu(1);
-                                            // gnss_lla_msg.altitude = pos_enu(2);
-                                            // pub_gnss_lla.publish(gnss_lla_msg);
-                                        }
-                                    }
-                                    p_gnss->gnss_msg.pop();
-                                    if(!p_gnss->gnss_msg.empty())
-                                    {
-                                        gnss_cur = p_gnss->gnss_msg.front();
-                                    }
-                                    else
-                                    {
-                                        break;
-                                    }
-                                }
-                            }
-#endif
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
@@ -1785,147 +1471,7 @@ int main(int argc, char** argv)
                     {
                         break;
                     }
-#ifndef LIGO_WITHOUT_GNSS
-                    if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
-                    {
-                        gnss_cur = p_gnss->gnss_msg.front();
-                        // printf("%f, %f, %f\n", time2sec(gnss_cur[0]->time), time_diff_gnss_local, time_predict_last_const);
-                        while ( time2sec(gnss_cur[0]->time) - time_diff_gnss_local < time_predict_last_const)
-                        {
-                            p_gnss->gnss_msg.pop();
-                            if(!p_gnss->gnss_msg.empty())
-                            {
-                                gnss_cur = p_gnss->gnss_msg.front();
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-                        if (p_gnss->gnss_msg.empty()) break;
-                        while (time_current >= time2sec(gnss_cur[0]->time) - time_diff_gnss_local && time2sec(gnss_cur[0]->time) - time_diff_gnss_local >= time_predict_last_const)
-                        {
-                            double dt = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_predict_last_const;
-                            double dt_cov = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_update_last;
-                            // cout << "check gnss ready:" << p_gnss->gnss_ready << endl;
-                            if (p_gnss->gnss_ready)
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                }
-                                kf_output.predict(dt, Q_output, input_in, true, false);
-
-                                // p_gnss->pre_integration->push_back(dt, kf_output.x_.acc + kf_output.x_.ba, kf_output.x_.omg + kf_output.x_.bg); // acc_avr, angvel_avr); 
-                                // p_gnss->processIMUOutput(dt, kf_output.x_.acc, kf_output.x_.omg);
-
-                                time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                time_update_last = time_predict_last_const;
-                                p_gnss->processGNSS(gnss_cur, kf_output.x_);
-                                p_gnss->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                // p_gnss->sqrt_lidar *= 0.002;
-                                update_gnss = p_gnss->Evaluate(kf_output.x_);
-                                if (!p_gnss->gnss_ready)
-                                {
-                                    flg_reset = true;
-                                    p_gnss->gnss_msg.pop();
-                                    if(!p_gnss->gnss_msg.empty())
-                                    {
-                                        gnss_cur = p_gnss->gnss_msg.front();
-                                    }
-                                    break; // ?
-                                }
-
-                                if (update_gnss)
-                                {
-                                    state_output out_state = kf_output.x_;
-                                    kf_output.update_iterated_dyn_share_GNSS();
-                                    // reset_cov_output(kf_output.P_);
-                                    Eigen::Vector3d pos_enu;
-                                    if (!runtime_pos_log) cout_state_to_file(pos_enu);
-                                    // sensor_msgs::NavSatFix gnss_lla_msg;
-                                    // gnss_lla_msg.header.stamp = ros::Time().fromSec(time_current);
-                                    // gnss_lla_msg.header.frame_id = "camera_init";
-                                    // gnss_lla_msg.latitude = pos_enu(0);
-                                    // gnss_lla_msg.longitude = pos_enu(1);
-                                    // gnss_lla_msg.altitude = pos_enu(2);
-                                    // pub_gnss_lla.publish(gnss_lla_msg);
-                                    if ((out_state.pos - kf_output.x_.pos).norm() > 0.1 && pose_graph_key_pose.size() > 4)
-                                    {                                         
-                                        curvefitter::PoseData pose_data;
-                                        pose_data.timestamp = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                        map_time = pose_data.timestamp;
-                                        // pose_time_vector.push_back(pose_data.timestamp);
-                                        pose_data.orientation = Sophus::SO3d(Eigen::Quaterniond(kf_output.x_.rot).normalized().toRotationMatrix());
-                                        pose_data.position = kf_output.x_.pos;
-                                        if (map_time > pose_graph_key_pose.back().timestamp) // + 1e-9)
-                                        {
-                                            pose_time_vector.push_back(pose_data.timestamp);
-                                            pose_graph_key_pose.emplace_back(pose_data);
-                                        }
-                                        else
-                                        // else if (map_time == pose_time_vector.back())
-                                        {
-                                            pose_data.timestamp = pose_graph_key_pose.back().timestamp;
-                                            pose_graph_key_pose.back() = pose_data;
-                                        }
-                                        // pose_graph_key_pose.emplace_back(pose_data);
-                                        traj_manager->SetTrajectory(std::make_shared<curvefitter::Trajectory<4> >(0.025));
-                                        traj_manager->FitCurve(pose_graph_key_pose[0].orientation.unit_quaternion(), pose_graph_key_pose[0].position, pose_time_vector[0], pose_time_vector.back(), pose_graph_key_pose);
-                                        updatedmap.resize(points_num);
-                                        updatedmap = traj_manager->GetUpdatedMapPoints(pose_time_vector, LiDAR_points);
-                                        ivox_last_->AddPoints(updatedmap);
-                                        ivox_->grids_map_ = ivox_last_->grids_map_;
-                                    }
-                                    else
-                                    {
-                                        ivox_last_->grids_map_ = ivox_->grids_map_;
-                                    }
-                                    traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
-                                }
-                            }
-                            else
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                }
-                                kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                time_update_last = time_predict_last_const;
-                                state_out = kf_output.x_;
-                                // state_out.rot = state_out.rot; //.normalized().toRotationMatrix();
-                                // state_out.rot.normalize();
-                                // state_out.pos = state_out.pos;
-                                // state_out.vel = state_out.vel;
-                                p_gnss->processGNSS(gnss_cur, state_out);
-                                if (p_gnss->gnss_ready)
-                                {
-                                    // printf("time gnss ready: %f \n", time_predict_last_const);
-                                    Eigen::Vector3d pos_enu;
-                                    if (!runtime_pos_log) cout_state_to_file(pos_enu);
-                                    // sensor_msgs::NavSatFix gnss_lla_msg;
-                                    // gnss_lla_msg.header.stamp = ros::Time().fromSec(time_current);
-                                    // gnss_lla_msg.header.frame_id = "camera_init";
-                                    // gnss_lla_msg.latitude = pos_enu(0);
-                                    // gnss_lla_msg.longitude = pos_enu(1);
-                                    // gnss_lla_msg.altitude = pos_enu(2);
-                                    // pub_gnss_lla.publish(gnss_lla_msg);
-                                }
-                            }
-                            p_gnss->gnss_msg.pop();
-                            if(!p_gnss->gnss_msg.empty())
-                            {
-                                gnss_cur = p_gnss->gnss_msg.front();
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-                    }
-#endif
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
                     if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                     {
                         nmea_cur = p_nmea->nmea_msg.front();
@@ -2109,10 +1655,10 @@ int main(int argc, char** argv)
                         PointType &point_body_j  = feats_down_body->points[idx+j+1];
                         PointType &point_world_j = feats_down_world->points[idx+j+1];
                         pointBodyToWorld(&point_body_j, &point_world_j);
-                    if (GNSS_ENABLE || NMEA_ENABLE)
+                    if (NMEA_ENABLE)
                         lidarpoints.push_back(pimu_list[idx+j+1]); // (Eigen::Vector3d(point_body_j.x, point_body_j.y, point_body_j.z));
                     }
-                    if (GNSS_ENABLE || NMEA_ENABLE)
+                    if (NMEA_ENABLE)
                     {
                         if (pose_graph_key_pose.empty()){
                             traj_manager->AddGraphPose(Eigen::Quaterniond(kf_output.x_.rot).normalized(), kf_output.x_.pos, lidarpoints, time_current, pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
@@ -2127,8 +1673,7 @@ int main(int argc, char** argv)
                 }
                 else
                 {
-#ifndef LIGO_WITHOUT_GNSS
-                    if (GNSS_ENABLE)  p_gnss->nolidar_cur = true;
+#ifdef LIGO_WITH_NMEA
                     if (NMEA_ENABLE)  p_nmea->nolidar_cur = true;
 #endif
                     if (!imu_deque.empty())
@@ -2140,31 +1685,13 @@ int main(int argc, char** argv)
                     { // >= ?
                         if (is_first_frame)
                         {
-#ifndef LIGO_WITHOUT_GNSS
-                            if (!nolidar && GNSS_ENABLE) //std::vector<Eigen::Vector3d>().swap(p_gnss->norm_vec_holder);
-                            {p_gnss->p_assign->process_feat_num = 0;
-                            p_gnss->norm_vec_num = 0;}
-                            if (!nolidar && NMEA_ENABLE) //std::vector<Eigen::Vector3d>().swap(p_gnss->norm_vec_holder);
+#ifdef LIGO_WITH_NMEA
+                            if (!nolidar && NMEA_ENABLE)
                             {p_nmea->p_assign->process_feat_num = 0;
                             p_nmea->norm_vec_num = 0;}
 #endif
 
-                            if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
-                            {
-                                gnss_cur = p_gnss->gnss_msg.front();
-                                double front_gnss_ts = time2sec(gnss_cur[0]->time); // take time
-                                time_current = front_gnss_ts - time_diff_gnss_local;
-                                while (rclcpp::Time(imu_next.header.stamp).seconds() < time_current) // 0.05
-                                {
-                                    RCLCPP_WARN(node->get_logger(), "throw IMU, only should happen at the beginning 2510");
-                                    imu_deque.pop_front();
-                                    if (imu_deque.empty()) break;
-                                    imu_last = imu_next;
-                                    imu_next = *(imu_deque.front()); // could be used to initialize
-                                }
-                                if (imu_deque.empty()) break;
-                            }
-                            else if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
+                            if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
                                 const double nmea_lat_sync = 0.0;  // latency 없음 가정
@@ -2216,12 +1743,7 @@ int main(int argc, char** argv)
                             time_update_last = time_current;
                             time_predict_last_const = time_current;
                             acc_avr_norm = acc_avr * G_m_s2 / acc_norm;
-#ifndef LIGO_WITHOUT_GNSS
-                            if (GNSS_ENABLE)
-                            {
-                            p_gnss->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
-                            p_gnss->pre_integration->setacc0gyr0(acc_avr_norm, angvel_avr); 
-                            }
+#ifdef LIGO_WITH_NMEA
                             if (NMEA_ENABLE)
                             {
                             p_nmea->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
@@ -2236,166 +1758,7 @@ int main(int argc, char** argv)
 
                         if (!is_first_frame)
                         {
-#ifndef LIGO_WITHOUT_GNSS
-                        if (!p_gnss->gnss_msg.empty() && GNSS_ENABLE)
-                        {
-                            gnss_cur = p_gnss->gnss_msg.front();
-                            while (time2sec(gnss_cur[0]->time) - time_diff_gnss_local <= time_predict_last_const)
-                            {
-                                p_gnss->gnss_msg.pop();
-                                if(!p_gnss->gnss_msg.empty())
-                                {
-                                    gnss_cur = p_gnss->gnss_msg.front();
-                                }
-                                else
-                                {
-                                    break;
-                                }
-                            }
-                            if (p_gnss->gnss_msg.empty()) break;
-                        while ((time_current > time2sec(gnss_cur[0]->time) - time_diff_gnss_local) && (time2sec(gnss_cur[0]->time) - time_diff_gnss_local > time_predict_last_const))
-                        {
-                            double dt = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_predict_last_const;
-                            double dt_cov = time2sec(gnss_cur[0]->time) - time_diff_gnss_local - time_update_last;
-
-                            if (p_gnss->gnss_ready)
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    // kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                }
-                                // kf_output.predict(dt, Q_output, input_in, true, false);
-                                p_gnss->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); //acc_avr_norm, angvel_avr); 
-                                // change to state_const.omg and state_const.acc? 
-                                time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                p_gnss->processGNSS(gnss_cur, kf_output.x_);
-                                if (!nolidar)
-                                {
-                                    p_gnss->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
-                                }
-                                update_gnss = p_gnss->Evaluate(kf_output.x_); 
-                                if (!p_gnss->gnss_ready)
-                                {
-                                    flg_reset = true;
-                                    p_gnss->gnss_msg.pop();
-                                    if(!p_gnss->gnss_msg.empty())
-                                    {
-                                        gnss_cur = p_gnss->gnss_msg.front();
-                                    }
-                                    break; // ?
-                                }
-                                if (update_gnss)
-                                {
-                                    if (!nolidar)
-                                    {
-                                        state_output out_state = kf_output.x_;
-                                        kf_output.update_iterated_dyn_share_GNSS();
-                                        // reset_cov_output(kf_output.P_);
-                                        if ((out_state.pos - kf_output.x_.pos).norm() > 0.1 && pose_graph_key_pose.size() > 4)
-                                        {                                    
-                                            curvefitter::PoseData pose_data;
-                                            pose_data.timestamp = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                            map_time = pose_data.timestamp;
-                                            // pose_time_vector.push_back(pose_data.timestamp);
-                                            pose_data.orientation = Sophus::SO3d(Eigen::Quaterniond(kf_output.x_.rot).normalized().toRotationMatrix());
-                                            pose_data.position = kf_output.x_.pos;
-                                            if (map_time > pose_graph_key_pose.back().timestamp) // + 1e-9)
-                                            {
-                                                pose_time_vector.push_back(pose_data.timestamp);
-                                                pose_graph_key_pose.emplace_back(pose_data);
-                                            }
-                                            // else if (map_time == pose_time_vector.back())
-                                            else
-                                            {
-                                                pose_data.timestamp = pose_graph_key_pose.back().timestamp;
-                                                pose_graph_key_pose.back() = pose_data;
-                                            }
-                                            // pose_graph_key_pose.emplace_back(pose_data);
-                                            // curvefitter::Trajectory<4> traj(0.1);
-                                            // std::shared_ptr<curvefitter::Trajectory<4> > Traj_ptr = std::make_shared<curvefitter::Trajectory<4> >(traj);  
-                                            traj_manager->SetTrajectory(std::make_shared<curvefitter::Trajectory<4> >(0.025));
-                                            traj_manager->FitCurve(pose_graph_key_pose[0].orientation.unit_quaternion(), pose_graph_key_pose[0].position, pose_time_vector[0], pose_time_vector.back(), pose_graph_key_pose);
-                                            updatedmap.resize(points_num);
-                                            updatedmap = traj_manager->GetUpdatedMapPoints(pose_time_vector, LiDAR_points);
-                                            ivox_last_->AddPoints(updatedmap);
-                                            ivox_->grids_map_ = ivox_last_->grids_map_;
-                                            // for (auto &t : ivox_last_->grids_map_)
-                                            // {
-                                                // (ivox_->grids_map_[t.first]) = (t.second);
-                                            // }
-                                            // ivox_ = std::make_shared<IVoxType>(*ivox_last_);
-                                        }
-                                        else
-                                        {
-                                            ivox_last_->grids_map_ = ivox_->grids_map_;
-                                        }
-                                        traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
-                                    }
-                                    Eigen::Vector3d pos_enu;
-                                    if (!runtime_pos_log) cout_state_to_file(pos_enu);
-                                    // sensor_msgs::NavSatFix gnss_lla_msg;
-                                    // gnss_lla_msg.header.stamp = ros::Time().fromSec(time_current);
-                                    // gnss_lla_msg.header.frame_id = "camera_init";
-                                    // gnss_lla_msg.latitude = pos_enu(0);
-                                    // gnss_lla_msg.longitude = pos_enu(1);
-                                    // gnss_lla_msg.altitude = pos_enu(2);
-                                    // pub_gnss_lla.publish(gnss_lla_msg);
-                                }
-                            }
-                            else
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    // kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                }
-                                // kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = time2sec(gnss_cur[0]->time) - time_diff_gnss_local;
-                                p_gnss->processGNSS(gnss_cur, kf_output.x_);
-                                if (p_gnss->gnss_ready)
-                                {
-                                    Eigen::Vector3d pos_enu;
-                                    if (!runtime_pos_log) cout_state_to_file(pos_enu);
-                                    // printf("time gnss ready: %f \n", time_predict_last_const);
-                                    // sensor_msgs::NavSatFix gnss_lla_msg;
-                                    // gnss_lla_msg.header.stamp = ros::Time().fromSec(time_current);
-                                    // gnss_lla_msg.header.frame_id = "camera_init";
-                                    // gnss_lla_msg.latitude = pos_enu(0);
-                                    // gnss_lla_msg.longitude = pos_enu(1);
-                                    // gnss_lla_msg.altitude = pos_enu(2);
-                                    // pub_gnss_lla.publish(gnss_lla_msg);
-                                    if (nolidar)
-                                    {
-                                        // Eigen::Matrix3d R_enu_local_;
-                                        // R_enu_local_ = Eigen::AngleAxisd(p_gnss->yaw_enu_local, Eigen::Vector3d::UnitZ());
-                                        kf_output.x_.pos = p_gnss->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_gnss->frame_num-1)).segment<3>(0); // p_gnss->anc_ecef - p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end * p_gnss->Tex_imu_r;
-                                        kf_output.x_.rot = p_gnss->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_gnss->frame_num-1)).matrix(); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end;
-                                        // kf_output.x_.rot.normalize();
-                                        kf_output.x_.vel = p_gnss->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_gnss->frame_num-1)).segment<3>(3); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.vel_end; // Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.ba = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.bg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.omg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.gravity = p_gnss->R_ecef_enu * kf_output.x_.gravity; // * R_enu_local_ 
-                                        kf_output.x_.acc = kf_output.x_.rot.transpose() * (-kf_output.x_.gravity); // R_ecef_enu * state.vel_end;.conjugate().normalized()
-                                        
-                                        kf_output.P_ = MD(24,24)::Identity() * INIT_COV;
-                                    }
-                                }
-                            }
-                            p_gnss->gnss_msg.pop();
-                            if(!p_gnss->gnss_msg.empty())
-                            {
-                                gnss_cur = p_gnss->gnss_msg.front();
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-                        }
-#endif
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
                         if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                         {
                             nmea_cur = p_nmea->nmea_msg.front();
@@ -2436,9 +1799,9 @@ int main(int argc, char** argv)
                                     {
                                         Eigen::Matrix3d R_enu_local;
                                         R_enu_local = Eigen::AngleAxisd(p_nmea->yaw_enu_local, Eigen::Vector3d::UnitZ()); 
-                                        kf_output.x_.pos = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(0); // p_gnss->anc_ecef - p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end * p_gnss->Tex_imu_r;
-                                        kf_output.x_.rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_nmea->frame_num-1)).matrix(); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end;
-                                        kf_output.x_.vel = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(3); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.vel_end; // Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
+                                        kf_output.x_.pos = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(0);
+                                        kf_output.x_.rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_nmea->frame_num-1)).matrix();
+                                        kf_output.x_.vel = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(3);
                                         kf_output.x_.ba = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
                                         kf_output.x_.bg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
                                         kf_output.x_.omg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
@@ -2495,8 +1858,8 @@ int main(int argc, char** argv)
                                     {
                                         nmea_cur = p_nmea->nmea_msg.front();
                                     }
-                                    break; // ?
-                                update_nmea = p_nmea->Evaluate(kf_output.x_); 
+                                    break;
+                                }
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
                                 const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
@@ -2531,37 +1894,6 @@ int main(int argc, char** argv)
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
                                 }
                             }
-                            else
-                            {
-                                if (dt_cov > 0.0)
-                                {
-                                    kf_output.predict(dt_cov, Q_output, input_in, false, true);
-                                    time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
-                                }
-                                kf_output.predict(dt, Q_output, input_in, true, false);
-                                time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
-                                p_nmea->processNMEA(nmea_cur, kf_output.x_);
-                                if (p_nmea->nmea_ready)
-                                {
-                                    if (nolidar && p_nmea->frame_num > 0 &&
-                                        p_nmea->p_assign->isamCurrentEstimate.exists(F(p_nmea->frame_num-1)) &&
-                                        p_nmea->p_assign->isamCurrentEstimate.exists(R(p_nmea->frame_num-1)))
-                                    {
-                                        Eigen::Matrix3d R_enu_local;
-                                        R_enu_local = Eigen::AngleAxisd(p_nmea->yaw_enu_local, Eigen::Vector3d::UnitZ()); 
-                                        kf_output.x_.pos = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(0); // p_gnss->anc_ecef - p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end * p_gnss->Tex_imu_r;
-                                        kf_output.x_.rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_nmea->frame_num-1)).matrix(); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.rot_end;
-                                        kf_output.x_.vel = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(3); // p_gnss->R_ecef_enu * R_enu_local_ * state_const.vel_end; // Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.ba = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.bg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.omg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.gravity = R_enu_local * kf_output.x_.gravity; // * R_enu_local_ 
-                                        kf_output.x_.acc = kf_output.x_.rot.transpose() * (-kf_output.x_.gravity); // R_ecef_enu * state.vel_end;.conjugate().normalized()
-                                        
-                                        kf_output.P_ = MD(24,24)::Identity() * INIT_COV;
-                                    }
-                                }
-                            }
                             p_nmea->nmea_msg.pop();
                             if(!p_nmea->nmea_msg.empty())
                             {
@@ -2587,8 +1919,7 @@ int main(int argc, char** argv)
                                 time_update_last = time_current;
                             }
                             // kf_output.predict(dt, Q_output, input_in, true, false);
-#ifndef LIGO_WITHOUT_GNSS
-                            if (GNSS_ENABLE)   p_gnss->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); // acc_avr_norm, angvel_avr); // 
+#ifdef LIGO_WITH_NMEA
                             if (NMEA_ENABLE)   p_nmea->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); // acc_avr_norm, angvel_avr); // 
 #endif
                         }
@@ -2652,9 +1983,8 @@ int main(int argc, char** argv)
                 {
                     {
                         {
-#ifndef LIGO_WITHOUT_GNSS
-                            Eigen::Matrix3d R_enu_local_;
-                            Eigen::Vector3d pos_r = kf_output.x_.rot * p_gnss->Tex_imu_r + kf_output.x_.pos; // .normalized()
+#ifdef LIGO_WITH_NMEA
+                            Eigen::Vector3d pos_r = kf_output.x_.rot * p_nmea->Tex_imu_r + kf_output.x_.pos;
 #else
                             Eigen::Vector3d pos_r = kf_output.x_.pos;
 #endif
@@ -2667,7 +1997,6 @@ int main(int argc, char** argv)
                     }
                 }
             }
-        }
         }
         status = rclcpp::ok();
         loop_rate.sleep();
@@ -2683,46 +2012,61 @@ int main(int argc, char** argv)
         pcl::PCDWriter pcd_writer;
         pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
     }
-    // if (GNSS_ENABLE || NMEA_ENABLE)
     {
-#ifndef LIGO_WITHOUT_GNSS
-        Eigen::Matrix3d enu_rot = ecef2rotation(first_pvt_used);
+#ifdef LIGO_WITH_NMEA
+        Eigen::Vector3d ref_ecef = first_pvt_used;
+        Eigen::Vector3d ref_lla = first_lla_used;
+        if (NMEA_ENABLE && nmea_global_anchor_ready)
+        {
+#ifdef process_ppp
+            const bool ppp_anchor = !ppp_ecef.empty();
+#else
+            const bool ppp_anchor = false;
+#endif
+            if (!ppp_anchor)
+            {
+                ref_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                ref_lla = nmea_global_anchor_lla;
+            }
+        }
+        first_pvt_anc = ref_ecef;
+        first_lla_anc = ref_lla;
+        Eigen::Matrix3d enu_rot = gnss_comm::ecef2rotation(ref_ecef);
         for (int i = 0; i < time_frame.size(); i++)
         {
-            // Eigen::Vector3d euler_ext = SO3ToEuler(local_rots[i]);
             if (NMEA_ENABLE)
             {
-                Eigen::Vector3d ecef_r = enu_rot * est_poses[i] + first_pvt_used;
-                Eigen::Vector3d pos_enu = ecef2enu(first_lla_anc, ecef_r - first_pvt_anc);
-                fout_global << setw(20) << time_frame[i] - ppp_ecef[0][0] + 18.0 << " " << pos_enu.transpose() << endl; //"\n"; // p_gnss->pvt_time[0] + 18.0
+                Eigen::Vector3d ecef_r = enu_rot * est_poses[i] + ref_ecef;
+                Eigen::Vector3d pos_enu = gnss_comm::ecef2enu(first_lla_anc, ecef_r - first_pvt_anc);
+#ifdef process_ppp
+                if (!ppp_ecef.empty())
+                {
+                    fout_global << setw(20) << time_frame[i] - ppp_ecef[0][0] + 18.0 << " " << pos_enu.transpose() << endl;
+                }
+                else
+#endif
+                {
+                    fout_global << setw(20) << time_frame[i] - time_frame[0] << " " << pos_enu.transpose() << endl;
+                }
             }
             else
             {
-                fout_global << setw(20) << time_frame[i] - time_frame[0] << " " << est_poses[i].transpose() << endl; // << " " << local_poses[i].transpose() << " " << euler_ext.transpose() << endl; //"\n"; // p_gnss->pvt_time[0] + 18.0
-                // fout_global << setw(20) << time_frame[i] - ppp_ecef[0][0] + 18.0 << " " << est_poses[i].transpose() << endl; //"\n"; // p_gnss->pvt_time[0] + 18.0
+                fout_global << setw(20) << time_frame[i] - time_frame[0] << " " << est_poses[i].transpose() << endl;
             }
-            // printf("time: %f, pos: %f %f %f\n", ppp_ecef[0][0] + 18.0, est_poses[i](0), est_poses[i](1), est_poses[i](2));
-            // Eigen::Vector3d euler_ext = SO3ToEuler(local_rots[i]);
         }
 #else
-        // When LIGO_WITHOUT_GNSS, fout_global is not opened in open_file(); skip
+        // Without LIGO_WITH_NMEA, fout_global is not opened in open_file(); skip
 #endif
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
+    if (fout_global.is_open())
         fout_global.close();
 #endif
     }
 
-#ifndef LIGO_WITHOUT_GNSS
-    for (int i = 0; i < p_gnss->pvt_time.size(); i++)
-    {
-        fout_rtk << setw(20) << p_gnss->pvt_time[i] - p_gnss->pvt_time[0] << " " << p_gnss->pvt_holder[i].transpose() << " " << p_gnss->diff_holder[i] << " " << p_gnss->float_holder[i] << endl; // "\n";
-    }
-    fout_rtk.close();
-#endif
     #ifdef process_ppp
     for (int i = 0; i < ppp_ecef.size(); i++)
     {
-        Eigen::Vector3d pos_enu = ecef2enu(p_gnss->first_lla_pvt, ppp_ecef[i].segment<3>(1) - p_gnss->first_xyz_ecef_pvt);
+        Eigen::Vector3d pos_enu = gnss_comm::ecef2enu(first_lla_used, ppp_ecef[i].segment<3>(1) - first_pvt_used);
         fout_ppp << setw(20) << ppp_ecef[i][0] - ppp_ecef[0][0] << " " << pos_enu.transpose() << endl;
     }
     fout_ppp.close();

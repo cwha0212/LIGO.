@@ -41,28 +41,9 @@
                     0.0, 0.0, 1.0]
 
     gnss:
-      gnss_enable: false
-      ephem_from_rinex: false
-      ephem_file_name: " "
-      obs_from_rinex: false
-      pvt_is_gt: true
       gt_file_name: " "
       gt_file_type: 1
       outlier_rejection: true
-      psr_dopp_weight: 1.0
-      cp_weight: 10.0
-      gnss_meas_topic: "/ublox_driver/range_meas"
-      gnss_ephem_topic: "/ublox_driver/ephem"
-      gnss_glo_ephem_topic: "/ublox_driver/glo_ephem"
-      gnss_iono_params_topic: "/ublox_driver/iono_params"
-      gnss_tp_info_topic: "/ublox_driver/time_pulse_info"
-      rtk_pvt_topic: "/ublox_driver/receiver_pvt"
-      rtk_lla_topic: "/ublox_driver/receiver_lla"
-      gnss_elevation_thres: 30.0
-      gnss_psr_std_thres: 30.0
-      gnss_dopp_std_thres: 30.0
-      gnss_cp_std_thres: 30.0
-      gnss_cp_time_thres: 100.0
       gtsam_variable_thres: 30
       gtsam_marg_variable_thres: 1
       gnss_sample_period: 0.1
@@ -73,26 +54,35 @@
       marg_noise: 0.1
       odo_noise: 0.1
       grav_noise: 0.1
-      psr_dopp_noise: 1.0
-      cp_noise: 0.1
+      b_acc_noise: 0.10
+      b_omg_noise: 0.10
+      acc_noise: 0.10
+      omg_noise: 0.10
       gnss_ekf_noise: 0.01
-      gnss_local_online_sync: false
-      local_trigger_info_topic: "/external_trigger"
-      gnss_local_time_diff: 18.0
-      gnss_iono_default_parameters: [0.1118E-07,  0.2235E-07, -0.4172E-06,  0.6557E-06, 0.1249E+06, -0.4424E+06,  0.1507E+07, -0.2621E+06]
       gnss_extrinsic_T: [0.011, 0.03155, 0.02365]
       gnss_extrinsic_R: [ 1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
                     0.0, 0.0, 1.0 ]
+      nolidar: false
 
     nmea:
       nmea_enable: true
       posit_odo_topic: "/ligo_gnss_odom"
+      nmea_input_type: "odometry"
+      publish_stamp_diag: false
       ppp_std_thres: 20.0   # position variance gate (diag [0],[7],[14]); 5 was too strict for Septentrio height variance
       pos_noise: 1.0
+      pos_noise_z: 1.0
+      rot_noise: 1.0
+      vel_noise: 1.0
       nmea_weight: 200.0
       nmea_local_time_diff: 0.0
+      nmea_gps_latency: 0.0
       ppp_file_name: ""
+      init_min_lio_total_move_m: 3.0
+      init_min_nmea_total_move_m: 3.0
+      init_icp_max_iterations: 80
+      init_icp_max_fitness: 5.0
       ppp_anc: [3959058.559396, -87615.730649, 4983325.235812]
 
     odometry:

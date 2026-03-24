@@ -2,6 +2,8 @@
 
 **LIGO: Tightly Coupled LiDAR-Inertial-GNSS Odometry based on a Hierarchy Fusion Framework for Global Localization with Real-time Mapping**
 
+이 브랜치는 **raw GNSS 관측(eph/obs/RTK) 융합 코드 경로를 빌드에서 제외**하고, 전역 제약은 **`nmea.*`(NavSatFix/Odometry·PPP 파일)** 경로로만 사용한다. `gnss.*` YAML 키는 GTSAM/노이즈 등 NMEA 그래프 파라미터용으로 일부 유지된다.
+
 Code, paper, video are coming soon......
 instruction for using will be detailed soon
 

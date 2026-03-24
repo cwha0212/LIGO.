@@ -15,9 +15,8 @@
 - GNSS factor 폴더: `[include/gnss_factor](include/gnss_factor)`
 - NMEA factor 폴더: `[include/nmea_factor](include/nmea_factor)`
 - Ceres LiDAR factor: `[include/Curvefitter/lidar_feature_factor.h](include/Curvefitter/lidar_feature_factor.h)`
-- GNSS factor 추가 로직: `[src/GNSS_Processing_fg.cpp](src/GNSS_Processing_fg.cpp)`
-- NMEA factor 추가 로직: `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`
-- 슬라이딩 윈도우 prior 추가: `[src/GNSS_Assignment.cpp](src/GNSS_Assignment.cpp)`, `[src/NMEA_Assignment.cpp](src/NMEA_Assignment.cpp)`
+- NMEA/PPP factor 추가 로직: `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)` (구 `GNSS_Processing_fg.cpp` raw 관측 경로는 제거됨)
+- 슬라이딩 윈도우 prior 추가: `[src/NMEA_Assignment.cpp](src/NMEA_Assignment.cpp)`
 
 ### 외부 문서 링크
 
@@ -31,7 +30,7 @@
 
 ### 1.1 GTSAM 키
 
-`src/GNSS_Assignment.h`, `src/NMEA_Assignment.h` 기준:
+`src/NMEA_Assignment.h` 기준:
 
 - `R`: `gtsam::Rot3` (body/local 자세)
 - `P`: `gtsam::Rot3` (외부 파라미터 회전)
@@ -56,20 +55,19 @@
 
 ---
 
-## 2) GNSS 경로 활성 factor
+## 2) 레거시 GNSS raw 관측 factor (`include/gnss_factor`, 미빌드)
+
+아래 표는 원 논문/레포의 pseudo-range·carrier-phase 계열 factor 정리다. **현재 패키지는 해당 소스 경로를 빌드에 포함하지 않으며**, NMEA/PPP 경로만 활성이다.
 
 ## 2.1 GNSS 관측 factor
 
 
 | Factor                     | 코드 링크                                                                                      | Residual | 연결 변수                          | 목적                       |
 | -------------------------- | ------------------------------------------------------------------------------------------ | -------- | ------------------------------ | ------------------------ |
-| `GnssPsrDoppFactorNoR`     | `[gnss_psr_dopp_factor_nor.hpp](include/gnss_factor/gnss_psr_dopp_factor_nor.hpp)`         | 2        | `A, B, C, E, P`                | PSR + Doppler 결합         |
-| `GnssPsrDoppFactorNolidar` | `[gnss_psr_dopp_factor_nolidar.hpp](include/gnss_factor/gnss_psr_dopp_factor_nolidar.hpp)` | 2        | `R, F, B, C`                   | nolidar 경로 PSR + Doppler |
-| `GnssCpFactorNoR`          | `[gnss_cp_factor_nor.hpp](include/gnss_factor/gnss_cp_factor_nor.hpp)`                     | 1        | `E, P, A_i, A_j, B_i, B_j`     | carrier-phase 시간차 제약     |
-| `GnssCpFactorNolidar`      | `[gnss_cp_factor_nolidar.hpp](include/gnss_factor/gnss_cp_factor_nolidar.hpp)`             | 1        | `R_i, F_i, R_j, F_j, B_i, B_j` | nolidar carrier-phase 제약 |
+| (제거됨) raw GNSS 관측 factor | NMEA-only 리팩터링으로 `include/gnss_factor/*` 제거됨 | - | - | pseudo-range / carrier-phase 경로 미사용 |
 
 
-추가 위치: `[src/GNSS_Processing_fg.cpp](src/GNSS_Processing_fg.cpp)`
+추가 위치(레거시): 이전에는 `GNSS_Processing_fg.cpp` — 제거됨.
 
 ### 핵심 수식
 
@@ -113,11 +111,10 @@ r_{\phi}
 
 | Factor            | 코드 링크                                                                          | Residual | 연결 변수                | 목적                    |
 | ----------------- | ------------------------------------------------------------------------------ | -------- | -------------------- | --------------------- |
-| `DdtSmoothFactor` | `[gnss_ddt_smooth_factor.hpp](include/gnss_factor/gnss_ddt_smooth_factor.hpp)` | 1        | `C_i, C_j`           | drift rate smoothness |
-| `DtDdtFactor`     | `[gnss_dt_ddt_factor.hpp](include/gnss_factor/gnss_dt_ddt_factor.hpp)`         | 4        | `B_i, B_j, C_i, C_j` | dt-\dot{dt} 시간 일관성    |
+| (제거됨) clock 동역학 factor | NMEA-only 리팩터링으로 `include/gnss_factor/*` 제거됨 | - | - | raw GNSS clock 상태 미사용 |
 
 
-추가 위치: `[src/GNSS_Processing_fg.cpp](src/GNSS_Processing_fg.cpp)`
+추가 위치(레거시): 이전에는 `GNSS_Processing_fg.cpp` — 제거됨.
 
 ### 핵심 수식
 
@@ -146,11 +143,11 @@ dt_j^{(k)} - dt_i^{(k)}
 
 | Factor                 | 코드 링크                                                                            | Residual | 연결 변수                | 목적                    |
 | ---------------------- | -------------------------------------------------------------------------------- | -------- | -------------------- | --------------------- |
-| `GnssLioFactor`        | `[gnss_lio_factor.hpp](include/gnss_factor/gnss_lio_factor.hpp)`                 | 6        | `A_i, A_j`           | 상대 위치/속도 제약           |
-| `GnssLioFactorNolidar` | `[gnss_lio_factor_nolidar.hpp](include/gnss_factor/gnss_lio_factor_nolidar.hpp)` | 15       | `R_i, F_i, R_j, F_j` | IMU preintegration 제약 |
+| (제거됨) `GnssLioFactor` | NMEA-only 리팩터링으로 제거됨 | - | - | legacy GNSS-LIO factor |
+| `NmeaLioFactorNolidar` | `[nmea_lio_factor_nolidar.hpp](include/nmea_factor/nmea_lio_factor_nolidar.hpp)` | 15       | `R_i, F_i, R_j, F_j` | IMU preintegration 제약 |
 
 
-추가 위치: `[src/GNSS_Processing_fg.cpp](src/GNSS_Processing_fg.cpp)`, `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`
+추가 위치(레거시 GNSS-LIO 표): 이전 `GNSS_Processing_fg.cpp`. NMEA 융합 측은 `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`.
 
 ### 핵심 수식
 
@@ -169,7 +166,7 @@ dt_j^{(k)} - dt_i^{(k)}
 \mathbf{r}=[\mathbf{r}_p;\mathbf{r}_v]
 
 
-#### (b) `GnssLioFactorNolidar` (15D preintegration)
+#### (b) `NmeaLioFactorNolidar` (15D preintegration)
 
 
 \mathbf{r}=
@@ -198,7 +195,7 @@ with preintegration covariance whitening:
 | `NmeaLioGravRelFactor` | `[nmea_lio_gravity_rel_factor.hpp](include/nmea_factor/nmea_lio_gravity_rel_factor.hpp)` | 27       | `P, R, A, O, G`      | LIO 상태와 중력/외부회전 결합 |
 | `NMEAFactor`           | `[nmea_factor.hpp](include/nmea_factor/nmea_factor.hpp)`                                 | 9 또는 3 | `P, E, A, R`         | `nmea_input_type=odometry`: P/V/R(9D). **`navsatfix**: 위치 3D만** (0 twist/quat 제약 방지). [`AddFactor`](src/NMEA_Processing_fg.cpp)에서 `position_only` 전달 |
 | `NMEAFactorNolidar`    | `[nmea_factor_nolidar.hpp](include/nmea_factor/nmea_factor_nolidar.hpp)`                 | 9 또는 3 | `R, F`               | 위와 동일 분기 (`navsatfix` → 3D) |
-| `GnssLioFactorNolidar` | `[gnss_lio_factor_nolidar.hpp](include/gnss_factor/gnss_lio_factor_nolidar.hpp)`         | 15       | `R_i, F_i, R_j, F_j` | 상태 천이(재사용)         |
+| `NmeaLioFactorNolidar` | `[nmea_lio_factor_nolidar.hpp](include/nmea_factor/nmea_lio_factor_nolidar.hpp)`         | 15       | `R_i, F_i, R_j, F_j` | 상태 천이(재사용)         |
 
 
 추가 위치: `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`
@@ -254,7 +251,7 @@ with preintegration covariance whitening:
 
 ### 4.2 마지널라이제이션 후 priors
 
-파일: `[src/GNSS_Assignment.cpp](src/GNSS_Assignment.cpp)`, `[src/NMEA_Assignment.cpp](src/NMEA_Assignment.cpp)`
+파일: `[src/NMEA_Assignment.cpp](src/NMEA_Assignment.cpp)`
 
 - 외부 파라미터: `PriorFactor<Rot3>(P)`, `PriorFactor<Vector3>(E)`
 - 상태: `PriorFactor<Rot3>(R)`, `PriorFactor<Vector6>(A)`, `PriorFactor<Vector12>(F)`
@@ -299,31 +296,18 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 ### GNSS 계열
 
-- `[gnss_psr_dopp_factor.hpp](include/gnss_factor/gnss_psr_dopp_factor.hpp)` (`GnssPsrDoppFactor`)
-- `[gnss_psr_dopp_factor_pos.hpp](include/gnss_factor/gnss_psr_dopp_factor_pos.hpp)` (`GnssPsrDoppFactorPos`)
-- `[gnss_psr_dopp_factor_nolidar_pos.hpp](include/gnss_factor/gnss_psr_dopp_factor_nolidar_pos.hpp)`
-- `[gnss_cp_factor_pos.hpp](include/gnss_factor/gnss_cp_factor_pos.hpp)`
-- `[gnss_cp_factor_nolidar_pos.hpp](include/gnss_factor/gnss_cp_factor_nolidar_pos.hpp)`
-- `[gnss_cp_factor_nolidar_c.hpp](include/gnss_factor/gnss_cp_factor_nolidar_c.hpp)`
-- `[gnss_lio_hard_factor.hpp](include/gnss_factor/gnss_lio_hard_factor.hpp)`
-- `[gnss_lio_hard_factor_nor.hpp](include/gnss_factor/gnss_lio_hard_factor_nor.hpp)`
-- `[gnss_lio_gravity_factor.hpp](include/gnss_factor/gnss_lio_gravity_factor.hpp)`
-- `[gnss_lio_gravity_hard_factor.hpp](include/gnss_factor/gnss_lio_gravity_hard_factor.hpp)`
-- `[gnss_prior_factor.hpp](include/gnss_factor/gnss_prior_factor.hpp)` (`ligo::PriorFactor`, 커스텀)
+- raw GNSS factor 헤더(`include/gnss_factor/*`)는 NMEA-only 리팩터링에서 제거됨.
 
 ### NMEA 계열
 
-- `[nmea_lio_factor.hpp](include/nmea_factor/nmea_lio_factor.hpp)`
-- `[nmea_pos_factor.hpp](include/nmea_factor/nmea_pos_factor.hpp)`
-- `[nmea_pos_factor_nolidar.hpp](include/nmea_factor/nmea_pos_factor_nolidar.hpp)`
-- `[nmea_lio_gravity_hard_factor.hpp](include/nmea_factor/nmea_lio_gravity_hard_factor.hpp)`
+- NMEA-only 리팩터링으로 미사용 헤더(`nmea_lio_factor.hpp`, `nmea_pos_factor*.hpp`, `nmea_lio_gravity_hard_factor.hpp`) 제거됨.
 
 ---
 
 ## 7) 최종 요약
 
 - 실사용 중심: **PSR/Doppler + CP + clock 동역학 + LIO 연계 + NMEA 관측 + prior**
-- GNSS/NMEA는 공통 상태와 일부 factor(`GnssLioFactorNolidar`)를 공유한다.
+- NMEA 경로는 공통 상태와 `NmeaLioFactorNolidar`를 사용해 상태 천이 제약을 유지한다.
 - LiDAR spline 최적화는 별도의 Ceres 문제(`LiDARPoseFactor`)로 동작한다.
 - 코드에는 실험/변형 factor가 다수 존재하므로, 신규 실험 시 "활성 경로 여부"를 먼저 확인하는 것이 안전하다.
 
@@ -340,7 +324,7 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 ### 8.1 실행 경로 요약
 
 - `mapping_avia.launch.py`는 `avia.yaml`을 파라미터로 `ligo_mapping` 노드를 실행한다.
-- `parameters.cpp`에서 `GNSS_ENABLE`/`NMEA_ENABLE`를 로드하고, 위 조건이면 NMEA 처리 경로가 활성화된다.
+- `parameters.cpp`에서 `NMEA_ENABLE`(및 `gnss.*` 네임스페이스의 GTSAM/윈도우 파라미터)를 로드한다. Raw `GNSS_ENABLE` 경로는 비활성이다.
 - 실제 factor 추가는 `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`의 `SetInit()`와 `AddFactor()`에서 수행된다.
 
 ### 8.2 초기화 시점(`SetInit`)에 추가되는 factor
@@ -365,7 +349,7 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 #### (b) LiDAR 비사용 경로(`nolidar`)
 
-- `GnssLioFactorNolidar(R(k-1), F(k-1), R(k), F(k), ...)`  (NMEA 경로에서 재사용)
+- `NmeaLioFactorNolidar(R(k-1), F(k-1), R(k), F(k), ...)`
 - `NMEAFactorNolidar(R(k), F(k), ...)`
 
 #### (c) LiDAR 가중치 퇴화 fallback (`weight_lid_zero`)
@@ -379,8 +363,8 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 ### 8.4 주의: 이름과 실제 사용 경로
 
-- `include/nmea_factor/nmea_lio_factor.hpp`의 `NmeaLioFactor`는 현재 기본 활성 경로에서 호출되지 않는다(코드상 주석 처리).
-- 반면 `GnssLioFactorNolidar`는 이름과 달리 NMEA-only 경로에서도 상태 천이 제약으로 실제 사용된다.
+- 과거 `NmeaLioFactor` 경로는 미사용으로 정리되었고, 현재는 `NmeaLioFactorNolidar` 경로만 유지된다.
+- `NmeaLioFactorNolidar`는 NMEA-only 경로의 상태 천이 제약으로 실제 사용된다.
 
 ### 8.5 NMEA-only 실제 사용 factor + 경로 일람
 
@@ -390,7 +374,7 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 |---|---|---|---|---|
 | `NmeaLioGravRelFactor` | `!nolidar` 이고 `!weight_lid_zero` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_lio_gravity_rel_factor.hpp`](include/nmea_factor/nmea_lio_gravity_rel_factor.hpp) | `3) NMEA 경로 활성 factor`, `8.3(a)` |
 | `NMEAFactor` (`NMEAFactor_init`) | `!nolidar` (초기 윈도우는 init 노이즈) | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_factor.hpp`](include/nmea_factor/nmea_factor.hpp) | `3) NMEA 경로 활성 factor`, `8.3(a)` |
-| `GnssLioFactorNolidar` | `nolidar` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/gnss_factor/gnss_lio_factor_nolidar.hpp`](include/gnss_factor/gnss_lio_factor_nolidar.hpp) | `2.3) LIO 연계 factor`, `3) NMEA 경로 활성 factor`, `8.3(b)` |
+| `NmeaLioFactorNolidar` | `nolidar` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_lio_factor_nolidar.hpp`](include/nmea_factor/nmea_lio_factor_nolidar.hpp) | `2.3) LIO 연계 factor`, `3) NMEA 경로 활성 factor`, `8.3(b)` |
 | `NMEAFactorNolidar` | `nolidar` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_factor_nolidar.hpp`](include/nmea_factor/nmea_factor_nolidar.hpp) | `3) NMEA 경로 활성 factor`, `8.3(b)` |
 | `gtsam::PriorFactor<Rot3>(P(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
 | `gtsam::PriorFactor<Vector3>(E(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
@@ -405,7 +389,5 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 #### NMEA-only에서 "사용되지 않는" 대표 factor (혼동 방지)
 
-- `NmeaLioFactor`  
-  - 정의: [`include/nmea_factor/nmea_lio_factor.hpp`](include/nmea_factor/nmea_lio_factor.hpp)  
-  - 상태: 현재 기본 경로에서 `AddFactor` 호출이 주석 처리되어 비활성
+- `NmeaLioFactor` 경로는 미사용 정리 단계에서 삭제됨.
 

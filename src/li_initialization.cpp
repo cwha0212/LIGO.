@@ -43,7 +43,7 @@ static rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr g_nmea_sta
 
 void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> node)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     if (!node)
         return;
     if (!NMEA_ENABLE || !nmea_publish_stamp_diag || nmea_input_type != std::string("navsatfix"))
@@ -82,102 +82,10 @@ bool lidar_pushed = false, imu_pushed = false;
 std::deque<PointCloudXYZI::Ptr>  lidar_buffer;
 std::deque<double>               time_buffer;
 std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_deque;
-std::queue<std::vector<ObsPtr>> gnss_meas_buf;
+std::queue<std::vector<gnss_comm::ObsPtr>> gnss_meas_buf;
 std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_buf;
 
-#ifndef LIGO_WITHOUT_GNSS
-void gnss_ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr &ephem_msg)
-{
-    EphemPtr ephem = msg2ephem(*ephem_msg);
-    p_gnss->p_assign->inputEphem(ephem);
-}
-
-void gnss_glo_ephem_callback(const gnss_comm::msg::GnssGloEphemMsg::ConstSharedPtr &glo_ephem_msg)
-{
-    GloEphemPtr glo_ephem = msg2glo_ephem(*glo_ephem_msg);
-    p_gnss->p_assign->inputEphem(glo_ephem);
-}
-
-void gnss_iono_params_callback(const gnss_comm::msg::StampedFloat64Array::ConstSharedPtr &iono_msg)
-{
-    double ts = rclcpp::Time(iono_msg->header.stamp).seconds();
-    std::vector<double> iono_params;
-    std::copy(iono_msg->data.begin(), iono_msg->data.end(), std::back_inserter(iono_params));
-    assert(iono_params.size() == 8);
-    p_gnss->inputIonoParams(ts, iono_params);
-}
-
-void rtk_pvt_callback(const gnss_comm::msg::GnssPVTSolnMsg::ConstSharedPtr &groundt_pvt)
-{
-    double ts = time2sec(gst2time(groundt_pvt->time.week, groundt_pvt->time.tow));
-    p_gnss->inputpvt(ts, groundt_pvt->latitude, groundt_pvt->longitude, groundt_pvt->altitude, groundt_pvt->carr_soln, groundt_pvt->diff_soln);
-}
-
-void rtk_lla_callback(const sensor_msgs::msg::NavSatFix::ConstSharedPtr &lla_msg)
-{
-    double ts = rclcpp::Time(lla_msg->header.stamp).seconds();
-    p_gnss->inputlla(ts, lla_msg->latitude, lla_msg->longitude, lla_msg->altitude);
-}
-
-void gnss_meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPtr &meas_msg)
-{
-    std::vector<ObsPtr> gnss_meas = msg2meas(*meas_msg);
-    latest_gnss_time = time2sec(gnss_meas[0]->time);
-    // printf("gnss time: %f\n", latest_gnss_time);
-
-    // cerr << "gnss ts is " << std::setprecision(20) << time2sec(gnss_meas[0]->time) << endl;
-    if (!time_diff_valid)   return;
-
-    // mtx_buffer.lock();
-    gnss_meas_buf.push(std::move(gnss_meas)); // ?
-    // mtx_buffer.unlock();
-    // sig_buffer.notify_all(); // notify_one()?
-}
-
-#ifdef LIGO_WITH_URBANNAV_MSG
-void gnss_meas_callback_urbannav(const nlosExclusion::GNSS_Raw_ArrayConstPtr &meas_msg)
-{
-    rtklib_gnss_meas_callback(meas_msg, gnss_meas_buf);
-}
-#endif
-
-void local_trigger_info_callback(const ligo::msg::LocalSensorExternalTrigger::ConstSharedPtr &trigger_msg) // pps time sync
-{
-    std::lock_guard<std::mutex> lg(m_time);
-
-    if (next_pulse_time_valid)
-    {
-        time_diff_gnss_local = next_pulse_time - rclcpp::Time(trigger_msg->header.stamp).seconds();
-        p_gnss->inputGNSSTimeDiff(time_diff_gnss_local);
-        if (!time_diff_valid)       // just get calibrated
-            std::cout << "time difference between GNSS and LI-Sensor got calibrated: "
-                << std::setprecision(15) << time_diff_gnss_local << " s\n";
-        time_diff_valid = true;
-    }
-}
-
-void gnss_tp_info_callback(const gnss_comm::msg::GnssTimePulseInfoMsg::ConstSharedPtr &tp_msg) // time stamp of GNSS signal
-{
-    gtime_t tp_time = gpst2time(tp_msg->time.week, tp_msg->time.tow);
-    if (tp_msg->utc_based || tp_msg->time_sys == SYS_GLO)
-        tp_time = utc2gpst(tp_time);
-    else if (tp_msg->time_sys == SYS_GAL)
-        tp_time = gst2time(tp_msg->time.week, tp_msg->time.tow);
-    else if (tp_msg->time_sys == SYS_BDS)
-        tp_time = bdt2time(tp_msg->time.week, tp_msg->time.tow);
-    else if (tp_msg->time_sys == SYS_NONE)
-    {
-        std::cerr << "Unknown time system in GNSSTimePulseInfoMsg.\n";
-        return;
-    }
-    double gnss_ts = time2sec(tp_time);
-
-    std::lock_guard<std::mutex> lg(m_time);
-    next_pulse_time = gnss_ts;
-    next_pulse_time_valid = true;
-}
-#endif
-
+#ifdef LIGO_WITH_NMEA
 void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg)
 {
     nav_msgs::msg::Odometry::SharedPtr nmea_meas = std::make_shared<nav_msgs::msg::Odometry>(*meas_msg);
@@ -187,7 +95,6 @@ void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg)
 
 void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
 {
-#ifndef LIGO_WITHOUT_GNSS
     if (gpsMsg->status.status != 0)
     {
         return;
@@ -216,12 +123,12 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         Eigen::Vector3d geo;
         geo << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
         first_gps_lla = geo;
-        first_gps_ecef = geo2ecef(geo);
+        first_gps_ecef = gnss_comm::geo2ecef(geo);
         nmea_global_anchor_lla = first_gps_lla;
         nmea_global_anchor_ready = true;
     }
-    Eigen::Vector3d cur_ecef = geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
-    trans_local_ = ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);
+    Eigen::Vector3d cur_ecef = gnss_comm::geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
+    trans_local_ = gnss_comm::ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);
 
     nav_msgs::msg::Odometry gps_odom;
     if (nmea_stamp_offset_inited)
@@ -285,8 +192,8 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
             last_timestamp_lidar > 0 ? stamp_in_buf_sec - last_timestamp_lidar : 0.0);
       }
     }
-#endif
 }
+#endif  // LIGO_WITH_NMEA
 
 void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
@@ -430,8 +337,9 @@ void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in)
     // sig_buffer.notify_all();
 }
 
-bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg)
+bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg)
 {
+    std::queue<std::vector<gnss_comm::ObsPtr>> gnss_msg;
     static uint64_t sync_call_count = 0;
     ++sync_call_count;
 

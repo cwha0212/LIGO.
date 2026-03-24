@@ -79,13 +79,10 @@ bool   scan_pub_en, scan_body_pub_en;
 shared_ptr<Preprocess> p_pre;
 // shared_ptr<LI_Init> Init_LI;
 shared_ptr<ImuProcess> p_imu;
-shared_ptr<GNSSProcess> p_gnss;
 shared_ptr<NMEAProcess> p_nmea;
 double time_update_last = 0.0, time_current = 0.0, time_predict_last_const = 0.0, t_last = 0.0;
 
-std::string gnss_ephem_topic, gnss_glo_ephem_topic, gnss_meas_topic, gnss_iono_params_topic;
 std::string gt_fname, ephem_fname, ppp_fname;
-std::string gnss_tp_info_topic, local_trigger_info_topic, rtk_pvt_topic, rtk_lla_topic;
 std::string nmea_meas_topic;
 std::string nmea_input_type;
 bool nmea_publish_stamp_diag = false;
@@ -105,7 +102,6 @@ bool gnss_local_online_sync = true, nolidar = false;
 double li_init_gyr_cov = 0.1, li_init_acc_cov = 0.1, lidar_time_inte = 0.1, first_imu_time = 0.0;
 int orig_odom_freq = 10;
 double online_refine_time = 20.0; //unit: s
-bool GNSS_ENABLE = true;
 bool NMEA_ENABLE = true;
 bool mapping_mode = false;
 bool indoor_flag = false;
@@ -131,7 +127,6 @@ void readParameters(rclcpp::Node * node)
 {
   p_pre.reset(new Preprocess());
   p_imu.reset(new ImuProcess());
-  p_gnss.reset(new GNSSProcess());
   p_nmea.reset(new NMEAProcess());
 
   auto get_param = [node](const std::string & name, auto default_val) -> decltype(default_val) {
@@ -214,71 +209,12 @@ void readParameters(rclcpp::Node * node)
     ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY18;
   }
   p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
-#ifdef LIGO_WITHOUT_GNSS
-  GNSS_ENABLE = false;
+#ifndef LIGO_WITH_NMEA
   NMEA_ENABLE = false;
 #else
-  GNSS_ENABLE = get_param("gnss.gnss_enable", false);
-  cout << "gnss enable:" << GNSS_ENABLE << endl;
-  if (GNSS_ENABLE)
-  {
-    p_gnss->relative_sqrt_info = get_param("gnss.psr_dopp_weight", 10.0);
-    p_gnss->cp_weight = get_param("gnss.cp_weight", 0.1);
-    p_gnss->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
-    gnss_ephem_topic = get_param("gnss.gnss_ephem_topic", std::string("/ublox_driver/ephem"));
-    gnss_glo_ephem_topic = get_param("gnss.gnss_glo_ephem_topic", std::string("/ublox_driver/glo_ephem"));
-    gnss_meas_topic = get_param("gnss.gnss_meas_topic", std::string("/ublox_driver/range_meas"));
-    ephem_fname = get_param("gnss.ephem_file_name", std::string("BRDM00DLR_S_20221870000_01D_MN.rnx"));
-    gt_fname = get_param("gnss.gt_file_name", std::string("UrbanNav_TST_GT_raw.txt"));
-    ppp_fname = get_param("nmea.ppp_file_name", std::string("TST.pos"));
-    gnss_iono_params_topic = get_param("gnss.gnss_iono_params_topic", std::string("/ublox_driver/iono_params"));
-    rtk_pvt_topic = get_param("gnss.rtk_pvt_topic", std::string("/ublox_driver/receiver_pvt"));
-    rtk_lla_topic = get_param("gnss.rtk_lla_topic", std::string("/ublox_driver/receiver_lla"));
-    gnss_tp_info_topic = get_param("gnss.gnss_tp_info_topic", std::string("/ublox_driver/time_pulse_info"));
-    default_gnss_iono_params = get_param("gnss.gnss_iono_default_parameters", std::vector<double>(8, 0.0));
-    p_gnss->gravity_init << VEC_FROM_ARRAY(gravity);
-    gnss_local_online_sync = get_param("gnss.gnss_local_online_sync", true);
-    if (gnss_local_online_sync)
-      local_trigger_info_topic = get_param("gnss.local_trigger_info_topic", std::string("/external_trigger"));
-    else
-    {
-      gnss_local_time_diff = get_param("gnss.gnss_local_time_diff", 18.0);
-      time_diff_gnss_local = gnss_local_time_diff;
-    }
-    p_gnss->p_assign->gnss_elevation_threshold = get_param("gnss.gnss_elevation_thres", 30.0);
-    p_gnss->p_assign->prior_noise = get_param("gnss.prior_noise", 0.010);
-    p_gnss->p_assign->marg_noise = get_param("gnss.marg_noise", 0.010);
-    p_gnss->pre_integration->acc_w = get_param("gnss.b_acc_noise", 0.10);
-    p_gnss->pre_integration->gyr_w = get_param("gnss.b_omg_noise", 0.10);
-    p_gnss->pre_integration->acc_n = get_param("gnss.acc_noise", 0.10);
-    p_gnss->pre_integration->gyr_n = get_param("gnss.omg_noise", 0.10);
-    p_gnss->p_assign->ddt_noise = get_param("gnss.ddt_noise", 0.10);
-    p_gnss->p_assign->dt_noise = get_param("gnss.dt_noise", 0.10);
-    p_gnss->p_assign->psr_dopp_noise = get_param("gnss.psr_dopp_noise", 0.1);
-    p_gnss->p_assign->odo_noise = get_param("gnss.odo_noise", 0.1);
-    p_gnss->p_assign->grav_noise = get_param("gnss.grav_noise", 0.1);
-    p_gnss->p_assign->cp_noise = get_param("gnss.cp_noise", 0.1);
-    p_gnss->p_assign->gnss_psr_std_threshold = get_param("gnss.gnss_psr_std_thres", 2.0);
-    p_gnss->p_assign->gnss_dopp_std_threshold = get_param("gnss.gnss_dopp_std_thres", 2.0);
-    p_gnss->p_assign->gnss_cp_std_threshold = get_param("gnss.gnss_cp_std_thres", 2.0);
-    p_gnss->p_assign->gnss_cp_std_threshold /= 0.004;
-    p_gnss->gnss_cp_time_threshold = get_param("gnss.gnss_cp_time_thres", 2.0);
-    p_gnss->delete_thred = get_param("gnss.gtsam_variable_thres", 200);
-    p_gnss->p_assign->marg_thred = get_param("gnss.gtsam_marg_variable_thres", 1);
-    p_gnss->p_assign->outlier_thres = get_param("gnss.outlier_thres", 0.1);
-    p_gnss->p_assign->outlier_thres_init = get_param("gnss.outlier_thres_init", 0.1);
-    p_gnss->gnss_sample_period = get_param("gnss.gnss_sample_period", 0.1);
-    nolidar = get_param("gnss.nolidar", false);
-    p_gnss->p_assign->ephem_from_rinex = get_param("gnss.ephem_from_rinex", false);
-    p_gnss->p_assign->obs_from_rinex = get_param("gnss.obs_from_rinex", false);
-    p_gnss->p_assign->pvt_is_gt = get_param("gnss.pvt_is_gt", false);
-    p_gnss->wind_size = get_param("gnss.window_size", 2);
-    p_gnss->p_assign->initNoises();
-  }
-  else
-  {
-    rtk_pvt_topic = get_param("gnss.rtk_pvt_topic", std::string("/ublox_driver/receiver_pvt"));
-  }
+  time_diff_valid = true;
+  gt_fname = get_param("gnss.gt_file_name", std::string("UrbanNav_TST_GT_raw.txt"));
+  ppp_fname = get_param("nmea.ppp_file_name", std::string("TST.pos"));
   NMEA_ENABLE = get_param("nmea.nmea_enable", false);
   cout << "nmea enable:" << NMEA_ENABLE << endl;
   indoor_flag = get_param("indoor.indoor_flag", false);
@@ -368,16 +304,13 @@ Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &rot)
 void open_file()
 {
     fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),ios::out);
-#ifndef LIGO_WITHOUT_GNSS
-    if (GNSS_ENABLE)
+#ifdef LIGO_WITH_NMEA
+    if (NMEA_ENABLE)
     {
-        fout_rtk.open(DEBUG_FILE_DIR("pos_rtk.txt"),ios::out);
-        fout_rtk.setf(ios::fixed, ios::floatfield);
-        fout_rtk.precision(6);
-        fout_global.open(DEBUG_FILE_DIR("pos_est.txt"),ios::out);
+        fout_global.open(DEBUG_FILE_DIR("pos_est.txt"), ios::out);
         fout_global.setf(ios::fixed, ios::floatfield);
         fout_global.precision(6);
-        fout_ppp.open(DEBUG_FILE_DIR("pos_ppp.txt"),ios::out);
+        fout_ppp.open(DEBUG_FILE_DIR("pos_ppp.txt"), ios::out);
         fout_ppp.setf(ios::fixed, ios::floatfield);
         fout_ppp.precision(6);
     }
@@ -391,40 +324,12 @@ void open_file()
 
 void cout_state_to_file(Eigen::Vector3d &pos_lla)
 {
-#ifndef LIGO_WITHOUT_GNSS
-    {
-        Eigen::Vector3d pos_enu, pos_ecef;
-        if (!nolidar)
-        {
-            Eigen::Vector3d pos_r = kf_output.x_.rot * p_gnss->Tex_imu_r + kf_output.x_.pos; // maybe improper.normalized()
-            // Eigen::Vector3d truth_imu;
-            // truth_imu << 0.0, 0.0, 0.14; // 0.0, 0.02, -0.43; // -0.16126, 0.35852, -0.30799; // deg // 
-            // Eigen::Vector3d pos_r = kf_output.x_.rot * truth_imu + kf_output.x_.pos; // maybe improper.normalized()
-            Eigen::Matrix3d enu_rot = p_gnss->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(P(0)).matrix();
-            Eigen::Vector3d anc_cur = p_gnss->p_assign->isamCurrentEstimate.at<gtsam::Vector3>(E(0));
-            pos_enu = p_gnss->local2enu(enu_rot, anc_cur, pos_r);
-            pos_ecef = enu_rot * pos_r + anc_cur;
-            local_poses.push_back(anc_cur);
-            local_rots.push_back(enu_rot);
-            pos_lla = ecef2geo(pos_ecef);
-        }
-        else
-        {
-            Eigen::Vector3d pos_r = kf_output.x_.rot * p_gnss->Tex_imu_r + kf_output.x_.pos; // .normalized()
-            pos_enu = p_gnss->local2enu(Eigen::Matrix3d::Zero(), Eigen::Vector3d::Zero(), pos_r);
-            pos_lla = ecef2geo(pos_r);
-        }
-        // local_poses.push_back(kf_output.x_.pos);
-        // local_rots.push_back(kf_output.x_.rot);
-        est_poses.push_back(pos_enu);
-        time_frame.push_back(time_predict_last_const);
-    }
-#endif
+    (void)pos_lla;
 }
 
 void cout_state_to_file_nmea()
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     {
         Eigen::Vector3d pos_enu;
         if (!nolidar)
@@ -451,7 +356,7 @@ void cout_state_to_file_nmea()
 
 bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     if (!NMEA_ENABLE || !p_nmea->nmea_ready)
         return false;
     if (!nolidar)
@@ -476,17 +381,17 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
 
 bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
     Eigen::Vector3d p_enu;
     if (!compute_fused_imu_position_enu(p_enu))
         return false;
     if (!nmea_global_anchor_ready) {
         return false;
     }
-    const Eigen::Vector3d anchor_ecef = geo2ecef(nmea_global_anchor_lla);
-    const Eigen::Matrix3d R_ecef_enu = geo2rotation(nmea_global_anchor_lla);
+    const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+    const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
     const Eigen::Vector3d p_ecef = anchor_ecef + R_ecef_enu * p_enu;
-    out_lla = ecef2geo(p_ecef);
+    out_lla = gnss_comm::ecef2geo(p_ecef);
     return true;
 #else
     (void)out_lla;

@@ -86,7 +86,6 @@ void h_model_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_
 
 void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ekfom_data);
 
-void h_model_GNSS_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data);
 
 void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data);
 

@@ -35,17 +35,19 @@
  */
 
 #pragma once
+/** Raw GNSS (ephemeris/obs) pipeline removed; keep macro for legacy conditionals. */
+#ifndef GNSS_ENABLE
+#define GNSS_ENABLE 0
+#endif
 #include <rclcpp/rclcpp.hpp>
 #include <Eigen/Eigen>
 #include <Eigen/Core>
 #include <cstring>
 #include "preprocess.h"
-#ifdef LIGO_WITHOUT_GNSS
-#include "ligo_gnss_nmea_stub.h"
-#else
-#include "GNSS_Processing_fg.h"
+#ifdef LIGO_WITH_NMEA
 #include "NMEA_Processing_fg.h"
-#include "Urbannav_process/handler.h"
+#else
+#include "ligo_gnss_nmea_stub.h"
 #endif
 #include "IMU_Processing.h"
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -107,15 +109,12 @@ extern bool   runtime_pos_log, pcd_save_en, path_en;
 extern bool   scan_pub_en, scan_body_pub_en;
 extern shared_ptr<Preprocess> p_pre;
 extern shared_ptr<ImuProcess> p_imu;
-extern shared_ptr<GNSSProcess> p_gnss;
 extern shared_ptr<NMEAProcess> p_nmea;
 extern bool is_first_frame;
 extern bool dyn_filter;
 extern double dyn_filter_resolution;
 
-extern std::string gnss_ephem_topic, gnss_glo_ephem_topic, gnss_meas_topic, gnss_iono_params_topic;
 extern std::string gt_fname, ephem_fname, ppp_fname;
-extern std::string gnss_tp_info_topic, local_trigger_info_topic, rtk_pvt_topic, rtk_lla_topic;
 extern std::string nmea_meas_topic;
 extern std::string nmea_input_type;
 /** If true, gpsHandler publishes stamp diagnostics on /ligo/nmea_stamp_diag (NavSatFix path). */
@@ -129,14 +128,13 @@ extern std::vector<double> default_gnss_iono_params;
 extern double gnss_local_time_diff, gnss_ekf_noise;
 extern bool next_pulse_time_valid, update_gnss, update_nmea;
 extern bool time_diff_valid, is_first_gnss, is_first_nmea;
-extern double latest_gnss_time, next_pulse_time, last_nmea_time; 
+extern double latest_gnss_time, next_pulse_time, last_nmea_time;
 extern double time_diff_gnss_local, time_diff_nmea_local;
 extern double nmea_gps_latency;
 extern bool gnss_local_online_sync, nolidar; 
 extern double li_init_gyr_cov, li_init_acc_cov, lidar_time_inte, first_imu_time;
 extern int orig_odom_freq;
 extern double online_refine_time; //unit: s
-extern bool GNSS_ENABLE;
 extern bool NMEA_ENABLE;
 extern bool mapping_mode;
 extern bool indoor_flag;

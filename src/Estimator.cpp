@@ -208,7 +208,6 @@ void h_model_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_
 		}
 	}
 	effct_feat_num += effect_num_k;
-	if (GNSS_ENABLE) p_gnss->norm_vec_num += effect_num_k;
 	if (NMEA_ENABLE) p_nmea->norm_vec_num += effect_num_k;
 }
 
@@ -258,76 +257,9 @@ void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ek
 	}
 }
 
-void h_model_GNSS_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data)
-{
-#ifndef LIGO_WITHOUT_GNSS
-	Eigen::Matrix3d res_R = s.rot.transpose() * p_gnss->state_const_.rot;
-	Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
-	ekfom_data.h_GNSS.setIdentity();
-	// ekfom_data.h_GNSS *= p_gnss->odo_weight;
-	// ekfom_data.h_GNSS(0, 0) = p_gnss->odo_weight1; // ekfom_data.h_GNSS(3, 3) = p_gnss->odo_weight4;
-	// ekfom_data.h_GNSS(1, 1) = p_gnss->odo_weight1; // ekfom_data.h_GNSS(4, 4) = p_gnss->odo_weight5;
-	// ekfom_data.h_GNSS(0, 0) = 1.5; // p_gnss->odo_weight1; // ekfom_data.h_GNSS(5, 5) = p_gnss->odo_weight6;
-	// ekfom_data.h_GNSS(1, 1) = 1.5; // p_gnss->odo_weight1; // ekfom_data.h_GNSS(5, 5) = p_gnss->odo_weight6;
-	// ekfom_data.h_GNSS(2, 2) = 1.5; // p_gnss->odo_weight1; // ekfom_data.h_GNSS(5, 5) = p_gnss->odo_weight6;
-	ekfom_data.h_GNSS.block<3, 3>(3, 3) = 0.1 * Jacob_right_inv<double>(res_r); // 0.1 *
-	// ekfom_data.h_GNSS.block<1, 3>(3, 3) *= p_gnss->odo_weight4;
-	// ekfom_data.h_GNSS.block<1, 3>(4, 3) *= p_gnss->odo_weight5;
-	// ekfom_data.h_GNSS.block<1, 3>(5, 3) *= p_gnss->odo_weight6;
-	ekfom_data.z_GNSS.setZero();
-	// ekfom_data.h_GNSS.block<3, 3>(3, 3) = Eigen::Matrix3d::Zero(); // Jacob_right_inv<double>(res_r); // 
-	// ekfom_data.h_GNSS.block<3, 3>(6, 6) = Eigen::Matrix3d::Zero(); // Jacob_right_inv<double>(res_r); // 
-	// ekfom_data.z_GNSS.block<3, 1>(3, 0) = res_r;
-	// ekfom_data.z_GNSS.block<3, 1>(0, 0) = p_gnss->odo_weight * (p_gnss->state_const_.pos - s.pos); // 
-	ekfom_data.z_GNSS.block<3, 1>(0, 0) = p_gnss->state_const_.pos - s.pos;
-	// ekfom_data.z_GNSS(0) *= 1.5;
-	// ekfom_data.z_GNSS(1) *= 1.5;
-	// ekfom_data.z_GNSS(2) *= 1.5;
-	// ekfom_data.z_GNSS(0) = p_gnss->odo_weight1 * (p_gnss->state_const_.pos(0) - s.pos(0)); // 
-	// ekfom_data.z_GNSS(1) = p_gnss->odo_weight2 * (p_gnss->state_const_.pos(1) - s.pos(1)); // 
-	// ekfom_data.z_GNSS(2) = p_gnss->odo_weight3 * (p_gnss->state_const_.pos(2) - s.pos(2)); // 
-	ekfom_data.z_GNSS.block<3, 1>(3, 0) = 0.1 * res_r; // s.rot.transpose() * p_gnss->state_.rot; // 0.1 *
-	// ekfom_data.z_GNSS(3) *= p_gnss->odo_weight4; // s.rot.transpose() * p_gnss->state_.rot; //  
-	// ekfom_data.z_GNSS(4) *= p_gnss->odo_weight5; // s.rot.transpose() * p_gnss->state_.rot; //  
-	// ekfom_data.z_GNSS(5) *= p_gnss->odo_weight6; // s.rot.transpose() * p_gnss->state_.rot; //  
-	// ekfom_data.z_GNSS(3) = p_gnss->odo_weight1 * (p_gnss->state_const_.vel(0) - s.vel(0)); // 
-	// ekfom_data.z_GNSS(4) = p_gnss->odo_weight2 * (p_gnss->state_const_.vel(1) - s.vel(1)); // 
-	// ekfom_data.z_GNSS(5) = p_gnss->odo_weight3 * (p_gnss->state_const_.vel(2) - s.vel(2)); // 
-	// ekfom_data.z_GNSS.block<3, 1>(6, 0) = p_gnss->state_const_.vel - s.vel;
-	// double error_1 = abs(ekfom_data.z_GNSS(0)) - sqrt(abs(cov_p(0, 0)));
-	// // error_1 *= error_1;
-	// double error_2 = abs(ekfom_data.z_GNSS(1)) - sqrt(abs(cov_p(1, 1)));
-	// // error_2 *= error_2;
-	// double error_3 = abs(ekfom_data.z_GNSS(2)) - sqrt(abs(cov_p(2, 2)));
-	// // error_3 *= error_3;
-	// double error_4 = abs(ekfom_data.z_GNSS(3)) - sqrt(abs(cov_R(0, 0)));
-	// // error_4 *= error_4;
-	// double error_5 = abs(ekfom_data.z_GNSS(4)) - sqrt(abs(cov_R(1, 1)));
-	// // error_5 *= error_5;
-	// double error_6 = abs(ekfom_data.z_GNSS(5)) - sqrt(abs(cov_R(2, 2)));
-	// error_6 *= error_6;
-	// double gnss_noise_sqrt = sqrt(gnss_ekf_noise);
-	// ekfom_data.R_GNSS(0) = gnss_noise_sqrt > error_1? gnss_ekf_noise : error_1 * error_1;
-	// ekfom_data.R_GNSS(1) = gnss_noise_sqrt > error_2? gnss_ekf_noise : error_2 * error_2;
-	// ekfom_data.R_GNSS(2) = gnss_noise_sqrt > error_3? gnss_ekf_noise : error_3 * error_3;
-	// ekfom_data.R_GNSS(3) = gnss_noise_sqrt > error_4? gnss_ekf_noise : error_4 * error_4;
-	// ekfom_data.R_GNSS(4) = gnss_noise_sqrt > error_5? gnss_ekf_noise : error_5 * error_5;
-	// ekfom_data.R_GNSS(5) = gnss_noise_sqrt > error_6? gnss_ekf_noise : error_6 * error_6;
-	// ekfom_data.R_GNSS(0) = gnss_ekf_noise;
-	// ekfom_data.R_GNSS(1) = gnss_ekf_noise;
-	// ekfom_data.R_GNSS(2) = gnss_ekf_noise;
-	// ekfom_data.R_GNSS(3) = gnss_ekf_noise;
-	// ekfom_data.R_GNSS(4) = gnss_ekf_noise;
-	// ekfom_data.R_GNSS(5) = gnss_ekf_noise;
-	// double max_err = error_1 > error_2? error_1 : error_2;
-	// max_err = max_err > error_3? max_err : error_3;
-	ekfom_data.M_Noise = gnss_ekf_noise; // > max_err? gnss_ekf_noise : max_err;
-#endif
-}
-
 void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data)
 {
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
 	Eigen::Matrix3d res_R = s.rot.transpose() * p_nmea->state_const_.rot;
 	Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
 	ekfom_data.h_NMEA.setIdentity();
@@ -373,6 +305,11 @@ void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d
 	// ekfom_data.z_NMEA.block<3, 1>(0, 0) = p_nmea->state_const_.pos - s.pos - s.vel * s.time_diff - 0.5 * s.acc * s.time_diff * s.time_diff; // 
 	// ekfom_data.z_NMEA.block<3, 1>(6, 0) = p_nmea->state_const_.vel - s.vel - s.acc * s.time_diff; // 
 	// ekfom_data.z_NMEA.block<3, 1>(3, 0) = res_r; // s.rot.transpose() * p_gnss->state_.rot; //  
+#else
+	(void)s;
+	(void)cov_p;
+	(void)cov_R;
+	ekfom_data.valid = false;
 #endif
 }
 
