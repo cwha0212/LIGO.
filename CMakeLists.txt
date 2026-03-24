@@ -60,9 +60,20 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 find_package(Eigen3 REQUIRED)
 find_package(PCL 1.8 REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(GTSAM REQUIRED QUIET)
-find_package(Ceres REQUIRED)
+# Minimum: Ceres 2.2.0 (ceres/manifold.h, EigenQuaternionManifold), GTSAM 4.1.1.
+# Override search: -DCeres_DIR=... -DGTSAM_DIR=... or CMAKE_PREFIX_PATH to install roots.
+find_package(Ceres 2.2.0 REQUIRED)
+if(CERES_VERSION VERSION_LESS 2.2.0)
+  message(FATAL_ERROR
+    "ligo requires Ceres Solver >= 2.2.0 (reported '${CERES_VERSION}'). "
+    "Build/install Ceres 2.2.0+ and point Ceres_DIR to its build or install tree.")
+endif()
+find_package(GTSAM 4.1.1 REQUIRED CONFIG)
 find_package(Sophus REQUIRED)
+message(STATUS "ligo: Ceres ${CERES_VERSION}")
+if(DEFINED GTSAM_VERSION_STRING)
+  message(STATUS "ligo: GTSAM ${GTSAM_VERSION_STRING}")
+endif()
 
 # small_gicp integration policy:
 # 1) prefer bundled thirdparty include directory in this package
@@ -179,6 +190,10 @@ target_include_directories(ligo_mapping PRIVATE
 )
 
 install(TARGETS ligo_mapping
+  DESTINATION lib/${PROJECT_NAME}
+)
+install(PROGRAMS
+  scripts/grid_membership_monitor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY config rviz_cfg launch

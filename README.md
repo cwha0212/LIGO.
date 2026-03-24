@@ -81,7 +81,9 @@ Please follow the *Differential GNSS* section shown in [ublox driver](https://gi
 
 ### Prerequisites
 - ROS 2 (tested with Humble/Jazzy)
-- C++17, Eigen3, PCL, GTSAM, Ceres, Sophus, OpenCV
+- C++17, Eigen3, PCL, Sophus, OpenCV
+- **Ceres Solver ≥ 2.2.0** (Ubuntu `libceres-dev` is often 2.0.x and lacks `ceres/manifold.h`; build [Ceres 2.2.0](https://github.com/ceres-solver/ceres-solver/releases/tag/2.2.0) from source if needed)
+- **GTSAM ≥ 4.1.1** ([release 4.1.1](https://github.com/borglab/gtsam/releases/tag/4.1.1) or newer 4.x; CMake enforces the minimum via `find_package`)
 - **livox_ros_driver2** (ROS 2 Livox driver)
 - **gnss_comm**: GNSS support requires a ROS 2–compatible gnss_comm in the same workspace (e.g. build from [gnss_comm](https://github.com/HKUST-Aerial-Robotics/gnss_comm) and port to ROS 2, or use a community port).
 

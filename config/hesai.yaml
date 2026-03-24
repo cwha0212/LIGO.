@@ -10,9 +10,10 @@ preprocess:
     scan_line: 32 
     timestamp_unit: 1      # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
     blind: 2.0             # near bline area
-    det_range: 1000        # distance range
+    det_range: 20        # distance range (meters)
 
 mapping:
+    det_range: 20 # mapping stage effective lidar range limit (meters)
     imu_en: true
     imu_time_inte: 0.005 # = 1 / frequency of IMU
     lidar_time_inte: 0.1 # = 1 / frequency of LiDAR
