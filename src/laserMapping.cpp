@@ -1192,7 +1192,10 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_gnss->gnss_msg, p_nmea->nmea_msg)) 
         {
-            ligo::indoor::updateIndoorLocalizationPlaceholder(state_out.pos, state_out.rot, time_current);
+            if (!mapping_mode)
+            {
+                ligo::indoor::updateIndoorLocalizationPlaceholder(state_out.pos, state_out.rot, time_current);
+            }
             // TODO(indoor): enable real graph insertion after localization module is implemented.
             // ligo::indoor::addIndoorFactorToGraphStubCommented();
             if (flg_reset)
@@ -1710,8 +1713,8 @@ int main(int argc, char** argv)
 
                                         const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                         const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
-                                        const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                        const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                        const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                        const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                         if (trigger_normal || trigger_temp)
                                         {
                                             if (trigger_normal)
@@ -2006,8 +2009,8 @@ int main(int argc, char** argv)
 
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
-                                const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
                                 {
                                     if (trigger_normal)
@@ -2496,8 +2499,8 @@ int main(int argc, char** argv)
                                 update_nmea = p_nmea->Evaluate(kf_output.x_); 
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
-                                const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
                                 {
                                     if (trigger_normal)

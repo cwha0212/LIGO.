@@ -138,6 +138,7 @@ extern int orig_odom_freq;
 extern double online_refine_time; //unit: s
 extern bool GNSS_ENABLE;
 extern bool NMEA_ENABLE;
+extern bool mapping_mode;
 extern bool indoor_flag;
 extern double time_update_last, time_current, time_predict_last_const, t_last;
 extern Eigen::Matrix3d Rot_gnss_init;

@@ -16,6 +16,7 @@
       det_range: 1000.0          # distance range
 
     mapping:
+      mapping_mode: true # true: indoor localization/switching path disabled for pure mapping
       imu_en: true
       imu_time_inte: 0.005 # = 1 / frequency of IMU
       lidar_time_inte: 0.1 # = 1 / frequency of LiDAR
