@@ -63,6 +63,12 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include <fstream>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
+#include <limits>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <iomanip>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
 #define PUBFRAME_PERIOD     (20)
@@ -295,6 +301,342 @@ void publish_init_map(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Sh
 
 PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI(500000, 1));
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
+static std::vector<Eigen::Vector3d> pcl_wait_ray_origins;
+
+static int ligo_find_max_saved_scan_index()
+{
+    int max_index = 0;
+    try
+    {
+        const std::filesystem::path pcd_dir = std::filesystem::path(ROOT_DIR) / "PCD";
+        if (!std::filesystem::exists(pcd_dir) || !std::filesystem::is_directory(pcd_dir))
+        {
+            return 0;
+        }
+        constexpr const char *kPrefix = "scans_";
+        constexpr const char *kSuffix = ".pcd";
+        for (const auto &entry : std::filesystem::directory_iterator(pcd_dir))
+        {
+            if (!entry.is_regular_file())
+            {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            if (name.rfind(kPrefix, 0) != 0)
+            {
+                continue;
+            }
+            if (name.size() <= std::strlen(kPrefix) + std::strlen(kSuffix))
+            {
+                continue;
+            }
+            if (name.compare(name.size() - std::strlen(kSuffix), std::strlen(kSuffix), kSuffix) != 0)
+            {
+                continue;
+            }
+            const std::string idx_str =
+                name.substr(std::strlen(kPrefix), name.size() - std::strlen(kPrefix) - std::strlen(kSuffix));
+            bool all_digit = !idx_str.empty();
+            for (char c : idx_str)
+            {
+                if (c < '0' || c > '9')
+                {
+                    all_digit = false;
+                    break;
+                }
+            }
+            if (!all_digit)
+            {
+                continue;
+            }
+            const int idx = std::stoi(idx_str);
+            max_index = std::max(max_index, idx);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_WARN(rclcpp::get_logger("ligo"), "[pcd] failed to scan existing PCD files: %s", e.what());
+    }
+    return max_index;
+}
+
+static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix)
+{
+    if (pcd_path.size() >= 4 && pcd_path.substr(pcd_path.size() - 4) == ".pcd")
+    {
+        return pcd_path.substr(0, pcd_path.size() - 4) + suffix;
+    }
+    return pcd_path + suffix;
+}
+
+static bool ligo_ensure_parent_dir(const std::string &file_path)
+{
+    try
+    {
+        const std::filesystem::path p(file_path);
+        const std::filesystem::path parent = p.parent_path();
+        if (parent.empty())
+        {
+            return true;
+        }
+        if (std::filesystem::exists(parent))
+        {
+            return true;
+        }
+        return std::filesystem::create_directories(parent);
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] failed to create parent dir: %s", e.what());
+        return false;
+    }
+}
+
+static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointCloudXYZI::Ptr &cloud)
+{
+    if (!cloud)
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] null cloud pointer");
+        return false;
+    }
+    if (!ligo_ensure_parent_dir(file_path))
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] parent directory is unavailable: %s", file_path.c_str());
+        return false;
+    }
+    try
+    {
+        pcl::PCDWriter pcd_writer;
+        pcd_writer.writeBinary(file_path, *cloud);
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] writeBinary failed: %s (%s)", file_path.c_str(), e.what());
+        return false;
+    }
+}
+
+static void save_grid2d_from_cloud_with_rays(
+    const PointCloudXYZI::Ptr &cloud,
+    const std::vector<Eigen::Vector3d> &ray_origins,
+    const std::string &pcd_path,
+    const std::string &frame_id,
+    double resolution_m,
+    int min_points_per_cell = 3,
+    double z_min_m = -1e9,
+    double z_max_m = 1e9)
+{
+    if (!cloud || cloud->empty() || resolution_m <= 0.0 || ray_origins.size() != cloud->size())
+    {
+        return;
+    }
+
+    std::unordered_map<uint64_t, uint32_t> cell_counts;
+    cell_counts.reserve(cloud->size() / 2 + 1);
+
+    int min_ix = std::numeric_limits<int>::max();
+    int min_iy = std::numeric_limits<int>::max();
+    int max_ix = std::numeric_limits<int>::min();
+    int max_iy = std::numeric_limits<int>::min();
+
+    for (size_t i = 0; i < cloud->points.size(); ++i)
+    {
+        const auto &pt = cloud->points[i];
+        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
+        {
+            continue;
+        }
+        if (pt.z < z_min_m || pt.z > z_max_m)
+        {
+            continue;
+        }
+
+        const int ix = static_cast<int>(std::floor(static_cast<double>(pt.x) / resolution_m));
+        const int iy = static_cast<int>(std::floor(static_cast<double>(pt.y) / resolution_m));
+        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
+                             static_cast<uint32_t>(iy);
+        cell_counts[key] += 1U;
+
+        min_ix = std::min(min_ix, ix);
+        min_iy = std::min(min_iy, iy);
+        max_ix = std::max(max_ix, ix);
+        max_iy = std::max(max_iy, iy);
+
+        const Eigen::Vector3d &org = ray_origins[i];
+        if (std::isfinite(org.x()) && std::isfinite(org.y()))
+        {
+            const int iox = static_cast<int>(std::floor(org.x() / resolution_m));
+            const int ioy = static_cast<int>(std::floor(org.y() / resolution_m));
+            min_ix = std::min(min_ix, iox);
+            min_iy = std::min(min_iy, ioy);
+            max_ix = std::max(max_ix, iox);
+            max_iy = std::max(max_iy, ioy);
+        }
+    }
+
+    if (cell_counts.empty())
+    {
+        return;
+    }
+
+    const std::string pgm_path = ligo_replace_pcd_suffix(pcd_path, "_grid2d.pgm");
+    const std::string yaml_path = ligo_replace_pcd_suffix(pcd_path, "_grid2d.yaml");
+
+    const int width = max_ix - min_ix + 1;
+    const int height = max_iy - min_iy + 1;
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+    constexpr uint64_t kMaxPgmPixels = 120000000ULL;
+    const uint64_t num_pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    if (num_pixels > kMaxPgmPixels)
+    {
+        RCLCPP_WARN(
+            rclcpp::get_logger("ligo"),
+            "[map/grid2d] skip pgm export: image too large (%d x %d = %llu pixels)",
+            width, height, static_cast<unsigned long long>(num_pixels));
+        return;
+    }
+
+    // PGM occupancy encoding:
+    //   0   : occupied
+    //   254 : free
+    //   205 : unknown
+    std::vector<unsigned char> image(static_cast<size_t>(num_pixels), 205);
+
+    auto mark_cell = [&](int ix, int iy, unsigned char value) {
+        const int col = ix - min_ix;
+        const int row = max_iy - iy;
+        if (row >= 0 && row < height && col >= 0 && col < width)
+        {
+            const size_t idx = static_cast<size_t>(row) * static_cast<size_t>(width) + static_cast<size_t>(col);
+            // Keep occupied strongest.
+            if (image[idx] != 0 || value == 0)
+            {
+                image[idx] = value;
+            }
+        }
+    };
+
+    // Ray-cast free cells from sensor origin to hit point endpoint (endpoint excluded).
+    for (size_t i = 0; i < cloud->points.size(); ++i)
+    {
+        const auto &pt = cloud->points[i];
+        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
+        {
+            continue;
+        }
+        if (pt.z < z_min_m || pt.z > z_max_m)
+        {
+            continue;
+        }
+        const Eigen::Vector3d &org = ray_origins[i];
+        if (!std::isfinite(org.x()) || !std::isfinite(org.y()))
+        {
+            continue;
+        }
+
+        int x0 = static_cast<int>(std::floor(org.x() / resolution_m));
+        int y0 = static_cast<int>(std::floor(org.y() / resolution_m));
+        const int x1 = static_cast<int>(std::floor(static_cast<double>(pt.x) / resolution_m));
+        const int y1 = static_cast<int>(std::floor(static_cast<double>(pt.y) / resolution_m));
+
+        int dx = std::abs(x1 - x0);
+        int sx = x0 < x1 ? 1 : -1;
+        int dy = -std::abs(y1 - y0);
+        int sy = y0 < y1 ? 1 : -1;
+        int err = dx + dy;
+        while (true)
+        {
+            if (!(x0 == x1 && y0 == y1))
+            {
+                mark_cell(x0, y0, 254);
+            }
+            if (x0 == x1 && y0 == y1)
+            {
+                break;
+            }
+            const int e2 = 2 * err;
+            if (e2 >= dy)
+            {
+                err += dy;
+                x0 += sx;
+            }
+            if (e2 <= dx)
+            {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
+
+    size_t occupied_cells = 0;
+    for (const auto &kv : cell_counts)
+    {
+        const uint64_t key = kv.first;
+        const int ix = static_cast<int32_t>(static_cast<uint32_t>(key >> 32));
+        const int iy = static_cast<int32_t>(static_cast<uint32_t>(key & 0xffffffffULL));
+        const uint32_t cnt = kv.second;
+        const int occupied = (cnt >= static_cast<uint32_t>(std::max(1, min_points_per_cell))) ? 1 : 0;
+        if (!occupied)
+        {
+            continue;
+        }
+        occupied_cells++;
+
+        mark_cell(ix, iy, 0);
+    }
+
+    std::ofstream f_pgm(pgm_path, std::ios::binary);
+    if (!f_pgm.is_open())
+    {
+        RCLCPP_WARN(rclcpp::get_logger("ligo"), "failed to open grid pgm: %s", pgm_path.c_str());
+        return;
+    }
+    f_pgm << "P5\n" << width << " " << height << "\n255\n";
+    f_pgm.write(reinterpret_cast<const char *>(image.data()), static_cast<std::streamsize>(image.size()));
+    f_pgm.close();
+
+    std::ofstream f_yaml(yaml_path);
+    if (!f_yaml.is_open())
+    {
+        RCLCPP_WARN(rclcpp::get_logger("ligo"), "failed to open grid yaml: %s", yaml_path.c_str());
+        return;
+    }
+    // Keep high precision in metadata for large-coordinate frames like ECEF.
+    f_yaml << std::fixed << std::setprecision(12);
+    f_yaml << "image: " << pgm_path << "\n";
+    f_yaml << "resolution: " << resolution_m << "\n";
+    f_yaml << "origin: ["
+           << (static_cast<double>(min_ix) * resolution_m) << ", "
+           << (static_cast<double>(min_iy) * resolution_m) << ", 0.0]\n";
+    f_yaml << "negate: 0\n";
+    f_yaml << "occupied_thresh: 0.65\n";
+    f_yaml << "free_thresh: 0.196\n";
+    f_yaml << "mode: trinary\n";
+    f_yaml << "source_pcd: " << pcd_path << "\n";
+    f_yaml << "frame_id: " << frame_id << "\n";
+    f_yaml << "grid_type: occupancy_2d_raycast\n";
+    f_yaml << "min_points_per_cell: " << std::max(1, min_points_per_cell) << "\n";
+    f_yaml << "z_filter_m: [" << z_min_m << ", " << z_max_m << "]\n";
+    f_yaml << "width_cells: " << width << "\n";
+    f_yaml << "height_cells: " << height << "\n";
+    f_yaml << "num_cells_total: " << cell_counts.size() << "\n";
+    f_yaml << "num_cells_occupied: " << occupied_cells << "\n";
+    f_yaml.close();
+
+    RCLCPP_INFO(
+        rclcpp::get_logger("ligo"),
+        "[map/grid2d] saved pgm grid: frame=%s cells=%zu occupied=%zu res=%.2f -> %s",
+        frame_id.c_str(),
+        cell_counts.size(),
+        occupied_cells,
+        resolution_m,
+        pgm_path.c_str());
+}
+
 void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pubLaserCloudFullRes)
 {
     if (scan_pub_en)
@@ -303,23 +645,40 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
         int size = laserCloudFullRes->points.size();
 
         PointCloudXYZI::Ptr   laserCloudWorld(new PointCloudXYZI(size, 1));
+        bool use_enu_for_pub = false;
+#ifndef LIGO_WITHOUT_GNSS
+        use_enu_for_pub = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+        Eigen::Matrix3d R_local_to_enu = Eigen::Matrix3d::Identity();
+        Eigen::Vector3d t_local_to_enu = Eigen::Vector3d::Zero();
+        if (use_enu_for_pub)
+        {
+            R_local_to_enu = p_nmea->icp_R_local_to_enu;
+            t_local_to_enu = p_nmea->icp_t_local_to_enu;
+        }
+#endif
         
         for (int i = 0; i < size; i++)
         {
-            // if (i % 3 == 0)
-            {
-            laserCloudWorld->points[i].x = feats_down_world->points[i].x; // updatedmap[i / 3](0); // 
-            laserCloudWorld->points[i].y = feats_down_world->points[i].y; // updatedmap[i / 3](1); // 
-            laserCloudWorld->points[i].z = feats_down_world->points[i].z; // updatedmap[i / 3](2); // 
-            laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity; // feats_down_world->points[i].y; // updatedmap[i / 3](2); //feats_down_world->points[i].z; // 
-            }
+            const Eigen::Vector3d p_local(
+                feats_down_world->points[i].x,
+                feats_down_world->points[i].y,
+                feats_down_world->points[i].z);
+#ifndef LIGO_WITHOUT_GNSS
+            const Eigen::Vector3d p_pub = use_enu_for_pub ? (R_local_to_enu * p_local + t_local_to_enu) : p_local;
+#else
+            const Eigen::Vector3d p_pub = p_local;
+#endif
+            laserCloudWorld->points[i].x = p_pub.x();
+            laserCloudWorld->points[i].y = p_pub.y();
+            laserCloudWorld->points[i].z = p_pub.z();
+            laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
         }
         sensor_msgs::msg::PointCloud2 laserCloudmsg;
         pcl::toROSMsg(*laserCloudWorld, laserCloudmsg);
         
         laserCloudmsg.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
         laserCloudmsg.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
-        laserCloudmsg.header.frame_id = "camera_init";
+        laserCloudmsg.header.frame_id = use_enu_for_pub ? "map" : "camera_init";
         pubLaserCloudFullRes->publish(laserCloudmsg);
         // publish_count -= PUBFRAME_PERIOD;
     }
@@ -329,30 +688,100 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
     /* 2. noted that pcd save will influence the real-time performences **/
     if (pcd_save_en)
     {
-        int size = points_num; // feats_down_world->points.size();
-        PointCloudXYZI::Ptr   laserCloudWorld(new PointCloudXYZI(size, 1));
-
-        for (int i = 0; i < size; i++)
+#if !defined(LIGO_WITHOUT_GNSS)
+        if (NMEA_ENABLE && p_nmea)
         {
-            laserCloudWorld->points[i].x = feats_down_world->points[i].x; // updatedmap[i](0); //
-            laserCloudWorld->points[i].y = feats_down_world->points[i].y; // updatedmap[i](1); //
-            laserCloudWorld->points[i].z = feats_down_world->points[i].z; // updatedmap[i](2); //
-            laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity; // updatedmap[i](2); //
+            static int scan_wait_num = 0;
+            if (!p_nmea->icp_tf_ready)
+            {
+                if (pcl_wait_save->size() > 0)
+                    pcl_wait_save->clear();
+                if (!pcl_wait_ray_origins.empty())
+                    pcl_wait_ray_origins.clear();
+                scan_wait_num = 0;
+            }
+            else
+            {
+                const int size = static_cast<int>(feats_down_world->points.size());
+                if (size <= 0)
+                {
+                    return;
+                }
+                PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+
+                const Eigen::Matrix3d R_local_to_enu = p_nmea->icp_R_local_to_enu;
+                const Eigen::Vector3d t_local_to_enu = p_nmea->icp_t_local_to_enu;
+                const Eigen::Matrix3d R_ecef_enu = ecef2rotation(first_gps_ecef);
+                const Eigen::Vector3d origin_local = kf_output.x_.pos;
+                const Eigen::Vector3d origin_enu = R_local_to_enu * origin_local + t_local_to_enu;
+                const Eigen::Vector3d origin_ecef = R_ecef_enu * origin_enu + first_gps_ecef;
+
+                for (int i = 0; i < size; i++)
+                {
+                    const Eigen::Vector3d p_local(
+                        feats_down_world->points[i].x,
+                        feats_down_world->points[i].y,
+                        feats_down_world->points[i].z);
+
+                    const Eigen::Vector3d p_enu = R_local_to_enu * p_local + t_local_to_enu;
+                    const Eigen::Vector3d p_ecef = R_ecef_enu * p_enu + first_gps_ecef;
+
+                    laserCloudWorld->points[i].x = p_ecef.x();
+                    laserCloudWorld->points[i].y = p_ecef.y();
+                    laserCloudWorld->points[i].z = p_ecef.z();
+                    laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
+                }
+
+                *pcl_wait_save += *laserCloudWorld;
+                pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_ecef);
+
+                scan_wait_num++;
+                if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
+                {
+                    pcd_index++;
+                    string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+                    cout << "current scan saved to " << all_points_dir << " (ECEF)" << endl;
+                    if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
+                    {
+                        save_grid2d_from_cloud_with_rays(
+                            pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "ecef", ivox_options_.resolution_);
+                    }
+                    pcl_wait_save->clear();
+                    pcl_wait_ray_origins.clear();
+                    scan_wait_num = 0;
+                }
+            }
         }
-
-        *pcl_wait_save += *laserCloudWorld;
-
-        static int scan_wait_num = 0;
-        scan_wait_num ++;
-        if (pcl_wait_save->size() > 0 && pcd_save_interval > 0  && scan_wait_num >= pcd_save_interval)
+        else
+#endif
         {
-            pcd_index ++;
-            string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
-            pcl::PCDWriter pcd_writer;
-            cout << "current scan saved to /PCD/" << all_points_dir << endl;
-            pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
-            pcl_wait_save->clear();
-            scan_wait_num = 0;
+            int size = points_num;
+            PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+            const Eigen::Vector3d origin_local = kf_output.x_.pos;
+
+            for (int i = 0; i < size; i++)
+            {
+                laserCloudWorld->points[i].x = feats_down_world->points[i].x;
+                laserCloudWorld->points[i].y = feats_down_world->points[i].y;
+                laserCloudWorld->points[i].z = feats_down_world->points[i].z;
+                laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
+            }
+
+            *pcl_wait_save += *laserCloudWorld;
+            pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_local);
+
+            static int scan_wait_num = 0;
+            scan_wait_num++;
+            if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
+            {
+                pcd_index++;
+                string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+                cout << "current scan saved to " << all_points_dir << endl;
+                ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save);
+                pcl_wait_save->clear();
+                pcl_wait_ray_origins.clear();
+                scan_wait_num = 0;
+            }
         }
     }
 }
@@ -951,6 +1380,15 @@ int main(int argc, char** argv)
     rclcpp::init(argc, argv);
     auto node = std::make_shared<rclcpp::Node>("laserMapping");
     readParameters(node.get());
+    if (pcd_save_en)
+    {
+        const int max_saved_idx = ligo_find_max_saved_scan_index();
+        if (max_saved_idx > pcd_index)
+        {
+            pcd_index = max_saved_idx;
+        }
+        RCLCPP_INFO(node->get_logger(), "[pcd] next scan index starts from %d", pcd_index + 1);
+    }
     RCLCPP_INFO(node->get_logger(), "lidar_type: %d", lidar_type);
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
     ivox_last_ = std::make_shared<IVoxType>(ivox_options_);
@@ -1257,7 +1695,10 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_gnss->gnss_msg, p_nmea->nmea_msg)) 
         {
-            ligo::indoor::updateIndoorLocalizationPlaceholder(state_out.pos, state_out.rot, time_current);
+            if (!mapping_mode)
+            {
+                ligo::indoor::updateIndoorLocalizationPlaceholder(state_out.pos, state_out.rot, time_current);
+            }
             // TODO(indoor): enable real graph insertion after localization module is implemented.
             // ligo::indoor::addIndoorFactorToGraphStubCommented();
             if (flg_reset)
@@ -1775,8 +2216,8 @@ int main(int argc, char** argv)
 
                                         const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                         const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
-                                        const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                        const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                        const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                        const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                         if (trigger_normal || trigger_temp)
                                         {
                                             if (trigger_normal)
@@ -2071,8 +2512,8 @@ int main(int argc, char** argv)
 
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
-                                const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
                                 {
                                     if (trigger_normal)
@@ -2561,8 +3002,8 @@ int main(int argc, char** argv)
                                 update_nmea = p_nmea->Evaluate(kf_output.x_); 
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
-                                const bool trigger_normal = indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                const bool trigger_temp = kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
+                                const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
                                 {
                                     if (trigger_normal)
@@ -2740,10 +3181,19 @@ int main(int argc, char** argv)
     /* 2. noted that pcd save will influence the real-time performences **/
     if (pcl_wait_save->size() > 0 && pcd_save_en)
     {
-        string file_name = string("scans.pcd");
-        string all_points_dir(string(string(ROOT_DIR) + "PCD/") + file_name);
-        pcl::PCDWriter pcd_writer;
-        pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
+        pcd_index++;
+        string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+#if !defined(LIGO_WITHOUT_GNSS)
+        const bool saved_in_ecef = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+#else
+        const bool saved_in_ecef = false;
+#endif
+        cout << "current scan saved to " << all_points_dir << (saved_in_ecef ? " (ECEF)" : "") << endl;
+        if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save) && saved_in_ecef)
+        {
+            save_grid2d_from_cloud_with_rays(
+                pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "ecef", ivox_options_.resolution_);
+        }
     }
     // if (GNSS_ENABLE || NMEA_ENABLE)
     {

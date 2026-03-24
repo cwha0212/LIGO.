@@ -107,6 +107,7 @@ int orig_odom_freq = 10;
 double online_refine_time = 20.0; //unit: s
 bool GNSS_ENABLE = true;
 bool NMEA_ENABLE = true;
+bool mapping_mode = false;
 bool indoor_flag = false;
 bool dyn_filter = false;
 double dyn_filter_resolution = 1.0;
@@ -161,6 +162,8 @@ void readParameters(rclcpp::Node * node)
   imu_en = get_param("mapping.imu_en", true);
   init_with_imu = get_param("mapping.init_with_imu", true);
   imu_time_inte = get_param("mapping.imu_time_inte", 0.005);
+  mapping_mode = get_param("mapping.mapping_mode", false);
+  cout << "mapping mode:" << mapping_mode << endl;
   laser_point_cov = get_param("mapping.lidar_meas_cov", 0.1);
   acc_cov_input = get_param("mapping.acc_cov_input", 0.1);
   vel_cov = get_param("mapping.vel_cov", 20.0);

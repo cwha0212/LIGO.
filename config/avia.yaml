@@ -13,9 +13,11 @@
       scan_line: 6 
       timestamp_unit: 1        # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
       blind: 0.50              # near bline area
-      det_range: 1000.0          # distance range
+      det_range: 20.0          # distance range (meters)
 
     mapping:
+      mapping_mode: false # true: indoor relocalization/switching reset disabled for pure mapping
+      det_range: 20.0 # mapping stage effective lidar range limit (meters)
       imu_en: true
       imu_time_inte: 0.005 # = 1 / frequency of IMU
       lidar_time_inte: 0.1 # = 1 / frequency of LiDAR
@@ -119,6 +121,6 @@
       scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
 
     pcd_save:
-      pcd_save_en: false
+      pcd_save_en: true
       interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
