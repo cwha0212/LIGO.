@@ -38,21 +38,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <fstream>
-#include <chrono>
-// #region agent log
-static inline void ligo_dbg62(const char* location, const char* message, const std::string& data_json,
-                              const char* hypothesisId, const char* runId = "pre-fix") {
-    try {
-        std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-62f312.log", std::ios::app);
-        if (!f.is_open()) return;
-        const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        f << "{\"sessionId\":\"62f312\",\"runId\":\"" << runId << "\",\"hypothesisId\":\"" << hypothesisId
-          << "\",\"location\":\"" << location << "\",\"message\":\"" << message << "\",\"data\":" << data_json
-          << ",\"timestamp\":" << ts << "}\n";
-    } catch (...) {}
-}
-// #endregion
 
 static rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr g_nmea_stamp_diag_pub;
 
@@ -300,21 +285,6 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
             last_timestamp_lidar > 0 ? stamp_in_buf_sec - last_timestamp_lidar : 0.0);
       }
     }
-    // #region agent log
-    ligo_dbg62("li_initialization.cpp:gpsHandler", "NavSatFix->Odom pushed to nmea_meas_buf",
-               std::string("{\"enu_x\":") + std::to_string(trans_local_[0]) +
-               ",\"enu_y\":" + std::to_string(trans_local_[1]) +
-               ",\"enu_z\":" + std::to_string(trans_local_[2]) +
-               ",\"cov_xx\":" + std::to_string(gps_odom.pose.covariance[0]) +
-               ",\"cov_yy\":" + std::to_string(gps_odom.pose.covariance[7]) +
-               ",\"cov_zz\":" + std::to_string(gps_odom.pose.covariance[14]) +
-               ",\"gps_ts_raw\":" + std::to_string(gps_ts_raw) +
-               ",\"gps_ts_aligned\":" + std::to_string(stamp_in_buf_sec) +
-               ",\"offset_inited\":" + std::string(nmea_stamp_offset_inited ? "true" : "false") +
-               ",\"offset_sec\":" + std::to_string(nmea_stamp_offset_sec) +
-               ",\"buf_size\":" + std::to_string(nmea_meas_buf.size()) + "}",
-               "H2");
-    // #endregion
 #endif
 }
 
@@ -1059,18 +1029,6 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
         {
             const size_t nmea_buf_before_fill = nmea_meas_buf.size();
             const size_t nmea_msg_before_fill = nmea_msg.size();
-            // #region agent log
-            ligo_dbg62("li_initialization.cpp:sync_packages(lidar)", "NMEA fill attempt (before while)",
-                       std::string("{\"lose_lid\":") + (lose_lid ? "true" : "false") +
-                       ",\"lidar_beg_time\":" + std::to_string(meas.lidar_beg_time) +
-                       ",\"lidar_end_time\":" + std::to_string(lidar_end_time) +
-                       ",\"lidar_time_inte\":" + std::to_string(lidar_time_inte) +
-                       ",\"time_diff_nmea_local\":" + std::to_string(time_diff_nmea_local) +
-                       ",\"nmea_meas_buf_size\":" + std::to_string(nmea_meas_buf.size()) +
-                       ",\"nmea_msg_size\":" + std::to_string(nmea_msg.size()) +
-                       ",\"front_nmea_ts\":" + std::to_string(rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds()) + "}",
-                       "H12");
-            // #endregion
             double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
             while ((!lose_lid && (front_nmea_ts < lidar_end_time + time_diff_nmea_local)) || (lose_lid && (front_nmea_ts < meas.lidar_beg_time + time_diff_nmea_local + lidar_time_inte) )) 
             {
@@ -1079,14 +1037,6 @@ bool sync_packages(MeasureGroup &meas, queue<std::vector<ObsPtr>> &gnss_msg, que
                 if (nmea_meas_buf.empty()) break;
                 front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
             }
-            // #region agent log
-            ligo_dbg62("li_initialization.cpp:sync_packages(lidar)", "NMEA fill attempt (after while)",
-                       std::string("{\"nmea_meas_buf_size\":" + std::to_string(nmea_meas_buf.size()) +
-                       ",\"nmea_msg_size\":" + std::to_string(nmea_msg.size()) +
-                       ",\"front_nmea_ts_after\":" + (nmea_meas_buf.empty() ? std::string("null") : std::to_string(rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds())) +
-                       "}"),
-                       "H12");
-            // #endregion
             const size_t nmea_pushed = nmea_msg.size() - nmea_msg_before_fill;
             const size_t nmea_popped = nmea_buf_before_fill - nmea_meas_buf.size();
             if (nmea_pushed > 0 || nmea_popped > 0)

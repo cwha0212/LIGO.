@@ -61,7 +61,6 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include "Indoor_Processing.h"
 #include <malloc.h>
 #include <fstream>
-#include <chrono>
 #include <cmath>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
@@ -132,84 +131,25 @@ static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odom
 static int nmea_outdoor_good_streak = 0;
 static bool nmea_cycle_reopen_pending = false;
 
-// #region agent log
-/** NDJSON debug ingest: session a3a668 — hypotheses H1–H4 for NMEA outdoor re-align path. */
-static void nmeaOutdoorDebugLog(const char *hypothesisId, const char *location, const char *message,
-                                long long cov0_u, long long cov7_u, long long cov14_u,
-                                int streak, int need, int pending, int nmea_ready_i, int indoor_once_i)
-{
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch())
-                        .count();
-    std::ofstream lf("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-a3a668.log", std::ios::app);
-    if (!lf)
-        return;
-    lf << "{\"sessionId\":\"a3a668\",\"runId\":\"pre-verify\",\"hypothesisId\":\"" << hypothesisId
-       << "\",\"location\":\"" << location << "\",\"message\":\"" << message
-       << "\",\"data\":{\"cov0_e6\":" << cov0_u << ",\"cov7_e6\":" << cov7_u << ",\"cov14_e6\":" << cov14_u
-       << ",\"streak\":" << streak << ",\"need\":" << need << ",\"pending\":" << pending
-       << ",\"nmea_ready\":" << nmea_ready_i << ",\"indoor_reloc_once\":" << indoor_once_i << "}"
-       << ",\"timestamp\":" << ms << "}\n";
-}
-// #endregion
-
 static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
 {
     if (!NMEA_ENABLE)
         return;
-    // H4: path never entered because preconditions false (sample occasionally to avoid spam)
-    static int nmea_dbg_skip = 0;
     if (!p_nmea->nmea_ready || !indoor_reloc_applied_once)
-    {
-        if ((++nmea_dbg_skip % 200) == 0)
-        {
-            // #region agent log
-            nmeaOutdoorDebugLog("H4", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "precondition_false",
-                                (long long)std::llround(nmea_cur->pose.covariance[0] * 1e6),
-                                (long long)std::llround(nmea_cur->pose.covariance[7] * 1e6),
-                                (long long)std::llround(nmea_cur->pose.covariance[14] * 1e6),
-                                nmea_outdoor_good_streak, p_nmea ? (p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size) : -1,
-                                nmea_cycle_reopen_pending ? 1 : 0, p_nmea && p_nmea->nmea_ready ? 1 : 0,
-                                indoor_reloc_applied_once ? 1 : 0);
-            // #endregion
-        }
         return;
-    }
     const double thr = p_nmea->p_assign->ppp_std_threshold;
-    const long long c0 = (long long)std::llround(nmea_cur->pose.covariance[0] * 1e6);
-    const long long c7 = (long long)std::llround(nmea_cur->pose.covariance[7] * 1e6);
-    const long long c14 = (long long)std::llround(nmea_cur->pose.covariance[14] * 1e6);
     const int need = p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size;
     if (!nmeaCovarianceAcceptableForNmeaInit(nmea_cur, thr))
     {
-        const int was = nmea_outdoor_good_streak;
         nmea_outdoor_good_streak = 0;
-        if (was > 0)
-        {
-            // #region agent log
-            // H3: good-cov streak broken by a bad sample while still in indoor session
-            nmeaOutdoorDebugLog("H3", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "streak_broken_by_cov",
-                                c0, c7, c14, was, need, nmea_cycle_reopen_pending ? 1 : 0, 1, 1);
-            // #endregion
-        }
         return;
     }
     nmea_outdoor_good_streak++;
-    // #region agent log
-    // H1/H4: progress toward outdoor Reset (init-quality covariance streak)
-    nmeaOutdoorDebugLog("H4", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "good_cov_streak_tick",
-                        c0, c7, c14, nmea_outdoor_good_streak, need, nmea_cycle_reopen_pending ? 1 : 0, 1, 1);
-    // #endregion
     if (nmea_outdoor_good_streak >= need)
     {
         RCLCPP_WARN(rclcpp::get_logger("ligo"),
                     "NMEA outdoor re-align: Reset() after %d consecutive init-quality covariance samples (wind_size=%d)",
                     nmea_outdoor_good_streak, p_nmea->wind_size);
-        // #region agent log
-        // H2: NMEA graph Reset() fired for outdoor re-align
-        nmeaOutdoorDebugLog("H2", "laserMapping.cpp:nmeaMaybeTriggerOutdoorRealignAfterIndoor", "reset_called_before",
-                            c0, c7, c14, nmea_outdoor_good_streak, need, 0, 1, 1);
-        // #endregion
         p_nmea->Reset();
         nmea_cycle_reopen_pending = true;
         nmea_outdoor_good_streak = 0;
@@ -225,11 +165,6 @@ static void nmeaClearCycleIfRealignComplete()
     nmea_outdoor_good_streak = 0;
     RCLCPP_INFO(rclcpp::get_logger("ligo"),
                 "NMEA outdoor re-align finished; indoor_reloc_applied_once cleared (indoor can trigger again)");
-    // #region agent log
-    // H2: realign finished — indoor cycle can trigger again
-    nmeaOutdoorDebugLog("H2", "laserMapping.cpp:nmeaClearCycleIfRealignComplete", "cycle_cleared_indoor_rearmed",
-                        0, 0, 0, 0, p_nmea ? (p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size) : -1, 0, 1, 0);
-    // #endregion
 }
 #endif
 
