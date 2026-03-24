@@ -118,6 +118,8 @@ extern std::string gt_fname, ephem_fname, ppp_fname;
 extern std::string gnss_tp_info_topic, local_trigger_info_topic, rtk_pvt_topic, rtk_lla_topic;
 extern std::string nmea_meas_topic;
 extern std::string nmea_input_type;
+/** If true, gpsHandler publishes stamp diagnostics on /ligo/nmea_stamp_diag (NavSatFix path). */
+extern bool nmea_publish_stamp_diag;
 extern std::string enu_position_topic;
 extern std::string enu_position_frame_id;
 extern std::string global_position_topic;
@@ -129,6 +131,7 @@ extern bool next_pulse_time_valid, update_gnss, update_nmea;
 extern bool time_diff_valid, is_first_gnss, is_first_nmea;
 extern double latest_gnss_time, next_pulse_time, last_nmea_time; 
 extern double time_diff_gnss_local, time_diff_nmea_local;
+extern double nmea_gps_latency;
 extern bool gnss_local_online_sync, nolidar; 
 extern double li_init_gyr_cov, li_init_acc_cov, lidar_time_inte, first_imu_time;
 extern int orig_odom_freq;

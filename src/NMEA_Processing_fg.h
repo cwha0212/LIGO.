@@ -69,11 +69,16 @@ class NMEAProcess
                 Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot);
   // std::vector<ObsPtr> gnss_meas_buf[WINDOW_SIZE+1]; //
   std::vector<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_; //[WINDOW_SIZE+1]; //
-  // std::vector<EphemBasePtr> gnss_ephem_buf[WINDOW_SIZE+1]; // 
   // Eigen::Matrix3d rot_window[WINDOW_SIZE+1]; //
   Eigen::Matrix3d rot_window[WINDOW_SIZE+1]; //
   Eigen::Vector3d pos_window[WINDOW_SIZE+1]; //
   Eigen::Vector3d vel_window[WINDOW_SIZE+1]; //
+  // Init-phase buffers: accumulate all until 3m reached (no fixed size limit).
+  std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> init_pos_buf;
+  std::vector<Eigen::Matrix3d, Eigen::aligned_allocator<Eigen::Matrix3d>> init_rot_buf;
+  std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> init_vel_buf;
+  std::vector<nav_msgs::msg::Odometry::SharedPtr> init_nmea_buf;
+  std::vector<double> init_lio_time_buf;  // LIO 각 샘플의 시각(stamp). 지연보정 시 T-L 보간에 사용
   // Eigen::Vector3d pos_window[WINDOW_SIZE+1]; //
   // Eigen::Vector3d vel_window[WINDOW_SIZE+1]; //
   Eigen::Vector3d Tex_imu_r;
@@ -106,6 +111,13 @@ class NMEAProcess
   // double para_rcv_ddt[WINDOW_SIZE+1] = {0}; //
   Eigen::Vector3d anc_enu, gravity_init;
   Eigen::Vector3d anc_local = Eigen::Vector3d::Zero();
+  // ICP rigid transform (local -> ENU) captured at initialization.
+  Eigen::Matrix3d icp_R_local_to_enu = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d icp_t_local_to_enu = Eigen::Vector3d::Zero();
+  bool icp_tf_ready = false;
+  // ICP alignment pairs for RViz visualization (LIO[i] <-> NMEA[i] in camera_init frame).
+  std::vector<Eigen::Vector3d> icp_pairs_lio;
+  std::vector<Eigen::Vector3d> icp_pairs_nmea_local;
   // Eigen::Matrix3d R_ecef_enu;
   double yaw_enu_local = 0.0;
   
@@ -116,6 +128,25 @@ class NMEAProcess
   state_output state_const_;
   state_output state_const_last;
   double nmea_weight = 1.0;
+  // NMEA-LIO init guard: run ICP only after cumulative motion from start.
+  bool init_start_set = false;
+  Eigen::Vector3d init_start_lio = Eigen::Vector3d::Zero();
+  Eigen::Vector3d init_start_nmea = Eigen::Vector3d::Zero();
+  static constexpr double GPS_MOVE_START_THRESH_M = 0.3;  // GPS 변위 이 값 초과 시 "이동 시작"으로 간주
+  double nmea_gps_latency_estimated = 0.0;  // 초기 추정 수신지연(초). 0=미추정. Fusion phase 보정에 사용.
+  double sum_nmea_lio_err_sq_xy = 0.0;      // ICP 이후 전체 경로 pair 오차² 누적
+  int n_nmea_fusion_count = 0;               // fusion 횟수
+  // 0.3m 시점 LIO-GPS 비교 (latency 진단용). icp_tf_ready 시 한 번 설정됨.
+  bool diag_03m_valid = false;
+  double diag_03m_latency_s = 0.0;           // t_gps - t_lio (초)
+  double diag_03m_t_lio = 0.0, diag_03m_t_gps = 0.0;
+  Eigen::Vector3d diag_03m_lio_pos = Eigen::Vector3d::Zero();
+  Eigen::Vector3d diag_03m_gps_at_t_lio = Eigen::Vector3d::Zero();  // t_lio 시점 GPS 보간
+  double diag_03m_lio_disp = 0.0, diag_03m_gps_disp_at_t_lio = 0.0;  // start 대비 변위
+  double init_min_lio_total_move_m = 3.0;
+  double init_min_nmea_total_move_m = 3.0;
+  int init_icp_max_iterations = 80;
+  double init_icp_max_fitness = 5.0;
   Eigen::Matrix<double, 24, 24> sqrt_lidar;
   double odo_weight1 = 1.0;
   double odo_weight2 = 1.0;

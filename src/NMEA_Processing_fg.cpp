@@ -35,6 +35,25 @@
  */
 
 #include "NMEA_Processing_fg.h"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <fstream>
+
+// #region agent log
+static inline void ligo_dbg62_nmea(const char* location, const char* message, const std::string& data_json,
+                                  const char* hypothesisId, const char* runId = "pre-fix") {
+  try {
+    std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-62f312.log", std::ios::app);
+    if (!f.is_open()) return;
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    f << "{\"sessionId\":\"62f312\",\"runId\":\"" << runId << "\",\"hypothesisId\":\"" << hypothesisId
+      << "\",\"location\":\"" << location << "\",\"message\":\"" << message << "\",\"data\":" << data_json
+      << ",\"timestamp\":" << ts << "}\n";
+  } catch (...) {}
+}
+// #endregion
 #include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
 #include <gtsam/linear/linearExceptions.h>
@@ -64,8 +83,24 @@ void NMEAProcess::Reset()
   frame_count = 0;
   invalid_lidar = false;
   Rot_nmea_init.setIdentity();
+  icp_R_local_to_enu.setIdentity();
+  icp_t_local_to_enu.setZero();
+  icp_tf_ready = false;
+  sum_nmea_lio_err_sq_xy = 0.0;
+  n_nmea_fusion_count = 0;
+  diag_03m_valid = false;
+  icp_pairs_lio.clear();
+  icp_pairs_nmea_local.clear();
+  init_start_set = false;
+  init_start_lio.setZero();
+  init_start_nmea.setZero();
   p_assign->process_feat_num = 0;
   nmea_ready = false;
+  init_pos_buf.clear();
+  init_rot_buf.clear();
+  init_vel_buf.clear();
+  init_nmea_buf.clear();
+  init_lio_time_buf.clear();
   // if (nolidar)
   {
     pre_integration->repropagate(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
@@ -102,16 +137,71 @@ void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_mea
     // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
     if (nmea_meas->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[7] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[14] > p_assign->ppp_std_threshold)
     {
+      static int rej_cov_log_count = 0;
+      if (++rej_cov_log_count <= 5 || rej_cov_log_count % 50 == 0)
+      {
+        RCLCPP_WARN(
+            rclcpp::get_logger("ligo"),
+            "[nmea/init] reject by covariance: cov=(%.3f, %.3f, %.3f) th=%.3f",
+            nmea_meas->pose.covariance[0], nmea_meas->pose.covariance[7], nmea_meas->pose.covariance[14],
+            p_assign->ppp_std_threshold);
+      }
+      // #region agent log
+      { std::ofstream f("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/.cursor/debug-288b39.log", std::ios::app); if (f.is_open()) { f << "{\"sessionId\":\"288b39\",\"location\":\"NMEA_Processing_fg.cpp:processNMEA_reject\",\"message\":\"NMEA rejected cov\",\"data\":{\"cov0\":" << nmea_meas->pose.covariance[0] << ",\"cov7\":" << nmea_meas->pose.covariance[7] << ",\"cov14\":" << nmea_meas->pose.covariance[14] << ",\"thres\":" << p_assign->ppp_std_threshold << "},\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "}\n"; f.close(); } }
+      // #endregion
       return;
     }
     {
-      rot_window[frame_count] = state.rot; //.normalized().toRotationMatrix();
-      pos_window[frame_count] = state.pos + state.rot * Tex_imu_r; // .normalized()
+      init_rot_buf.push_back(state.rot);
+      init_pos_buf.push_back(state.pos + state.rot * Tex_imu_r);
       Eigen::Matrix3d omg_skew;
       omg_skew << SKEW_SYM_MATRX(state.omg);
-      vel_window[frame_count] = state.vel + state.rot * omg_skew * Tex_imu_r; // .normalized().toRotationMatrix()
+      init_vel_buf.push_back(state.vel + state.rot * omg_skew * Tex_imu_r);
+      init_nmea_buf.push_back(nmea_meas);
+      init_lio_time_buf.push_back(rclcpp::Time(nmea_meas->header.stamp).seconds());
+      frame_count = static_cast<int>(init_pos_buf.size());
+      // Diagnostic: log each pair for LIO vs GPS trajectory analysis
+      {
+        static std::ofstream f_pair;
+        static bool pair_log_open = false;
+        const int idx = static_cast<int>(init_pos_buf.size()) - 1;
+        const double nmea_ts = rclcpp::Time(nmea_meas->header.stamp).seconds();
+        const Eigen::Vector3d &lio = init_pos_buf.back();
+        const double gx = nmea_meas->pose.pose.position.x;
+        const double gy = nmea_meas->pose.pose.position.y;
+        const double gz = nmea_meas->pose.pose.position.z;
+        if (!init_start_set)
+        {
+          if (f_pair.is_open()) f_pair.close();
+          f_pair.open("/home/tae/navi_com/ligo_init_pairs.csv", std::ios::trunc);
+          pair_log_open = f_pair.is_open();
+          if (pair_log_open) f_pair << "idx,nmea_stamp,lio_x,lio_y,lio_z,gps_x,gps_y,gps_z,lio_disp,gps_disp\n";
+        }
+        if (pair_log_open && f_pair.is_open())
+        {
+          const double lio_disp = init_start_set ? (lio - init_start_lio).norm() : 0.0;
+          const double gps_disp = init_start_set
+              ? (Eigen::Vector3d(gx, gy, gz) - init_start_nmea).norm()
+              : 0.0;
+          f_pair << idx << "," << std::fixed << nmea_ts << "," << lio.x() << "," << lio.y() << "," << lio.z()
+                 << "," << gx << "," << gy << "," << gz << "," << lio_disp << "," << gps_disp << "\n";
+          f_pair.flush();
+        }
+      }
     }
-    nmea_meas_[frame_count] = nmea_meas;
+    if (!init_start_set)
+    {
+      init_start_set = true;
+      init_start_lio = init_pos_buf.back();
+      init_start_nmea << nmea_meas->pose.pose.position.x,
+                         nmea_meas->pose.pose.position.y,
+                         nmea_meas->pose.pose.position.z;
+      RCLCPP_INFO(
+          rclcpp::get_logger("ligo"),
+          "[nmea/init] start set: lio=(%.3f,%.3f,%.3f) nmea=(%.3f,%.3f,%.3f)",
+          init_start_lio.x(), init_start_lio.y(), init_start_lio.z(),
+          init_start_nmea.x(), init_start_nmea.y(), init_start_nmea.z());
+    }
     frame_count ++;
     nmea_ready = NMEALIAlign();
     if (nmea_ready)
@@ -130,36 +220,80 @@ void NMEAProcess::runISAM2opt(void) //
 {
   gtsam::FactorIndices delete_factor;
   gtsam::FactorIndices().swap(delete_factor);
+  // Temporary safety: disable NMEA marginalization to avoid underconstrained
+  // states during factor deletion (e.g., IndeterminantLinearSystemException at r31).
+  // This keeps graph growing, but prioritizes runtime stability.
+  const bool disable_nmea_marginalization = true;
 
-  if (nmea_ready)
+  try
   {
-    bool delete_happen = false;
-    if (frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 4000)
+    if (nmea_ready)
     {
-      delete_happen = true;
-    while (frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 3000)
-    { 
-      if (!p_assign->factor_id_frame.empty())       
+      bool delete_happen = false;
+      if (!disable_nmea_marginalization && frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 4000)
       {
-        // if (frame_delete > 0)
+        delete_happen = true;
+      while (frame_num - frame_delete > delete_thred) // (graph_whole1.size() - index_delete > 3000)
+      { 
+        if (!p_assign->factor_id_frame.empty())       
         {
-        for (size_t i = 0; i < p_assign->factor_id_frame[0].size(); i++)
-        {
-          // if (p_assign->factor_id_frame[0][i] != 0 && p_assign->factor_id_frame[0][i] != 1 || nolidar)
+          // if (frame_delete > 0)
           {
-            delete_factor.push_back(p_assign->factor_id_frame[0][i]);
+          for (size_t i = 0; i < p_assign->factor_id_frame[0].size(); i++)
+          {
+            // if (p_assign->factor_id_frame[0][i] != 0 && p_assign->factor_id_frame[0][i] != 1 || nolidar)
+            {
+              delete_factor.push_back(p_assign->factor_id_frame[0][i]);
+            }
           }
+          // index_delete += p_assign->factor_id_frame[0].size();
+          }
+        
+          p_assign->factor_id_frame.pop_front();
+          frame_delete ++;
         }
-        // index_delete += p_assign->factor_id_frame[0].size();
-        }
-      
-        p_assign->factor_id_frame.pop_front();
-        frame_delete ++;
+        if (p_assign->factor_id_frame.empty()) break;
       }
-      if (p_assign->factor_id_frame.empty()) break;
-    }
-    }
+      }
 
+      if (delete_happen)
+      {
+        p_assign->delete_variables(nolidar, frame_delete, frame_num, id_accumulate, delete_factor);
+      }
+      else
+      {
+        p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
+        p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
+        p_assign->initialEstimate.clear();
+        p_assign->isam.update();
+      }
+      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
+    }
+    else
+    {
+      p_assign->isam.update(p_assign->gtSAMgraph, p_assign->initialEstimate);
+      p_assign->gtSAMgraph.resize(0); // will the initialEstimate change?
+      p_assign->initialEstimate.clear();
+      p_assign->isam.update();
+      p_assign->isamCurrentEstimate = p_assign->isam.calculateEstimate();
+    }
+  }
+  catch (const std::exception &e)
+  {
+    RCLCPP_ERROR(
+        rclcpp::get_logger("ligo"),
+        "[nmea/isam] exception in runISAM2opt: %s. Drop current NMEA factors and keep running.",
+        e.what());
+    // Do not call Reset() here: it sets nmea_ready=false and triggers full pipeline reset
+    // (including IMU re-initialization) from laserMapping. Instead, drop only current
+    // pending factors/initial values and keep last valid estimate.
+    p_assign->gtSAMgraph.resize(0);
+    p_assign->initialEstimate.clear();
+    return;
+  }
+  
+  if (nolidar && frame_num > 0 &&
+      p_assign->isamCurrentEstimate.exists(F(frame_num-1))) // || invalid_lidar)
     if (delete_happen)
     {
       p_assign->delete_variables(nolidar, frame_delete, frame_num, id_accumulate, delete_factor);
@@ -270,81 +404,347 @@ void NMEAProcess::TrajAlign(Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic
 
 bool NMEAProcess::NMEALIAlign()
 {
-  if (frame_count < wind_size + 1) return false;
-  
-  for (uint32_t i = 0; i < wind_size; i++)
+  const auto logger = rclcpp::get_logger("ligo");
+  const int n = static_cast<int>(init_pos_buf.size());
+  if (n < 2)
   {
-    if (rclcpp::Time(nmea_meas_[i+1]->header.stamp).seconds() - rclcpp::Time(nmea_meas_[i]->header.stamp).seconds() > 15 * nmea_sample_period) // need IMU to prop
+    static int init_wait_count = 0;
+    if (++init_wait_count <= 5 || init_wait_count % 50 == 0)
     {
-      // if (frame_count == wind_size + 1)
-      // {
-        for (uint32_t j = i+1; j < wind_size+1; ++j)
+      RCLCPP_INFO(
+          logger,
+          "[nmea/init] waiting data: n=%d (min 2)",
+          n);
+    }
+    return false;
+  }
+
+  // Drop leading frames if time gap too large (IMU propagation limit).
+  for (size_t i = 0; i + 1 < init_nmea_buf.size(); )
+  {
+    const double dt = rclcpp::Time(init_nmea_buf[i + 1]->header.stamp).seconds() - rclcpp::Time(init_nmea_buf[i]->header.stamp).seconds();
+    if (dt > 15 * nmea_sample_period)
+    {
+      init_pos_buf.erase(init_pos_buf.begin());
+      init_rot_buf.erase(init_rot_buf.begin());
+      init_vel_buf.erase(init_vel_buf.begin());
+      init_nmea_buf.erase(init_nmea_buf.begin());
+      init_lio_time_buf.erase(init_lio_time_buf.begin());
+      frame_count = static_cast<int>(init_pos_buf.size());
+      continue;
+    }
+    ++i;
+  }
+  const int n_valid = static_cast<int>(init_pos_buf.size());
+  if (n_valid < 2) return false;
+
+  const Eigen::Vector3d lio_cur = init_pos_buf.back();
+  const Eigen::Vector3d nmea_cur(
+      init_nmea_buf.back()->pose.pose.position.x,
+      init_nmea_buf.back()->pose.pose.position.y,
+      init_nmea_buf.back()->pose.pose.position.z);
+  const double lio_total_move = (lio_cur - init_start_lio).norm();
+  const double nmea_total_move = (nmea_cur - init_start_nmea).norm();
+  if (lio_total_move < init_min_lio_total_move_m || nmea_total_move < init_min_nmea_total_move_m)
+  {
+    return false;
+  }
+
+  // 1) 지연 추정: 처음 이동(0.3m) LIO 시각 vs GPS 시각 차이
+  std::vector<double> lio_disp(n_valid), gps_disp(n_valid);
+  for (int i = 0; i < n_valid; ++i)
+  {
+    lio_disp[i] = (init_pos_buf[i] - init_start_lio).norm();
+    const Eigen::Vector3d gv(init_nmea_buf[i]->pose.pose.position.x,
+                             init_nmea_buf[i]->pose.pose.position.y,
+                             init_nmea_buf[i]->pose.pose.position.z);
+    gps_disp[i] = (gv - init_start_nmea).norm();
+  }
+  int first_lio_03 = -1, first_gps_03 = -1;
+  constexpr double THRESH_03 = 0.3;
+  for (int i = 0; i < n_valid; ++i)
+  {
+    if (first_lio_03 < 0 && lio_disp[i] >= THRESH_03) first_lio_03 = i;
+    if (first_gps_03 < 0 && gps_disp[i] >= THRESH_03) first_gps_03 = i;
+  }
+  // latency 없음 가정: 항상 0 사용
+  double latency_est = 0.0;
+  nmea_gps_latency_estimated = 0.0;
+  if (first_lio_03 >= 0 && first_gps_03 >= 0)
+  {
+    const double t_lio = init_lio_time_buf[first_lio_03];
+    const double t_gps = rclcpp::Time(init_nmea_buf[first_gps_03]->header.stamp).seconds();
+    RCLCPP_INFO(logger, "[nmea/init] first_move: lio_0.3m=idx%d(t=%.1f) gps_0.3m=idx%d(t=%.1f) latency=0(assumed)",
+                first_lio_03, t_lio, first_gps_03, t_gps);
+  }
+  // 0.3m 시점 진단: t_lio에 LIO vs GPS 비교 (latency 유무 확인용)
+  if (first_lio_03 >= 0)
+  {
+    auto get_nmea_at_time = [&](double t_want) -> Eigen::Vector3d {
+      if (n_valid < 1) return Eigen::Vector3d::Zero();
+      if (t_want <= rclcpp::Time(init_nmea_buf.front()->header.stamp).seconds())
+        return Eigen::Vector3d(init_nmea_buf.front()->pose.pose.position.x,
+                               init_nmea_buf.front()->pose.pose.position.y,
+                               init_nmea_buf.front()->pose.pose.position.z);
+      if (t_want >= rclcpp::Time(init_nmea_buf.back()->header.stamp).seconds())
+        return Eigen::Vector3d(init_nmea_buf.back()->pose.pose.position.x,
+                               init_nmea_buf.back()->pose.pose.position.y,
+                               init_nmea_buf.back()->pose.pose.position.z);
+      for (int j = 0; j + 1 < n_valid; ++j)
+      {
+        const double t0 = rclcpp::Time(init_nmea_buf[j]->header.stamp).seconds();
+        const double t1 = rclcpp::Time(init_nmea_buf[j + 1]->header.stamp).seconds();
+        if (t0 <= t_want && t_want <= t1)
         {
-          nmea_meas_[j-i-1] = nmea_meas_[j];
-          rot_window[j-i-1] = rot_window[j];
-          pos_window[j-i-1] = pos_window[j];
-          vel_window[j-i-1] = vel_window[j];
+          const double alpha = (t1 - t0) > 1e-9 ? (t_want - t0) / (t1 - t0) : 0.0;
+          Eigen::Vector3d p0(init_nmea_buf[j]->pose.pose.position.x, init_nmea_buf[j]->pose.pose.position.y, init_nmea_buf[j]->pose.pose.position.z);
+          Eigen::Vector3d p1(init_nmea_buf[j + 1]->pose.pose.position.x, init_nmea_buf[j + 1]->pose.pose.position.y, init_nmea_buf[j + 1]->pose.pose.position.z);
+          return (1.0 - alpha) * p0 + alpha * p1;
         }
-        frame_count -= i+1;
-        // for (uint32_t j = frame_count; j < wind_size+1; ++j) // wind_size-i
-        // {
-        //   std::vector<ObsPtr> empty_vec_o;
-        //   std::vector<EphemBasePtr> empty_vec_e;
-        //   gnss_meas_buf[j].swap(empty_vec_o);
-        //   gnss_ephem_buf[j].swap(empty_vec_e); 
-        // }             
-      // }
-      return false;
+      }
+      return Eigen::Vector3d(init_nmea_buf.back()->pose.pose.position.x,
+                             init_nmea_buf.back()->pose.pose.position.y,
+                             init_nmea_buf.back()->pose.pose.position.z);
+    };
+    const double t_lio = init_lio_time_buf[first_lio_03];
+    diag_03m_lio_pos = init_pos_buf[first_lio_03];
+    diag_03m_gps_at_t_lio = get_nmea_at_time(t_lio);
+    diag_03m_lio_disp = (diag_03m_lio_pos - init_start_lio).norm();
+    diag_03m_gps_disp_at_t_lio = (diag_03m_gps_at_t_lio - init_start_nmea).norm();
+    diag_03m_latency_s = latency_est;
+    diag_03m_t_lio = t_lio;
+    diag_03m_t_gps = first_gps_03 >= 0 ? rclcpp::Time(init_nmea_buf[first_gps_03]->header.stamp).seconds() : 0.0;
+    diag_03m_valid = true;
+    RCLCPP_INFO(logger, "[nmea/03m] t_lio=%.3fs lio_disp=%.3fm gps_disp_at_t_lio=%.3fm latency=%.3fs",
+                t_lio, diag_03m_lio_disp, diag_03m_gps_disp_at_t_lio, diag_03m_latency_s);
+  }
+
+  // 2) 0.3m 이후: 보정된 시각(T-L)으로 비슷한 시간대 pair. GPS stamp T = 시각 T-L의 위치 → LIO도 T-L로 보간
+  auto get_lio_at_time = [&](double t_want) -> Eigen::Vector3d {
+    if (t_want <= init_lio_time_buf.front()) return init_pos_buf.front();
+    if (t_want >= init_lio_time_buf.back()) return init_pos_buf.back();
+    for (int j = 0; j + 1 < n_valid; ++j)
+    {
+      const double t0 = init_lio_time_buf[j], t1 = init_lio_time_buf[j + 1];
+      if (t0 <= t_want && t_want <= t1)
+      {
+        const double alpha = (t1 - t0) > 1e-9 ? (t_want - t0) / (t1 - t0) : 0.0;
+        return (1.0 - alpha) * init_pos_buf[j] + alpha * init_pos_buf[j + 1];
+      }
+    }
+    return init_pos_buf.back();
+  };
+  auto get_nmea_pos = [&](int i) -> Eigen::Vector3d {
+    return Eigen::Vector3d(init_nmea_buf[i]->pose.pose.position.x,
+                           init_nmea_buf[i]->pose.pose.position.y,
+                           init_nmea_buf[i]->pose.pose.position.z);
+  };
+  // 0.3m 이후 pair만: 보정된 시각(stamp-L)으로 LIO 보간 → 비슷한 시간대 (LIO(T-L), NMEA(stamp T))
+  auto get_lio_corrected = [&](int i) -> Eigen::Vector3d {
+    if (latency_est > 0.01)
+    {
+      const double s_i = rclcpp::Time(init_nmea_buf[i]->header.stamp).seconds();
+      return get_lio_at_time(s_i - latency_est);
+    }
+    return init_pos_buf[i];
+  };
+  auto pair_usable = [&](int i) -> bool {
+    return lio_disp[i] >= THRESH_03 && gps_disp[i] >= THRESH_03;
+  };
+  int n_used = 0;
+  Eigen::Vector2d mu_lio = Eigen::Vector2d::Zero();
+  Eigen::Vector2d mu_nmea = Eigen::Vector2d::Zero();
+  double mu_lio_z = 0.0;
+  double mu_nmea_z = 0.0;
+  for (int i = 0; i < n_valid; ++i)
+  {
+    if (!pair_usable(i)) continue;
+    const Eigen::Vector3d pl = get_lio_corrected(i);  // LIO at T-L (보정된 시각)
+    const Eigen::Vector3d pn = get_nmea_pos(i);       // NMEA at stamp T (= 시각 T-L의 위치)
+    mu_lio.x() += pl(0); mu_lio.y() += pl(1); mu_lio_z += pl(2);
+    mu_nmea.x() += pn.x(); mu_nmea.y() += pn.y(); mu_nmea_z += pn.z();
+    n_used++;
+  }
+  if (n_used < 2)
+  {
+    RCLCPP_WARN(logger, "[nmea/init] too few 0.3m+ pairs: n_used=%d", n_used);
+    return false;
+  }
+  mu_lio /= n_used; mu_nmea /= n_used; mu_lio_z /= n_used; mu_nmea_z /= n_used;
+
+  Eigen::Matrix2d sigma = Eigen::Matrix2d::Zero();
+  for (int i = 0; i < n_valid; ++i)
+  {
+    if (!pair_usable(i)) continue;
+    const Eigen::Vector3d pl3 = get_lio_corrected(i);
+    const Eigen::Vector2d pl(pl3(0), pl3(1));
+    const Eigen::Vector3d pn3 = get_nmea_pos(i);
+    const Eigen::Vector2d pn(pn3.x(), pn3.y());
+    sigma += (pn - mu_nmea) * (pl - mu_lio).transpose();
+  }
+  sigma /= n_used;
+
+  Eigen::JacobiSVD<Eigen::Matrix2d> svd(sigma, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  Eigen::Matrix2d R2 = svd.matrixU() * svd.matrixV().transpose();
+  if (R2.determinant() < 0.0)
+  {
+    Eigen::Matrix2d U = svd.matrixU();
+    U.col(1) *= -1.0;
+    R2 = U * svd.matrixV().transpose();
+  }
+  const Eigen::Vector2d t2 = mu_nmea - R2 * mu_lio;
+  const double tz = mu_nmea_z - mu_lio_z;
+
+  Eigen::Matrix4d sim_trans = Eigen::Matrix4d::Identity();
+  sim_trans(0, 0) = R2(0, 0);
+  sim_trans(0, 1) = R2(0, 1);
+  sim_trans(1, 0) = R2(1, 0);
+  sim_trans(1, 1) = R2(1, 1);
+  sim_trans(0, 3) = t2.x();
+  sim_trans(1, 3) = t2.y();
+  sim_trans(2, 3) = tz;
+
+  auto rmse_after_transform = [&](const Eigen::Matrix4d &tf) -> double {
+    double acc = 0.0;
+    int cnt = 0;
+    for (int i = 0; i < n_valid; ++i)
+    {
+      if (!pair_usable(i)) continue;
+      const Eigen::Vector3d pl = get_lio_corrected(i);
+      const Eigen::Vector4d p_in(pl(0), pl(1), pl(2), 1.0);
+      const Eigen::Vector4d p_tf = tf * p_in;
+      const Eigen::Vector3d pn = get_nmea_pos(i);
+      acc += (p_tf.x() - pn.x()) * (p_tf.x() - pn.x()) + (p_tf.y() - pn.y()) * (p_tf.y() - pn.y()) + (p_tf.z() - pn.z()) * (p_tf.z() - pn.z());
+      cnt++;
+    }
+    return cnt > 0 ? std::sqrt(acc / cnt) : 1e30;
+  };
+
+  const double pre_rmse = rmse_after_transform(Eigen::Matrix4d::Identity());
+  const double post_rmse = rmse_after_transform(sim_trans);
+  const bool align_ok = std::isfinite(post_rmse);
+  const double yaw_deg = std::atan2(sim_trans(1, 0), sim_trans(0, 0)) * 180.0 / std::acos(-1.0);
+  if (!align_ok || post_rmse > init_icp_max_fitness)
+  {
+    RCLCPP_WARN(
+        logger,
+        "[nmea/init] TIME-PAIR ALIGN rejected: ok=%d post_rmse=%.3f (max %.3f) pre_rmse=%.3f lio_total=%.3f nmea_total=%.3f",
+        align_ok ? 1 : 0, post_rmse, init_icp_max_fitness, pre_rmse, lio_total_move, nmea_total_move);
+    return false;
+  }
+  RCLCPP_INFO(
+      logger,
+      "[nmea/init] TIME-PAIR ALIGN accepted: n=%d pre_rmse=%.3f post_rmse=%.3f improve=%.2fx yaw=%.2fdeg t=(%.3f,%.3f,%.3f) lio_total=%.3f nmea_total=%.3f latency_corrected=%s",
+      n_valid,
+      pre_rmse,
+      post_rmse,
+      (post_rmse > 1e-9) ? (pre_rmse / post_rmse) : 0.0,
+      yaw_deg,
+      sim_trans(0, 3),
+      sim_trans(1, 3),
+      sim_trans(2, 3),
+      lio_total_move,
+      nmea_total_move,
+      "time_comp_0.3m+");
+  anc_enu = sim_trans.block<3, 1>(0, 3);
+  anc_local = init_pos_buf.back();
+  // Use ICP yaw for ENU-local alignment init (keep roll/pitch identity to avoid GNSS z-noise coupling).
+  Rot_nmea_init = Eigen::AngleAxisd(yaw_deg * std::acos(-1.0) / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  yaw_enu_local = yaw_deg * std::acos(-1.0) / 180.0;
+  icp_R_local_to_enu = sim_trans.block<3, 3>(0, 0);
+  icp_t_local_to_enu = sim_trans.block<3, 1>(0, 3);
+  icp_tf_ready = true;
+  // Store alignment pairs for RViz: 0.3m 이후만, 보정된 시각(LIO at T-L) 적용
+  icp_pairs_lio.clear();
+  icp_pairs_nmea_local.clear();
+  const Eigen::Matrix3d R = icp_R_local_to_enu;
+  const Eigen::Vector3d t = icp_t_local_to_enu;
+  for (int i = 0; i < n_valid; ++i)
+  {
+    if (!pair_usable(i)) continue;
+    icp_pairs_lio.push_back(get_lio_corrected(i));
+    icp_pairs_nmea_local.push_back(R.transpose() * (get_nmea_pos(i) - t));
+  }
+  // Prepare for Evaluate: nmea_meas_[0], pos_window, rot_window, vel_window for nolidar SetInit.
+  nmea_meas_.resize(1);
+  nmea_meas_[0] = init_nmea_buf.back();
+  pos_window[wind_size] = init_pos_buf.back();
+  rot_window[wind_size] = init_rot_buf.back();
+  vel_window[wind_size] = init_vel_buf.back();
+  SetInit();
+  frame_num = 1;
+  last_nmea_time = rclcpp::Time(init_nmea_buf.back()->header.stamp).seconds();
+  // Diagnostic: ICP trigger summary + all pairs for analysis
+  {
+    std::ofstream f("/home/tae/navi_com/ligo_icp_trigger.csv");
+    if (f.is_open())
+    {
+      const double first_ts = rclcpp::Time(init_nmea_buf.front()->header.stamp).seconds();
+      const double last_ts = rclcpp::Time(init_nmea_buf.back()->header.stamp).seconds();
+      f << "n_valid," << n_valid << ",first_stamp," << std::fixed << first_ts << ",last_stamp," << last_ts
+        << ",lio_move," << lio_total_move << ",nmea_move," << nmea_total_move << ",pre_rmse," << pre_rmse
+        << ",post_rmse," << post_rmse << ",latency_est," << latency_est << "\n";
+      f << "idx,nmea_stamp,lio_x,lio_y,gps_x,gps_y,lio_disp,gps_disp,pair_err_xy,used_0.3m\n";
+      const Eigen::Matrix3d R = icp_R_local_to_enu;
+      const Eigen::Vector3d t = icp_t_local_to_enu;
+      for (int i = 0; i < n_valid; ++i)
+      {
+        const Eigen::Vector3d pl = get_lio_corrected(i);
+        const Eigen::Vector3d p_enu = get_nmea_pos(i);
+        const Eigen::Vector3d gps_local = R.transpose() * (p_enu - t);
+        const double err_xy = (pl.head<2>() - gps_local.head<2>()).norm();
+        const double li_d = (pl - init_start_lio).norm();
+        const double gp_d = (p_enu - init_start_nmea).norm();
+        f << i << "," << rclcpp::Time(init_nmea_buf[i]->header.stamp).seconds();
+        f << "," << pl.x() << "," << pl.y();
+        f << "," << p_enu.x() << "," << p_enu.y();
+        f << "," << li_d << "," << gp_d;
+        f << "," << err_xy << "," << (pair_usable(i) ? "1" : "0") << "\n";
+      }
+      // Pair alignment diagnosis: GPS 시작~끝 vs LIO 시작~끝 연결 확인
+      constexpr double THRESH = 0.3;
+      int first_lio = -1, first_gps = -1;
+      for (int i = 0; i < n_valid; ++i)
+      {
+        const double li_d = (init_pos_buf[i] - init_start_lio).norm();
+        const Eigen::Vector3d gv(init_nmea_buf[i]->pose.pose.position.x,
+                                 init_nmea_buf[i]->pose.pose.position.y,
+                                 init_nmea_buf[i]->pose.pose.position.z);
+        const double gp_d = (gv - init_start_nmea).norm();
+        if (first_lio < 0 && li_d >= THRESH) first_lio = i;
+        if (first_gps < 0 && gp_d >= THRESH) first_gps = i;
+      }
+      f << "\n# pair_alignment_diagnosis: GPS/LIO 이동 시작 지점 연결 확인\n";
+      f << "# first_idx_lio_moved(0.3m)," << first_lio << ",first_idx_gps_moved(0.3m)," << first_gps << "\n";
+      f << "# 0.3m이후: 보정시각(T-L) 적용. LIO(T-L)↔NMEA(stamp T) 비슷한_시간대_pair. n_used=" << n_used << "\n";
+      f << "# estimated_gps_latency_sec," << std::fixed << latency_est
+        << ", (추정 수신지연. corrected_gap이 0 근처면 보정 적합)\n";
+      f << "\n# time_comp: L=" << std::fixed << latency_est << "s. 0.3m+ pairs만 ICP. 비슷한_시간대.\n";
+      // 각 pair의 변위 로그 (같은 시각대면 lio_disp≈gps_disp. 차이 크면 pairing 의심)
+      int pair_idx = 0;
+      double sum_gap = 0.0;
+      for (int i = 0; i < n_valid; ++i)
+      {
+        if (!pair_usable(i)) continue;
+        const Eigen::Vector3d pl = get_lio_corrected(i);
+        const double li_d = (pl - init_start_lio).norm();
+        const double gp_d = gps_disp[i];
+        const double gap = li_d - gp_d;
+        sum_gap += std::fabs(gap);
+        if (pair_idx < 3 || pair_idx == n_used / 2 || pair_idx >= n_used - 2)
+          RCLCPP_INFO(logger, "[nmea/init] pair_disp[%d] idx=%d: lio=%.3f gps=%.3f gap=%.3f (0근처면_ok)",
+                      pair_idx, i, li_d, gp_d, gap);
+        pair_idx++;
+      }
+      const double mean_gap = (n_used > 0) ? sum_gap / n_used : 0.0;
+      RCLCPP_INFO(logger, "[nmea/init] pair_disp summary: n=%d mean_|gap|=%.3f (0근처면_보정적합)", n_used, mean_gap);
+      RCLCPP_INFO(logger, "[nmea/init] time_comp: 0.3m+ n=%d, LIO(T-L)↔NMEA(T). L=%.3fs", n_used, latency_est);
+      RCLCPP_INFO(logger, "[nmea/init] diagnostic saved: ligo_init_pairs.csv ligo_icp_trigger.csv");
+      RCLCPP_INFO(logger, "[nmea/init] estimated_gps_latency=%.3fs (use for fusion)", latency_est);
+      if (first_gps >= 0)
+        RCLCPP_INFO(logger, "[nmea/init] first_move: lio_idx=%d gps_idx=%d", first_lio, first_gps);
     }
   }
-  // Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> local_traj;
-  // Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> enu_traj;
-
-  // const int n = wind_size + 1;
-  // local_traj.resize(3, n);
-  // enu_traj.resize(3, n);
-
-  // for (int i = 0; i < wind_size + 1; ++i) {
-      // local_traj.block(0, i, 3, 1) = pos_window[i];
-      // enu_traj.block(0, i, 3, 1) = Eigen::Vector3d(nmea_meas_[i]->pose.pose.position.x, nmea_meas_[i]->pose.pose.position.y, nmea_meas_[i]->pose.pose.position.z);
-  // }
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in (new pcl::PointCloud<pcl::PointXYZ>(wind_size+1, 1));
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_out (new pcl::PointCloud<pcl::PointXYZ>(wind_size+1, 1));
-
-  // Fill in the CloudIn data
-  // for (auto& point : *cloud_in)
-  for (size_t i = 0; i < wind_size + 1; i++)
-  {
-    cloud_in->points[i].x = pos_window[i](0);
-    cloud_in->points[i].y = pos_window[i](1);
-    cloud_in->points[i].z = pos_window[i](2);
-    cloud_out->points[i].x = nmea_meas_[i]->pose.pose.position.x;
-    cloud_out->points[i].y = nmea_meas_[i]->pose.pose.position.y;
-    cloud_out->points[i].z = nmea_meas_[i]->pose.pose.position.z;
-  }
-  pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
-  icp.setInputSource(cloud_in);
-  icp.setInputTarget(cloud_out);
-  
-  pcl::PointCloud<pcl::PointXYZ> Final;
-  icp.align(Final);
-
-  std::cout << "ICP has " << (icp.hasConverged()?"converged":"not converged") << ", score: " << icp.getFitnessScore() << std::endl;
-  std::cout << icp.getFinalTransformation() << std::endl;
-  // Eigen::Vector3d pos_trans;
-  // Eigen::Matrix3d rot_trans;
-  // TrajAlign(local_traj, enu_traj, pos_trans, rot_trans);
-  Eigen::Matrix4d sim_trans = icp.getFinalTransformation().cast<double>();
-  // Eigen::Vector3d pos_nmea(nmea_meas_[0]->pose.pose.position.x, nmea_meas_[0]->pose.pose.position.y, nmea_meas_[0]->pose.pose.position.z);
-  // Eigen::Vector3d pos_nmea(nmea_meas_[0]->pose.pose.position.x, nmea_meas_[0]->pose.pose.position.y, nmea_meas_[0]->pose.pose.position.z);
-  anc_enu = sim_trans.block<3, 1>(0, 3); // icp.getFinalTransformation().template block<3, 1>(0, 3); // pos_trans; // pos_nmea - pos_window[0]; //
-  anc_local = pos_window[WINDOW_SIZE]; // ?Rot_nmea_init.transpose() * pos_window[0]; // 
-  // Rot_nmea_init = sim_trans.block<3, 3>(0, 0); // icp.getFinalTransformation().template block<3, 3>(0, 0); // rot_trans; 
-  yaw_enu_local = 0.0;
-  SetInit();
-  frame_num = 1; // frame_count;
-  // last_nmea_time = rclcpp::Time(nmea_meas_[wind_size]->header.stamp).seconds();
-  last_nmea_time = rclcpp::Time(nmea_meas_[wind_size]->header.stamp).seconds();
   runISAM2opt();
   return true;
 }
@@ -428,8 +828,18 @@ bool NMEAProcess::Evaluate(state_output &state)
     return false;
   }
   
+  if (frame_num <= 0)
+  {
+    return false;
+  }
+
   if (nolidar)
   {
+    if (!p_assign->isamCurrentEstimate.exists(R(frame_num-1)) ||
+        !p_assign->isamCurrentEstimate.exists(F(frame_num-1)))
+    {
+      return false;
+    }
     state.rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num-1)).matrix();
     state.pos = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(0);
     state.vel = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(3);
@@ -439,6 +849,12 @@ bool NMEAProcess::Evaluate(state_output &state)
   }
   else
   {
+    if (!p_assign->isamCurrentEstimate.exists(R(frame_num-1)) ||
+        !p_assign->isamCurrentEstimate.exists(A(frame_num-1)) ||
+        !p_assign->isamCurrentEstimate.exists(P(0)))
+    {
+      return false;
+    }
     state_const_.rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num-1)).matrix();
     state_const_.pos = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(frame_num-1)).segment<3>(0);
     state_const_.vel = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(frame_num-1)).segment<3>(3);
@@ -557,6 +973,21 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     p_assign->gtSAMgraph.add(ligo::GnssLioFactorNolidar(R(frame_num-1), F(frame_num-1), R(frame_num), F(frame_num), rel_rot, rel_pos, rel_vel, 
                   state_gravity, delta_t, ba, bg, pre_integration, p_assign->odomNoiseIMU));
     p_assign->factor_id_frame[frame_num-1-frame_delete].push_back(id_accumulate);
+    id_accumulate += 1;
+  }
+  // Stabilize rotation DOF: always add a weak prior on R(frame_num)
+  // to avoid occasional underconstrained rotation states (e.g., r31).
+  if (!nolidar)
+  {
+    static gtsam::noiseModel::Base::shared_ptr weak_rot_prior = []() {
+      gtsam::Vector v(3);
+      v << 1e4, 1e4, 1e4;  // weak constraint
+      return gtsam::noiseModel::Diagonal::Variances(v);
+    }();
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(
+        R(frame_num), gtsam::Rot3(rot), weak_rot_prior));
+    LIGO_LOG_FACTOR("PriorFactor_R_weak", frame_num);
+    factor_id_cur.push_back(id_accumulate);
     id_accumulate += 1;
   }
   {
