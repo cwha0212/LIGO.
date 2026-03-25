@@ -45,6 +45,7 @@ public:
   SmallGICPConfig getConfig() const;
 
   bool loadMapFromPLY(const std::string& ply_path);
+  bool loadMapFromPCD(const std::string& pcd_path);
   bool setMap(const LidarCloud::ConstPtr& map_cloud);
   bool hasMap() const;
 
