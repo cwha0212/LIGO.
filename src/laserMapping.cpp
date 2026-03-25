@@ -352,7 +352,11 @@ static void save_grid2d_from_cloud_with_rays(
     double resolution_m,
     int min_points_per_cell = 3,
     double z_min_m = -1e9,
-    double z_max_m = 1e9)
+    double z_max_m = 1e9,
+    bool add_enu_to_ecef_metadata = false,
+    const Eigen::Matrix3d &R_ecef_enu = Eigen::Matrix3d::Identity(),
+    const Eigen::Vector3d &anchor_ecef_m = Eigen::Vector3d::Zero(),
+    const Eigen::Vector3d &anchor_lla_deg_m = Eigen::Vector3d::Zero())
 {
     if (!cloud || cloud->empty() || resolution_m <= 0.0 || ray_origins.size() != cloud->size())
     {
@@ -532,7 +536,7 @@ static void save_grid2d_from_cloud_with_rays(
         RCLCPP_WARN(rclcpp::get_logger("ligo"), "failed to open grid yaml: %s", yaml_path.c_str());
         return;
     }
-    // Keep high precision in metadata for large-coordinate frames like ECEF.
+    // Keep high precision in metadata for large-coordinate frames.
     f_yaml << std::fixed << std::setprecision(12);
     f_yaml << "image: " << pgm_path << "\n";
     f_yaml << "resolution: " << resolution_m << "\n";
@@ -552,6 +556,23 @@ static void save_grid2d_from_cloud_with_rays(
     f_yaml << "height_cells: " << height << "\n";
     f_yaml << "num_cells_total: " << cell_counts.size() << "\n";
     f_yaml << "num_cells_occupied: " << occupied_cells << "\n";
+    if (add_enu_to_ecef_metadata)
+    {
+        f_yaml << "ecef_from_enu:\n";
+        f_yaml << "  equation: p_ecef = anchor_ecef_m + R_ecef_enu * p_enu\n";
+        f_yaml << "  anchor_ecef_m: ["
+               << anchor_ecef_m.x() << ", "
+               << anchor_ecef_m.y() << ", "
+               << anchor_ecef_m.z() << "]\n";
+        f_yaml << "  anchor_lla_deg_m: ["
+               << anchor_lla_deg_m.x() << ", "
+               << anchor_lla_deg_m.y() << ", "
+               << anchor_lla_deg_m.z() << "]\n";
+        f_yaml << "  R_ecef_enu_row_major: ["
+               << R_ecef_enu(0, 0) << ", " << R_ecef_enu(0, 1) << ", " << R_ecef_enu(0, 2) << ", "
+               << R_ecef_enu(1, 0) << ", " << R_ecef_enu(1, 1) << ", " << R_ecef_enu(1, 2) << ", "
+               << R_ecef_enu(2, 0) << ", " << R_ecef_enu(2, 1) << ", " << R_ecef_enu(2, 2) << "]\n";
+    }
     f_yaml.close();
 
     RCLCPP_INFO(
@@ -641,7 +662,6 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 const Eigen::Matrix3d R_ecef_enu = gnss_comm::ecef2rotation(first_gps_ecef);
                 const Eigen::Vector3d origin_local = kf_output.x_.pos;
                 const Eigen::Vector3d origin_enu = R_local_to_enu * origin_local + t_local_to_enu;
-                const Eigen::Vector3d origin_ecef = R_ecef_enu * origin_enu + first_gps_ecef;
 
                 for (int i = 0; i < size; i++)
                 {
@@ -651,27 +671,27 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                         feats_down_world->points[i].z);
 
                     const Eigen::Vector3d p_enu = R_local_to_enu * p_local + t_local_to_enu;
-                    const Eigen::Vector3d p_ecef = R_ecef_enu * p_enu + first_gps_ecef;
 
-                    laserCloudWorld->points[i].x = p_ecef.x();
-                    laserCloudWorld->points[i].y = p_ecef.y();
-                    laserCloudWorld->points[i].z = p_ecef.z();
+                    laserCloudWorld->points[i].x = p_enu.x();
+                    laserCloudWorld->points[i].y = p_enu.y();
+                    laserCloudWorld->points[i].z = p_enu.z();
                     laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
                 }
 
                 *pcl_wait_save += *laserCloudWorld;
-                pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_ecef);
+                pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_enu);
 
                 scan_wait_num++;
                 if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
                 {
                     pcd_index++;
                     string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
-                    cout << "current scan saved to " << all_points_dir << " (ECEF)" << endl;
+                    cout << "current scan saved to " << all_points_dir << " (ENU)" << endl;
                     if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
                     {
                         save_grid2d_from_cloud_with_rays(
-                            pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "ecef", ivox_options_.resolution_);
+                            pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", ivox_options_.resolution_,
+                            3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla);
                     }
                     pcl_wait_save->clear();
                     pcl_wait_ray_origins.clear();
@@ -2523,15 +2543,22 @@ int main(int argc, char** argv)
         pcd_index++;
         string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
 #if !defined(LIGO_WITHOUT_GNSS)
-        const bool saved_in_ecef = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+        const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+        const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
+        const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
+        const Eigen::Vector3d anchor_lla_deg_m = saved_in_enu ? first_gps_lla : Eigen::Vector3d::Zero();
 #else
-        const bool saved_in_ecef = false;
+        const bool saved_in_enu = false;
+        const Eigen::Matrix3d R_ecef_enu = Eigen::Matrix3d::Identity();
+        const Eigen::Vector3d anchor_ecef_m = Eigen::Vector3d::Zero();
+        const Eigen::Vector3d anchor_lla_deg_m = Eigen::Vector3d::Zero();
 #endif
-        cout << "current scan saved to " << all_points_dir << (saved_in_ecef ? " (ECEF)" : "") << endl;
-        if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save) && saved_in_ecef)
+        cout << "current scan saved to " << all_points_dir << (saved_in_enu ? " (ENU)" : "") << endl;
+        if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save) && saved_in_enu)
         {
             save_grid2d_from_cloud_with_rays(
-                pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "ecef", ivox_options_.resolution_);
+                pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", ivox_options_.resolution_,
+                3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m);
         }
     }
     {

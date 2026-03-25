@@ -52,6 +52,16 @@ def parse_origin(origin_text: str) -> Tuple[float, float, float]:
     return float(parts[0]), float(parts[1]), float(parts[2])
 
 
+def parse_float_list(text: str, expected_len: int) -> Tuple[float, ...]:
+    s = text.strip()
+    if not (s.startswith("[") and s.endswith("]")):
+        raise ValueError(f"invalid list format: {text}")
+    parts = [p.strip() for p in s[1:-1].split(",")]
+    if len(parts) != expected_len:
+        raise ValueError(f"invalid list length ({len(parts)} != {expected_len}): {text}")
+    return tuple(float(p) for p in parts)
+
+
 def read_pgm(path: str) -> Tuple[int, int, bytes]:
     with open(path, "rb") as f:
         magic = f.readline().strip()
@@ -95,11 +105,33 @@ class GridMap:
     width: int
     height: int
     pixels: bytes
+    enu_anchor_ecef_m: Optional[Tuple[float, float, float]] = None
+    r_ecef_enu_row_major: Optional[Tuple[float, ...]] = None
 
-    def classify(self, x: float, y: float) -> Tuple[bool, str]:
+    def _ecef_to_map_xy(self, x: float, y: float, z: float) -> Optional[Tuple[float, float]]:
+        frame = self.frame_id.strip().lower()
+        if frame == "ecef":
+            return x, y
+        if frame == "enu":
+            if self.enu_anchor_ecef_m is None or self.r_ecef_enu_row_major is None:
+                return None
+            ax, ay, az = self.enu_anchor_ecef_m
+            dx, dy, dz = (x - ax), (y - ay), (z - az)
+            r = self.r_ecef_enu_row_major
+            # p_enu = R_ecef_enu^T * (p_ecef - anchor_ecef)
+            enu_x = r[0] * dx + r[3] * dy + r[6] * dz
+            enu_y = r[1] * dx + r[4] * dy + r[7] * dz
+            return enu_x, enu_y
+        return None
+
+    def classify(self, x: float, y: float, z: float) -> Tuple[bool, str]:
+        map_xy = self._ecef_to_map_xy(x, y, z)
+        if map_xy is None:
+            return False, "outside"
+        mx, my = map_xy
         # Row mapping matches exporter: row = max_iy - iy.
-        col = int(math.floor((x - self.origin_x) / self.resolution))
-        row_from_bottom = int(math.floor((y - self.origin_y) / self.resolution))
+        col = int(math.floor((mx - self.origin_x) / self.resolution))
+        row_from_bottom = int(math.floor((my - self.origin_y) / self.resolution))
         row = self.height - 1 - row_from_bottom
         if row < 0 or row >= self.height or col < 0 or col >= self.width:
             return False, "outside"
@@ -110,11 +142,15 @@ class GridMap:
             return True, "free"
         return True, "unknown"
 
-    def distance_to_bbox(self, x: float, y: float) -> float:
+    def distance_to_bbox(self, x: float, y: float, z: float) -> float:
+        map_xy = self._ecef_to_map_xy(x, y, z)
+        if map_xy is None:
+            return float("inf")
+        mx, my = map_xy
         max_x = self.origin_x + self.width * self.resolution
         max_y = self.origin_y + self.height * self.resolution
-        dx = 0.0 if self.origin_x <= x <= max_x else min(abs(x - self.origin_x), abs(x - max_x))
-        dy = 0.0 if self.origin_y <= y <= max_y else min(abs(y - self.origin_y), abs(y - max_y))
+        dx = 0.0 if self.origin_x <= mx <= max_x else min(abs(mx - self.origin_x), abs(mx - max_x))
+        dy = 0.0 if self.origin_y <= my <= max_y else min(abs(my - self.origin_y), abs(my - max_y))
         return math.hypot(dx, dy)
 
 
@@ -165,6 +201,18 @@ class GridMembershipMonitor(Node):
                 resolution = float(meta.get("resolution", "1.0"))
                 origin_x, origin_y, _ = parse_origin(meta.get("origin", "[0, 0, 0]"))
                 frame_id = meta.get("frame_id", "ecef")
+                enu_anchor_ecef_m: Optional[Tuple[float, float, float]] = None
+                r_ecef_enu_row_major: Optional[Tuple[float, ...]] = None
+                if frame_id.strip().lower() == "enu":
+                    anchor_txt = meta.get("anchor_ecef_m", meta.get("anchor_ecef", ""))
+                    rot_txt = meta.get("R_ecef_enu_row_major", "")
+                    if anchor_txt and rot_txt:
+                        enu_anchor_ecef_m = parse_float_list(anchor_txt, 3)
+                        r_ecef_enu_row_major = parse_float_list(rot_txt, 9)
+                    else:
+                        self.get_logger().warn(
+                            f"ENU grid missing ECEF transform metadata, map may be unusable: {ypath}"
+                        )
                 width, height, pixels = read_pgm(pgm_path)
                 map_id = os.path.basename(ypath).replace("_grid2d.yaml", "")
                 out.append(
@@ -179,6 +227,8 @@ class GridMembershipMonitor(Node):
                         width=width,
                         height=height,
                         pixels=pixels,
+                        enu_anchor_ecef_m=enu_anchor_ecef_m,
+                        r_ecef_enu_row_major=r_ecef_enu_row_major,
                     )
                 )
             except Exception as e:
@@ -208,13 +258,13 @@ class GridMembershipMonitor(Node):
             return
 
         p = self.last_position_msg
-        x, y, _ = lla_to_ecef(float(p.latitude), float(p.longitude), float(p.altitude))
+        x, y, z = lla_to_ecef(float(p.latitude), float(p.longitude), float(p.altitude))
 
         inside_known = []
         inside_unknown = []
         outside = []
         for gm in self.maps:
-            inside, state = gm.classify(x, y)
+            inside, state = gm.classify(x, y, z)
             if inside and state in ("free", "occupied"):
                 inside_known.append((gm, state))
             elif inside and state == "unknown":
@@ -242,8 +292,8 @@ class GridMembershipMonitor(Node):
             )
             return
 
-        nearest = sorted(outside, key=lambda gm: gm.distance_to_bbox(x, y))[:2]
-        nearest_txt = ", ".join([f"{m.map_id}:{m.distance_to_bbox(x, y):.1f}m" for m in nearest])
+        nearest = sorted(outside, key=lambda gm: gm.distance_to_bbox(x, y, z))[:2]
+        nearest_txt = ", ".join([f"{m.map_id}:{m.distance_to_bbox(x, y, z):.1f}m" for m in nearest])
         self.get_logger().warn(
             f"[gps_bad][grid_check] GPS covariance high ({max_diag:.2f} m^2). "
             f"outside all grids. nearest={nearest_txt}"
