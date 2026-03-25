@@ -80,8 +80,8 @@
       nmea_input_type: "navsatfix"
       ppp_std_thres: 0.01
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
-      init_min_lio_total_move_m: 5.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
-      init_min_nmea_total_move_m: 5.0
+      init_min_lio_total_move_m: 3.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
+      init_min_nmea_total_move_m: 3.0
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
       pos_noise: 5.0

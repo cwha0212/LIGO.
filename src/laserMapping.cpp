@@ -91,6 +91,10 @@ bool  flg_reset = false, flg_exit = false;
 bool  flg_reset_indoor_reloc = false;
 bool  flg_reset_outdoor_realign = false;  // full reset triggered on outdoor re-entry
 bool  indoor_reloc_applied_once = false;
+// TEMP(rollback-friendly): once indoor mode is entered, keep it latched ON.
+// Disable this by setting kTempLatchIndoorModeOnceEntered to false (or removing this block).
+constexpr bool kTempLatchIndoorModeOnceEntered = true;
+bool  indoor_mode_latched_once = false;
 Eigen::Vector3d indoor_reloc_pos_enu = Eigen::Vector3d::Zero();
 Eigen::Matrix3d indoor_reloc_rot_enu = Eigen::Matrix3d::Identity();
 double indoor_reloc_pose_time = 0.0;
@@ -140,6 +144,9 @@ static bool nmea_cycle_reopen_pending = false;
 
 static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
 {
+    // TEMP: block automatic outdoor re-entry while indoor latch is active.
+    if (kTempLatchIndoorModeOnceEntered && indoor_mode_latched_once)
+        return;
     if (!NMEA_ENABLE)
         return;
     if (!p_nmea->nmea_ready || !indoor_reloc_applied_once)
@@ -169,6 +176,9 @@ static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odome
 static void nmeaClearCycleIfRealignComplete()
 {
     if (!nmea_cycle_reopen_pending || !p_nmea->nmea_ready)
+        return;
+    // TEMP: when indoor mode is latched, never clear the indoor session on "outdoor re-align complete".
+    if (kTempLatchIndoorModeOnceEntered && indoor_mode_latched_once)
         return;
     indoor_reloc_applied_once = false;
     nmea_cycle_reopen_pending = false;
@@ -1626,7 +1636,16 @@ int main(int argc, char** argv)
         "/ligo/indoor_mode", 10,
         [](const std_msgs::msg::Bool::SharedPtr msg) {
             const bool was_indoor = indoor_flag_dynamic;
+            // TEMP: once indoor_mode=true is received, ignore later false messages.
+            if (kTempLatchIndoorModeOnceEntered && indoor_mode_latched_once && !msg->data) {
+                RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                            "[indoor] TEMP latch active: ignore indoor_mode=false, keep indoor ON");
+                return;
+            }
             indoor_flag_dynamic = msg->data;
+            if (kTempLatchIndoorModeOnceEntered && msg->data) {
+                indoor_mode_latched_once = true;
+            }
             if (!was_indoor && msg->data) {
                 RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor] dynamic indoor mode ON");
             } else if (was_indoor && !msg->data) {
@@ -1723,6 +1742,10 @@ int main(int argc, char** argv)
                         p_imu->after_imu_init_ = true;
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
                         indoor_flag_dynamic = true;
+                        // TEMP: indoor entry may happen without /ligo/indoor_mode topic (via reloc).
+                        // Latch here so later outdoor re-entry resets are blocked.
+                        if (kTempLatchIndoorModeOnceEntered)
+                            indoor_mode_latched_once = true;
 #ifdef LIGO_WITH_SMALL_GICP
                         // ECEF for grid / PCD selection: use the same ENU pose as indoor entry
                         // (indoor_reloc_* from LIO / odom), not raw GNSS ECEF — avoids map mismatch.
@@ -1784,10 +1807,18 @@ int main(int argc, char** argv)
                     }
                     else if (flg_reset_outdoor_realign)
                     {
-                        indoor_flag_dynamic = false;
+                        // TEMP: once indoor mode is latched, ignore outdoor re-entry resets.
+                        if (kTempLatchIndoorModeOnceEntered && indoor_mode_latched_once)
+                        {
+                            // Keep current indoor_flag_dynamic and indoor GICP session intact.
+                        }
+                        else
+                        {
+                            indoor_flag_dynamic = false;
 #ifdef LIGO_WITH_SMALL_GICP
-                        ligo::indoor::resetIndoorGICP();
+                            ligo::indoor::resetIndoorGICP();
 #endif
+                        }
                     }
                     kf_output.change_P(P_init_output);
                 }
