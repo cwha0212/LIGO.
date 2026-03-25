@@ -241,10 +241,9 @@ bool loadIndoorGridMapsFromDirectory(const std::string &dir) {
             coefs.push_back(std::stod(part));
           }
           if (coefs.size() == 9) {
-            g.R_ecef_enu <<
-                coefs[0], coefs[1], coefs[2],
-                coefs[3], coefs[4], coefs[5],
-                coefs[6], coefs[7], coefs[8];
+            // YAML stores row-major; Eigen::Matrix << fills column-major — use RowMajor map.
+            g.R_ecef_enu = Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::RowMajor>>(
+                coefs.data());
             g.has_enu_transform = true;
           }
         }

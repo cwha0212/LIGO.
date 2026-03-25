@@ -806,14 +806,94 @@ void set_posestamp_enu(T & out)
     }
 }
 
+namespace {
+
+/** Shared map-frame pose for /aft_mapped, /path, and TF during NMEA re-align gaps. */
+struct MapFramePoseCache {
+    bool ever_enu = false;
+    Eigen::Matrix3d stale_icp_R = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d stale_icp_t = Eigen::Vector3d::Zero();
+    Eigen::Vector3d last_enu_pos = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond last_enu_q = Eigen::Quaterniond::Identity();
+    Eigen::Vector3d prev_kf_pos = Eigen::Vector3d::Zero();
+    Eigen::Vector3d gap_enu_pos = Eigen::Vector3d::Zero();
+    bool in_gap = false;
+
+    Eigen::Vector3d out_pos = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond out_q = Eigen::Quaterniond::Identity();
+    bool out_in_map_frame = false;
+};
+
+MapFramePoseCache g_map_frame_pose;
+
+void refresh_map_frame_pose_cache()
+{
+    const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+    if (use_enu)
+        g_map_frame_pose.ever_enu = true;
+
+    if (use_enu)
+    {
+        g_map_frame_pose.in_gap = false;
+        g_map_frame_pose.stale_icp_R = p_nmea->icp_R_local_to_enu;
+        g_map_frame_pose.stale_icp_t = p_nmea->icp_t_local_to_enu;
+        g_map_frame_pose.last_enu_pos =
+            g_map_frame_pose.stale_icp_R * kf_output.x_.pos + g_map_frame_pose.stale_icp_t;
+        g_map_frame_pose.last_enu_q =
+            Eigen::Quaterniond(g_map_frame_pose.stale_icp_R * kf_output.x_.rot).normalized();
+        g_map_frame_pose.prev_kf_pos = kf_output.x_.pos;
+        g_map_frame_pose.out_pos = g_map_frame_pose.last_enu_pos;
+        g_map_frame_pose.out_q = g_map_frame_pose.last_enu_q;
+        g_map_frame_pose.out_in_map_frame = true;
+    }
+    else if (g_map_frame_pose.ever_enu)
+    {
+        if (!g_map_frame_pose.in_gap)
+        {
+            g_map_frame_pose.in_gap = true;
+            g_map_frame_pose.gap_enu_pos = g_map_frame_pose.last_enu_pos;
+            // Align KF origin with gap anchor so the first gap frame does not integrate
+            // a spurious delta (e.g. after NMEA Reset vs last ENU update).
+            g_map_frame_pose.prev_kf_pos = kf_output.x_.pos;
+        }
+        Eigen::Vector3d delta_world = kf_output.x_.pos - g_map_frame_pose.prev_kf_pos;
+        if (delta_world.norm() > 5.0)
+            delta_world.setZero();
+        g_map_frame_pose.gap_enu_pos += g_map_frame_pose.stale_icp_R * delta_world;
+        g_map_frame_pose.prev_kf_pos = kf_output.x_.pos;
+        g_map_frame_pose.out_pos = g_map_frame_pose.gap_enu_pos;
+        g_map_frame_pose.out_q = g_map_frame_pose.last_enu_q;
+        g_map_frame_pose.out_in_map_frame = true;
+    }
+    else
+    {
+        g_map_frame_pose.out_pos = kf_output.x_.pos;
+        g_map_frame_pose.out_q = Eigen::Quaterniond(kf_output.x_.rot).normalized();
+        g_map_frame_pose.out_in_map_frame = false;
+    }
+}
+
+void fill_pose_from_map_frame_cache(geometry_msgs::msg::Pose &pose)
+{
+    pose.position.x = g_map_frame_pose.out_pos.x();
+    pose.position.y = g_map_frame_pose.out_pos.y();
+    pose.position.z = g_map_frame_pose.out_pos.z();
+    pose.orientation.x = g_map_frame_pose.out_q.x();
+    pose.orientation.y = g_map_frame_pose.out_q.y();
+    pose.orientation.z = g_map_frame_pose.out_q.z();
+    pose.orientation.w = g_map_frame_pose.out_q.w();
+}
+
+}  // namespace
+
 void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr & pubOdomAftMapped, tf2_ros::TransformBroadcaster & br)
 {
     if (flg_exit || !rclcpp::ok())
     {
         return;
     }
-    const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
-    odomAftMapped.header.frame_id = use_enu ? "map" : "camera_init";
+    refresh_map_frame_pose_cache();
+    odomAftMapped.header.frame_id = g_map_frame_pose.out_in_map_frame ? "map" : "camera_init";
     odomAftMapped.child_frame_id = "aft_mapped";
     if (publish_odometry_without_downsample)
     {
@@ -825,8 +905,8 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
         odomAftMapped.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
         odomAftMapped.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
     }
-    set_posestamp_enu(odomAftMapped.pose.pose);
-    
+    fill_pose_from_map_frame_cache(odomAftMapped.pose.pose);
+
     pubOdomAftMapped->publish(odomAftMapped);
 
     geometry_msgs::msg::TransformStamped transform;
@@ -837,14 +917,14 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     transform.transform.translation.z = odomAftMapped.pose.pose.position.z;
     transform.transform.rotation = odomAftMapped.pose.pose.orientation;
     br.sendTransform(transform);
-    if (use_enu)
+    if (g_map_frame_pose.out_in_map_frame)
     {
         geometry_msgs::msg::TransformStamped tf_enu_cam;
         tf_enu_cam.header = odomAftMapped.header;
         tf_enu_cam.header.frame_id = "map";
         tf_enu_cam.child_frame_id = "camera_init";
-        const Eigen::Matrix3d Rt = p_nmea->icp_R_local_to_enu.transpose();
-        const Eigen::Vector3d tt = -Rt * p_nmea->icp_t_local_to_enu;
+        const Eigen::Matrix3d Rt = g_map_frame_pose.stale_icp_R.transpose();
+        const Eigen::Vector3d tt = -Rt * g_map_frame_pose.stale_icp_t;
         tf_enu_cam.transform.translation.x = tt.x();
         tf_enu_cam.transform.translation.y = tt.y();
         tf_enu_cam.transform.translation.z = tt.z();
@@ -940,29 +1020,17 @@ static void try_publish_fused_ecef_position(
 
 void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
 {
-    if (flg_exit || !rclcpp::ok())
-    {
-        return;
-    }
-    const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
-    static bool was_enu = false;
-    if (use_enu && !was_enu)
-    {
-        was_enu = true;
-        path.poses.clear();  // ENU 전환 시 기존 camera_init 경로 제거
-    }
-    if (!use_enu) was_enu = false;
-    set_posestamp_enu(msg_body_pose.pose);
+    if (flg_exit || !rclcpp::ok()) return;
+
+    refresh_map_frame_pose_cache();
+    fill_pose_from_map_frame_cache(msg_body_pose.pose);
+
     msg_body_pose.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
     msg_body_pose.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
-    msg_body_pose.header.frame_id = use_enu ? "map" : "camera_init";
+    msg_body_pose.header.frame_id = g_map_frame_pose.out_in_map_frame ? "map" : "camera_init";
     path.header.frame_id = msg_body_pose.header.frame_id;
-    static int jjj = 0;
-    jjj++;
-    {
-        path.poses.emplace_back(msg_body_pose);
-        pubPath->publish(path);
-    }
+    path.poses.emplace_back(msg_body_pose);
+    pubPath->publish(path);
 }        
 
 void publish_nmea_aligned(
@@ -1640,7 +1708,10 @@ int main(int argc, char** argv)
                     state_out = state_output();
                     if (flg_reset_indoor_reloc)
                     {
-                        RCLCPP_WARN(node->get_logger(), "indoor mode on: GICP anchor applied");
+                        RCLCPP_WARN(node->get_logger(),
+                                    "indoor mode on: GICP anchor applied  reloc_pos_enu=(%.2f,%.2f,%.2f)  src=%s",
+                                    indoor_reloc_pos_enu.x(), indoor_reloc_pos_enu.y(), indoor_reloc_pos_enu.z(),
+                                    p_nmea->icp_tf_ready ? "odom_enu" : "odom_local");
                         // Keep ENU anchor in graph init, restart local state at origin with GICP orientation.
                         state_out.pos = Eigen::Vector3d::Zero();
                         state_out.rot = indoor_reloc_rot_enu;
@@ -1653,26 +1724,41 @@ int main(int argc, char** argv)
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
                         indoor_flag_dynamic = true;
 #ifdef LIGO_WITH_SMALL_GICP
-                        // Compute ECEF position for map selection:
-                        // prefer stored last_good_gnss_ecef, otherwise derive from indoor_reloc_pos_enu.
+                        // ECEF for grid / PCD selection: use the same ENU pose as indoor entry
+                        // (indoor_reloc_* from LIO / odom), not raw GNSS ECEF — avoids map mismatch.
                         Eigen::Vector3d reloc_ecef = Eigen::Vector3d::Zero();
                         bool reloc_ecef_ok = false;
 #ifdef LIGO_WITH_NMEA
-                        if (last_good_gnss_ecef_valid)
-                        {
-                            reloc_ecef = last_good_gnss_ecef;
-                            reloc_ecef_ok = true;
-                        }
-                        else if (nmea_global_anchor_ready)
+                        if (nmea_global_anchor_ready)
                         {
                             const Eigen::Vector3d anc_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
                             const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
                             reloc_ecef = anc_ecef + R_ecef_enu * indoor_reloc_pos_enu;
                             reloc_ecef_ok = true;
+                            RCLCPP_WARN(node->get_logger(),
+                                        "[indoor/gicp] grid ECEF from system reloc ENU (not raw GNSS): "
+                                        "enu=(%.2f,%.2f,%.2f)",
+                                        indoor_reloc_pos_enu.x(), indoor_reloc_pos_enu.y(),
+                                        indoor_reloc_pos_enu.z());
+                        }
+                        else if (last_good_gnss_ecef_valid)
+                        {
+                            reloc_ecef = last_good_gnss_ecef;
+                            reloc_ecef_ok = true;
+                            RCLCPP_WARN(node->get_logger(),
+                                        "[indoor/gicp] grid ECEF fallback: last_good_gnss (no anchor yet)");
                         }
                         if (reloc_ecef_ok && ligo::indoor::indoorGridMapsLoaded())
                         {
                             ligo::indoor::loadIndoorGICPMapForSession(reloc_ecef);
+                        }
+                        // Re-sync system ECEF anchor after map ECEF frame is cached so
+                        // sys↔map transform (RViz map cloud in global ENU) is recomputed.
+                        if (nmea_global_anchor_ready)
+                        {
+                            ligo::indoor::setSystemEcefAnchor(
+                                gnss_comm::geo2ecef(nmea_global_anchor_lla),
+                                gnss_comm::geo2rotation(nmea_global_anchor_lla));
                         }
 #endif
                         if (!indoor_gicp_map_loaded)
@@ -2048,27 +2134,18 @@ int main(int argc, char** argv)
                                             }
                                             else
                                             {
-                                                // Position: use last good GNSS ENU as system-ENU fallback
-                                                // (ECEF→map-local-ENU conversion happens later in the reset block).
-                                                if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
-                                                {
-                                                    const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
-                                                    const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
-                                                    indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
-                                                }
-                                                else if (p_nmea->icp_tf_ready)
+                                                // Use last KF odometry converted to ENU (avoids NMEA outliers).
+                                                if (p_nmea->icp_tf_ready)
                                                 {
                                                     indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
                                                                            + p_nmea->icp_t_local_to_enu;
+                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
                                                 }
                                                 else
                                                 {
                                                     indoor_reloc_pos_enu = kf_output.x_.pos;
-                                                }
-                                                if (p_nmea->icp_tf_ready)
-                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
-                                                else
                                                     indoor_reloc_rot_enu = kf_output.x_.rot;
+                                                }
                                                 indoor_reloc_pose_time = time_predict_last_const;
                                             }
                                             indoor_reloc_applied_once = true;
@@ -2082,8 +2159,12 @@ int main(int argc, char** argv)
                                             if (p_nmea->icp_tf_ready) { p_nmea->sum_nmea_lio_err_sq_xy += err_sq_xy_pre; p_nmea->n_nmea_fusion_count++; }
                                             kf_output.update_iterated_dyn_share_NMEA();
                                             if (!runtime_pos_log) cout_state_to_file_nmea();
-                                            // Add indoor pose factor alongside the NMEA factor just inserted.
                                             if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) && indoor_pose_valid)
+                                                ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
+                                        }
+                                        else if (!mapping_mode && indoor_flag_dynamic && indoor_pose_valid && p_nmea->nmea_ready)
+                                        {
+                                            if (p_nmea->AdvanceFrameForIndoor(kf_output.x_))
                                                 ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
                                         }
                                     }
@@ -2237,25 +2318,17 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
-                                        {
-                                            const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
-                                            const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
-                                            indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
-                                        }
-                                        else if (p_nmea->icp_tf_ready)
+                                        if (p_nmea->icp_tf_ready)
                                         {
                                             indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
                                                                    + p_nmea->icp_t_local_to_enu;
+                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
                                         }
                                         else
                                         {
                                             indoor_reloc_pos_enu = kf_output.x_.pos;
-                                        }
-                                        if (p_nmea->icp_tf_ready)
-                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
-                                        else
                                             indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        }
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;
@@ -2270,6 +2343,11 @@ int main(int argc, char** argv)
                                     kf_output.update_iterated_dyn_share_NMEA();
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
                                     if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) && indoor_pose_valid)
+                                        ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
+                                }
+                                else if (!mapping_mode && indoor_flag_dynamic && indoor_pose_valid && p_nmea->nmea_ready)
+                                {
+                                    if (p_nmea->AdvanceFrameForIndoor(kf_output.x_))
                                         ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
                                 }
                             }
@@ -2575,25 +2653,17 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
-                                        {
-                                            const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
-                                            const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
-                                            indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
-                                        }
-                                        else if (p_nmea->icp_tf_ready)
+                                        if (p_nmea->icp_tf_ready)
                                         {
                                             indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
                                                                    + p_nmea->icp_t_local_to_enu;
+                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
                                         }
                                         else
                                         {
                                             indoor_reloc_pos_enu = kf_output.x_.pos;
-                                        }
-                                        if (p_nmea->icp_tf_ready)
-                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
-                                        else
                                             indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        }
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;
@@ -2607,10 +2677,14 @@ int main(int argc, char** argv)
                                     if (!nolidar)
                                     {
                                         kf_output.update_iterated_dyn_share_NMEA();
-                                        // reset_cov_output(kf_output.P_);
                                     }
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
                                     if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) && indoor_pose_valid)
+                                        ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
+                                }
+                                else if (!mapping_mode && indoor_flag_dynamic && indoor_pose_valid && p_nmea->nmea_ready)
+                                {
+                                    if (p_nmea->AdvanceFrameForIndoor(kf_output.x_))
                                         ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
                                 }
                             }
@@ -2689,7 +2763,7 @@ int main(int argc, char** argv)
                 NMEA_ENABLE)
             {
                 Eigen::Vector3d p_ecef;
-                if (compute_fused_imu_position_ecef(p_ecef))
+                if (compute_system_output_pose_ecef(p_ecef))
                 {
                     ligo::indoor::ensureIndoorGICPMapFromGridEcef(p_ecef);
                 }

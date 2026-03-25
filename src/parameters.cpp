@@ -121,6 +121,8 @@ std::string indoor_grid_map_dir;
 bool indoor_gicp_map_loaded = false;
 Eigen::Isometry3d indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
 bool indoor_flag_dynamic = false;
+double indoor_gicp_max_factor_error = 5.0;
+int    indoor_gicp_min_factor_inliers = 50;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
 std::vector<Eigen::Matrix3d> local_rots;
@@ -287,6 +289,8 @@ void readParameters(rclcpp::Node * node)
                                        indoorPoseNoise, indoorPoseNoiseInit);
     indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
     indoor_grid_map_dir = get_param("indoor.grid_map_dir", std::string(""));
+    indoor_gicp_max_factor_error   = get_param("indoor.gicp_max_factor_error", 5.0);
+    indoor_gicp_min_factor_inliers = get_param("indoor.gicp_min_factor_inliers", 50);
   }
 #endif
 }
@@ -419,6 +423,39 @@ bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef)
     if (!nmea_global_anchor_ready) {
         return false;
     }
+    const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+    const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+    out_ecef = anchor_ecef + R_ecef_enu * p_enu;
+    return true;
+#else
+    (void)out_ecef;
+    return false;
+#endif
+}
+
+bool compute_system_output_pose_enu(Eigen::Vector3d &pos_enu)
+{
+#ifdef LIGO_WITH_NMEA
+    if (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready)
+    {
+        pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+        return true;
+    }
+    return compute_fused_imu_position_enu(pos_enu);
+#else
+    (void)pos_enu;
+    return false;
+#endif
+}
+
+bool compute_system_output_pose_ecef(Eigen::Vector3d &out_ecef)
+{
+#ifdef LIGO_WITH_NMEA
+    Eigen::Vector3d p_enu;
+    if (!compute_system_output_pose_enu(p_enu))
+        return false;
+    if (!nmea_global_anchor_ready)
+        return false;
     const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
     const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
     out_ecef = anchor_ecef + R_ecef_enu * p_enu;

@@ -155,6 +155,8 @@ extern std::string indoor_grid_map_dir;
 extern bool indoor_gicp_map_loaded;
 extern Eigen::Isometry3d indoor_gicp_T_map_lidar;
 extern bool indoor_flag_dynamic;
+extern double indoor_gicp_max_factor_error;
+extern int    indoor_gicp_min_factor_inliers;
 
 extern MeasureGroup Measures;
 
@@ -175,4 +177,8 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu);
 bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla);
 /** WGS84 ECEF (m) from fused ENU + anchor. False if no anchor data. */
 bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef);
+/** ENU position consistent with published /aft_mapped when ICP tf is ready; else fused ISAM ENU. */
+bool compute_system_output_pose_enu(Eigen::Vector3d &pos_enu);
+/** ECEF from @ref compute_system_output_pose_enu + anchor. */
+bool compute_system_output_pose_ecef(Eigen::Vector3d &out_ecef);
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output);

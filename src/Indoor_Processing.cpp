@@ -259,26 +259,43 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
     return false;
   }
 
-  // Always accept the result — the optimizer's best solution after N iterations
-  // is usable even when the strict convergence criterion wasn't met.
+  // Always update the pose tracker so the next GICP iteration starts from the
+  // best available guess, regardless of quality.
   indoor_gicp_T_map_lidar = result.T_map_lidar;
-  indoor_pos_enu_meas     = result.T_map_lidar.translation();
-  indoor_rot_enu_meas     = Eigen::Quaterniond(result.T_map_lidar.rotation()).normalized();
-  indoor_pose_time        = timestamp;
-  indoor_pose_valid       = true;
 
   if (result.converged) ++s_gicp_converged;
 
-  if (s_gicp_total <= 5 || s_gicp_total % 100 == 0) {
+  // Quality gate: only feed the result as a factor if alignment is good enough.
+  const bool quality_ok =
+      result.error <= indoor_gicp_max_factor_error &&
+      static_cast<int>(result.num_inliers) >= indoor_gicp_min_factor_inliers;
+
+  if (quality_ok)
+  {
+    indoor_pos_enu_meas = result.T_map_lidar.translation();
+    indoor_rot_enu_meas = Eigen::Quaterniond(result.T_map_lidar.rotation()).normalized();
+    indoor_pose_time    = timestamp;
+    indoor_pose_valid   = true;
+  }
+  else
+  {
+    indoor_pose_valid = false;
+  }
+
+  static size_t s_gicp_rejected = 0;
+  if (!quality_ok) ++s_gicp_rejected;
+
+  if (s_gicp_total <= 5 || s_gicp_total % 100 == 0 || !quality_ok) {
     const Eigen::Vector3d t = result.T_map_lidar.translation();
     RCLCPP_INFO(rclcpp::get_logger("ligo"),
                 "[indoor/gicp] #%zu  %s  iter=%zu inliers=%zu err=%.2f  "
-                "T=(%.3f,%.3f,%.3f)  conv_rate=%zu/%zu",
+                "T=(%.3f,%.3f,%.3f)  factor=%s  conv=%zu/%zu rej=%zu",
                 s_gicp_total,
                 result.converged ? "OK" : "maxiter",
                 result.iterations, result.num_inliers, result.error,
                 t.x(), t.y(), t.z(),
-                s_gicp_converged, s_gicp_total);
+                quality_ok ? "accept" : "REJECT",
+                s_gicp_converged, s_gicp_total, s_gicp_rejected);
   }
 
   return true;
@@ -409,10 +426,24 @@ void addIndoorFactorToGraph(int frame_num) {
   values[15] = indoor_rot_enu_meas.z();
   values[16] = 1.0;  // relative_sqrt_info weight
 
-  const auto& noise = (frame_num < p_nmea->delete_thred) ? indoorPoseNoiseInit : indoorPoseNoise;
+  const bool init_phase = (frame_num < p_nmea->delete_thred);
+  const auto& noise = init_phase ? indoorPoseNoiseInit : indoorPoseNoise;
   p_nmea->p_assign->gtSAMgraph.add(ligo::IndoorLocalizationFactor(
       P(0), E(0), A(frame_num), R(frame_num),
       false, values, Eigen::Vector3d::Zero(), p_nmea->Rex_imu_r, noise));
+
+  static size_t s_indoor_factor_cnt = 0;
+  ++s_indoor_factor_cnt;
+  if (s_indoor_factor_cnt <= 5 || s_indoor_factor_cnt % 50 == 0) {
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "[INDOOR FACTOR INPUT] #%zu  frame=%d  pos_enu=(%.2f,%.2f,%.2f)  "
+                "quat=(%.3f,%.3f,%.3f,%.3f)  noise=%s",
+                s_indoor_factor_cnt, frame_num,
+                indoor_pos_enu_meas[0], indoor_pos_enu_meas[1], indoor_pos_enu_meas[2],
+                indoor_rot_enu_meas.w(), indoor_rot_enu_meas.x(),
+                indoor_rot_enu_meas.y(), indoor_rot_enu_meas.z(),
+                init_phase ? "init" : "normal");
+  }
 #else
   (void)frame_num;
 #endif
