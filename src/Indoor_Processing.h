@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -46,6 +47,16 @@ void resetIndoorGICP();
 /** Returns the absolute path of the currently loaded reference PCD, or empty string. */
 std::string getIndoorGicpMapPath();
 
+/** Convert an ECEF position to the currently loaded map's local ENU frame.
+ *  Uses the ecef_from_enu transform stored in the map's grid YAML.
+ *  Returns nullopt if no map is loaded or the map has no ECEF transform. */
+std::optional<Eigen::Vector3d> ecefToLoadedMapEnu(const Eigen::Vector3d& ecef);
+
+/** Provide the system (GNSS) ECEF anchor so that scan points in system-ENU
+ *  can be converted to the loaded map's local ENU during GICP. */
+void setSystemEcefAnchor(const Eigen::Vector3d& anc_ecef,
+                         const Eigen::Matrix3d& R_ecef_enu);
+
 /** Run scan-to-map GICP and update indoor_pos_enu_meas / indoor_rot_enu_meas.
  *  scan_world: current scan in LIO local/world frame.
  *  Returns true on GICP convergence. */
@@ -68,6 +79,7 @@ void publishIndoorViz(
     const CloudT::ConstPtr& scan_world,
     const Eigen::Matrix3d& R_local_to_enu,
     const Eigen::Vector3d& t_local_to_enu,
+    const Eigen::Isometry3d& T_map_lidar,
     double timestamp_sec);
 #endif  // LIGO_WITH_SMALL_GICP
 

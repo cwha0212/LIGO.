@@ -38,6 +38,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <fstream>
+#ifdef LIGO_WITH_SMALL_GICP
+#include "Indoor_Processing.h"
+#endif
 
 static rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr g_nmea_stamp_diag_pub;
 
@@ -131,6 +134,11 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         first_gps_ecef = gnss_comm::geo2ecef(geo);
         nmea_global_anchor_lla = first_gps_lla;
         nmea_global_anchor_ready = true;
+#ifdef LIGO_WITH_SMALL_GICP
+        ligo::indoor::setSystemEcefAnchor(
+            gnss_comm::geo2ecef(first_gps_lla),
+            gnss_comm::geo2rotation(first_gps_lla));
+#endif
     }
     Eigen::Vector3d cur_ecef = gnss_comm::geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
     trans_local_ = gnss_comm::ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);

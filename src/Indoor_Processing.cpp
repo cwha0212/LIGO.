@@ -20,6 +20,30 @@ namespace {
   // Display-resolution cached map cloud (published latched to RViz)
   static sensor_msgs::msg::PointCloud2 s_map_cloud_msg;
   static bool s_map_cloud_ready = false;
+  // Map cloud transformed to system-global-ENU for outdoor-aligned visualization
+  static sensor_msgs::msg::PointCloud2 s_map_cloud_sys_msg;
+  static bool s_map_cloud_sys_ready = false;
+  // ECEF→ENU transform of the currently loaded map (from grid YAML)
+  static Eigen::Vector3d s_map_anchor_ecef = Eigen::Vector3d::Zero();
+  static Eigen::Matrix3d s_map_R_ecef_enu  = Eigen::Matrix3d::Identity();
+  static bool s_map_transform_valid = false;
+  // ECEF→ENU transform of the system GNSS anchor
+  static Eigen::Vector3d s_sys_anchor_ecef = Eigen::Vector3d::Zero();
+  static Eigen::Matrix3d s_sys_R_ecef_enu  = Eigen::Matrix3d::Identity();
+  static bool s_sys_anchor_valid = false;
+  // Precomputed system-ENU → map-local-ENU transform
+  static Eigen::Matrix3d s_R_sys_to_map = Eigen::Matrix3d::Identity();
+  static Eigen::Vector3d s_t_sys_to_map = Eigen::Vector3d::Zero();
+  static bool s_sys_to_map_valid = false;
+
+  static void recomputeSysToMapTransform() {
+    if (s_map_transform_valid && s_sys_anchor_valid) {
+      // p_map = R_map^T * R_sys * p_sys + R_map^T * (anc_sys - anc_map)
+      s_R_sys_to_map = s_map_R_ecef_enu.transpose() * s_sys_R_ecef_enu;
+      s_t_sys_to_map = s_map_R_ecef_enu.transpose() * (s_sys_anchor_ecef - s_map_anchor_ecef);
+      s_sys_to_map_valid = true;
+    }
+  }
 }
 #endif  // LIGO_WITH_SMALL_GICP
 
@@ -105,7 +129,23 @@ bool loadIndoorGICPMapForSession(const Eigen::Vector3d& ecef_m) {
 
   if (indoor_gicp_map_loaded && pcd == s_gicp_grid_resolved_pcd) return true;
   initIndoorGICP(pcd, s_gicp_cfg_grid);
-  // Intentionally NOT calling resetIndoorGICP() — caller seeds T_map_lidar right after.
+
+  // Store the map's ECEF→ENU transform for GICP seed computation.
+  s_map_transform_valid = false;
+  auto tf = lookupIndoorGridTransformByMapId(map_id);
+  if (!tf && indoorGridMapCount() == 1)
+    tf = getFirstGridMapTransform();
+  if (tf) {
+    s_map_anchor_ecef     = tf->anchor_ecef_m;
+    s_map_R_ecef_enu      = tf->R_ecef_enu;
+    s_map_transform_valid = true;
+    recomputeSysToMapTransform();
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "[indoor/gicp] map ECEF transform cached: anchor=(%.2f,%.2f,%.2f)  sys_to_map=%s",
+                s_map_anchor_ecef.x(), s_map_anchor_ecef.y(), s_map_anchor_ecef.z(),
+                s_sys_to_map_valid ? "ready" : "pending_sys_anchor");
+  }
+
   return indoor_gicp_map_loaded;
 }
 
@@ -156,11 +196,24 @@ std::string getIndoorGicpMapPath() {
   return s_gicp_grid_resolved_pcd;
 }
 
+std::optional<Eigen::Vector3d> ecefToLoadedMapEnu(const Eigen::Vector3d& ecef) {
+  if (!s_map_transform_valid) return std::nullopt;
+  return s_map_R_ecef_enu.transpose() * (ecef - s_map_anchor_ecef);
+}
+
+void setSystemEcefAnchor(const Eigen::Vector3d& anc_ecef,
+                         const Eigen::Matrix3d& R_ecef_enu) {
+  s_sys_anchor_ecef = anc_ecef;
+  s_sys_R_ecef_enu  = R_ecef_enu;
+  s_sys_anchor_valid = true;
+  recomputeSysToMapTransform();
+}
+
 void resetIndoorGICP() {
   indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
   indoor_pose_valid = false;
   s_map_published = false;
-  // Keep s_map_cloud_ready so the map re-publishes to new RViz subscribers after map change.
+  s_map_cloud_sys_ready = false;
   RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor/gicp] state reset");
 }
 
@@ -171,74 +224,112 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
   if (!s_gicp_localizer || !s_gicp_localizer->hasMap()) return false;
   if (!scan_world || scan_world->empty()) return false;
 
-  // Convert scan from LIO world frame to map (ENU) frame
+  // Convert scan from LIO world frame → system-ENU → map-local-ENU
+  // so that it matches the reference PCD coordinate system.
   auto scan_map = pcl::make_shared<SmallGICPLocalizer::LidarCloud>();
   scan_map->reserve(scan_world->size());
   for (const auto& p : scan_world->points) {
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-    const Eigen::Vector3d p_enu = R_local_to_enu * Eigen::Vector3d(p.x, p.y, p.z) + t_local_to_enu;
+    Eigen::Vector3d p_sys_enu = R_local_to_enu * Eigen::Vector3d(p.x, p.y, p.z) + t_local_to_enu;
+    Eigen::Vector3d p_final = s_sys_to_map_valid
+        ? (s_R_sys_to_map * p_sys_enu + s_t_sys_to_map)
+        : p_sys_enu;
     SmallGICPLocalizer::LidarPoint q;
-    q.x = static_cast<float>(p_enu.x());
-    q.y = static_cast<float>(p_enu.y());
-    q.z = static_cast<float>(p_enu.z());
+    q.x = static_cast<float>(p_final.x());
+    q.y = static_cast<float>(p_final.y());
+    q.z = static_cast<float>(p_final.z());
     q.intensity = p.intensity;
     q.normal_x = 0.0f; q.normal_y = 0.0f; q.normal_z = 0.0f; q.curvature = 0.0f;
     scan_map->push_back(q);
   }
   if (static_cast<int>(scan_map->size()) < 50) return false;
 
-  static size_t s_gicp_fail_count = 0;
-  static size_t s_gicp_ok_count   = 0;
+  static size_t s_gicp_total = 0;
+  static size_t s_gicp_converged = 0;
 
   const SmallGICPResult result = s_gicp_localizer->localize(scan_map, indoor_gicp_T_map_lidar);
+  ++s_gicp_total;
 
-  if (!result.success || !result.converged) {
-    ++s_gicp_fail_count;
-    s_gicp_ok_count = 0;
-    // First failure and every 30: WARN without throttle; otherwise throttled
-    if (s_gicp_fail_count == 1 || s_gicp_fail_count % 30 == 0) {
+  if (!result.success) {
+    if (s_gicp_total <= 3) {
       RCLCPP_WARN(rclcpp::get_logger("ligo"),
-                  "[indoor/gicp] NOT CONVERGED #%zu  iter=%zu inliers=%zu err=%.4f  map=%s",
-                  s_gicp_fail_count, result.iterations, result.num_inliers, result.error,
+                  "[indoor/gicp] registration failed (no result)  map=%s",
                   s_gicp_grid_resolved_pcd.c_str());
     }
-    // (silent on other failures — counter throttles the output via %30 check above)
     return false;
   }
 
-  // Converged
-  s_gicp_fail_count = 0;
-  ++s_gicp_ok_count;
-  if (s_gicp_ok_count == 1 || s_gicp_ok_count % 100 == 0) {
-    const Eigen::Vector3d t = result.T_map_lidar.translation();
-    RCLCPP_INFO(rclcpp::get_logger("ligo"),
-                "[indoor/gicp] converged #%zu  iter=%zu inliers=%zu err=%.4f  "
-                "pos_enu=(%.2f, %.2f, %.2f)",
-                s_gicp_ok_count, result.iterations, result.num_inliers, result.error,
-                t.x(), t.y(), t.z());
-  }
-
+  // Always accept the result — the optimizer's best solution after N iterations
+  // is usable even when the strict convergence criterion wasn't met.
   indoor_gicp_T_map_lidar = result.T_map_lidar;
   indoor_pos_enu_meas     = result.T_map_lidar.translation();
   indoor_rot_enu_meas     = Eigen::Quaterniond(result.T_map_lidar.rotation()).normalized();
   indoor_pose_time        = timestamp;
   indoor_pose_valid       = true;
+
+  if (result.converged) ++s_gicp_converged;
+
+  if (s_gicp_total <= 5 || s_gicp_total % 100 == 0) {
+    const Eigen::Vector3d t = result.T_map_lidar.translation();
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "[indoor/gicp] #%zu  %s  iter=%zu inliers=%zu err=%.2f  "
+                "T=(%.3f,%.3f,%.3f)  conv_rate=%zu/%zu",
+                s_gicp_total,
+                result.converged ? "OK" : "maxiter",
+                result.iterations, result.num_inliers, result.error,
+                t.x(), t.y(), t.z(),
+                s_gicp_converged, s_gicp_total);
+  }
+
   return true;
+}
+
+static void buildMapCloudSysEnu() {
+  if (!s_map_cloud_ready || !s_sys_to_map_valid) return;
+  if (s_map_cloud_sys_ready) return;
+
+  const Eigen::Matrix3d R_m2s = s_R_sys_to_map.transpose();
+  const Eigen::Vector3d t_m2s = -R_m2s * s_t_sys_to_map;
+
+  pcl::PointCloud<pcl::PointXYZI> raw;
+  pcl::fromROSMsg(s_map_cloud_msg, raw);
+
+  pcl::PointCloud<pcl::PointXYZI> transformed;
+  transformed.reserve(raw.size());
+  for (const auto& p : raw.points) {
+    Eigen::Vector3d ps = R_m2s * Eigen::Vector3d(p.x, p.y, p.z) + t_m2s;
+    pcl::PointXYZI q;
+    q.x = static_cast<float>(ps.x());
+    q.y = static_cast<float>(ps.y());
+    q.z = static_cast<float>(ps.z());
+    q.intensity = p.intensity;
+    transformed.push_back(q);
+  }
+
+  pcl::toROSMsg(transformed, s_map_cloud_sys_msg);
+  s_map_cloud_sys_msg.header.frame_id = "map";
+  s_map_cloud_sys_ready = true;
 }
 
 void publishIndoorMapCloudOnly(
     const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub_map,
     double timestamp_sec) {
   if (!pub_map || !s_map_cloud_ready || s_map_published) return;
+
+  buildMapCloudSysEnu();
+
   const int32_t  sec     = static_cast<int32_t>(std::floor(timestamp_sec));
   const uint32_t nanosec = static_cast<uint32_t>(std::round((timestamp_sec - sec) * 1e9));
-  s_map_cloud_msg.header.stamp.sec     = sec;
-  s_map_cloud_msg.header.stamp.nanosec = nanosec;
-  pub_map->publish(s_map_cloud_msg);
+
+  auto& msg = s_map_cloud_sys_ready ? s_map_cloud_sys_msg : s_map_cloud_msg;
+  msg.header.stamp.sec     = sec;
+  msg.header.stamp.nanosec = nanosec;
+  pub_map->publish(msg);
   s_map_published = true;
   RCLCPP_INFO(rclcpp::get_logger("ligo"),
-              "[indoor/gicp] map cloud published (%u pts) -> /indoor/map_cloud",
-              s_map_cloud_msg.width * s_map_cloud_msg.height);
+              "[indoor/gicp] map cloud published (%u pts, frame=%s) -> /indoor/map_cloud",
+              msg.width * msg.height,
+              s_map_cloud_sys_ready ? "sys_enu" : "map_local_enu");
 }
 
 void publishIndoorViz(
@@ -247,6 +338,7 @@ void publishIndoorViz(
     const CloudT::ConstPtr& scan_world,
     const Eigen::Matrix3d& R_local_to_enu,
     const Eigen::Vector3d& t_local_to_enu,
+    const Eigen::Isometry3d& T_map_lidar,
     double timestamp_sec) {
   if (!s_gicp_localizer || !s_gicp_localizer->hasMap()) return;
 
@@ -256,28 +348,35 @@ void publishIndoorViz(
   // --- map cloud (latched): delegate to dedicated function ---
   publishIndoorMapCloudOnly(pub_map, timestamp_sec);
 
-  // --- GICP-aligned scan in ENU: apply current indoor_gicp_T_map_lidar to each point ---
+  // --- GICP-aligned scan in system-global-ENU (matches outdoor frame) ---
   if (pub_scan && scan_world && !scan_world->empty()) {
-    const Eigen::Matrix3d R_gicp = indoor_gicp_T_map_lidar.rotation();
-    const Eigen::Vector3d t_gicp = indoor_gicp_T_map_lidar.translation();
+    const Eigen::Matrix3d R_gicp = T_map_lidar.rotation();
+    const Eigen::Vector3d t_gicp = T_map_lidar.translation();
+    const Eigen::Matrix3d R_m2s = s_R_sys_to_map.transpose();
+    const Eigen::Vector3d t_m2s = -R_m2s * s_t_sys_to_map;
+
     CloudT scan_aligned;
     scan_aligned.reserve(scan_world->size());
     for (const auto& p : scan_world->points) {
       if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-      // world frame -> ENU via ICP tf, then refine with GICP T
-      const Eigen::Vector3d p_enu_raw = R_local_to_enu * Eigen::Vector3d(p.x, p.y, p.z) + t_local_to_enu;
-      const Eigen::Vector3d p_aligned = R_gicp * p_enu_raw + t_gicp;
+      Eigen::Vector3d p_sys = R_local_to_enu * Eigen::Vector3d(p.x, p.y, p.z) + t_local_to_enu;
+      // local → sys-ENU → map-local-ENU → GICP → sys-ENU
+      if (s_sys_to_map_valid) {
+        Eigen::Vector3d p_map = s_R_sys_to_map * p_sys + s_t_sys_to_map;
+        Eigen::Vector3d p_aligned_map = R_gicp * p_map + t_gicp;
+        p_sys = R_m2s * p_aligned_map + t_m2s;
+      }
       PointT q = p;
-      q.x = static_cast<float>(p_aligned.x());
-      q.y = static_cast<float>(p_aligned.y());
-      q.z = static_cast<float>(p_aligned.z());
+      q.x = static_cast<float>(p_sys.x());
+      q.y = static_cast<float>(p_sys.y());
+      q.z = static_cast<float>(p_sys.z());
       scan_aligned.push_back(q);
     }
     sensor_msgs::msg::PointCloud2 msg;
     pcl::toROSMsg(scan_aligned, msg);
     msg.header.stamp.sec     = sec;
     msg.header.stamp.nanosec = nanosec;
-    msg.header.frame_id      = "map";   // ENU frame in this system is called "map"
+    msg.header.frame_id      = "map";
     pub_scan->publish(msg);
   }
 }

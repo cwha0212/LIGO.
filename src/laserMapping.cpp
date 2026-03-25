@@ -94,6 +94,10 @@ bool  indoor_reloc_applied_once = false;
 Eigen::Vector3d indoor_reloc_pos_enu = Eigen::Vector3d::Zero();
 Eigen::Matrix3d indoor_reloc_rot_enu = Eigen::Matrix3d::Identity();
 double indoor_reloc_pose_time = 0.0;
+// Last GNSS position (ECEF) received with acceptable covariance (outdoor quality).
+// Converted to the loaded map's local ENU at indoor session start for the GICP seed.
+Eigen::Vector3d last_good_gnss_ecef       = Eigen::Vector3d::Zero();
+bool            last_good_gnss_ecef_valid = false;
 constexpr bool kTempForceIndoorByNmeaCov = true;
 constexpr double kTempIndoorCovThreshold = 50.0;
 
@@ -1493,6 +1497,11 @@ int main(int argc, char** argv)
             {
                 nmea_global_anchor_lla = first_lla_used;
                 nmea_global_anchor_ready = true;
+#ifdef LIGO_WITH_SMALL_GICP
+                ligo::indoor::setSystemEcefAnchor(
+                    gnss_comm::geo2ecef(nmea_global_anchor_lla),
+                    gnss_comm::geo2rotation(nmea_global_anchor_lla));
+#endif
             }
             for (int i = 0; i < ppp_sol.size(); i++)
             {
@@ -1644,18 +1653,25 @@ int main(int argc, char** argv)
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
                         indoor_flag_dynamic = true;
 #ifdef LIGO_WITH_SMALL_GICP
-                        // Attempt immediate map load using reloc ENU position → ECEF conversion.
-                        // This does NOT require p_nmea->nmea_ready (uses global anchor directly),
-                        // avoiding the race where NMEA is just-reset and not yet ready.
+                        // Compute ECEF position for map selection:
+                        // prefer stored last_good_gnss_ecef, otherwise derive from indoor_reloc_pos_enu.
+                        Eigen::Vector3d reloc_ecef = Eigen::Vector3d::Zero();
+                        bool reloc_ecef_ok = false;
 #ifdef LIGO_WITH_NMEA
-                        if (ligo::indoor::indoorGridMapsLoaded() && nmea_global_anchor_ready)
+                        if (last_good_gnss_ecef_valid)
                         {
-                            const Eigen::Vector3d anc_ecef =
-                                gnss_comm::geo2ecef(nmea_global_anchor_lla);
-                            const Eigen::Matrix3d R_ecef_enu =
-                                gnss_comm::geo2rotation(nmea_global_anchor_lla);
-                            const Eigen::Vector3d reloc_ecef =
-                                anc_ecef + R_ecef_enu * indoor_reloc_pos_enu;
+                            reloc_ecef = last_good_gnss_ecef;
+                            reloc_ecef_ok = true;
+                        }
+                        else if (nmea_global_anchor_ready)
+                        {
+                            const Eigen::Vector3d anc_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                            const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                            reloc_ecef = anc_ecef + R_ecef_enu * indoor_reloc_pos_enu;
+                            reloc_ecef_ok = true;
+                        }
+                        if (reloc_ecef_ok && ligo::indoor::indoorGridMapsLoaded())
+                        {
                             ligo::indoor::loadIndoorGICPMapForSession(reloc_ecef);
                         }
 #endif
@@ -1665,14 +1681,18 @@ int main(int argc, char** argv)
                                          "[indoor/gicp] Map NOT loaded at session start! "
                                          "Set indoor.grid_map_dir or indoor.map_pcd_path in config.");
                         }
-                        // Seed GICP with the indoor anchor pose so first scan aligns correctly.
-                        // Done AFTER map load so loadIndoorGICPMapForSession does not overwrite it.
+                        // Seed GICP pose: scan is already converted to map-local-ENU
+                        // inside runIndoorGICPUpdate, so T_map_lidar ≈ Identity.
                         indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
-                        indoor_gicp_T_map_lidar.translation() = indoor_reloc_pos_enu;
-                        indoor_gicp_T_map_lidar.linear() = indoor_reloc_rot_enu;
+                        const char* seed_src = "identity";
                         RCLCPP_WARN(node->get_logger(),
-                                    "[indoor/gicp] session started — map_loaded=%d  reference_pcd=%s",
+                                    "[indoor/gicp] session started — map_loaded=%d  "
+                                    "seed_pos=(%.2f,%.2f,%.2f)  seed_src=%s  reference_pcd=%s",
                                     static_cast<int>(indoor_gicp_map_loaded),
+                                    indoor_gicp_T_map_lidar.translation().x(),
+                                    indoor_gicp_T_map_lidar.translation().y(),
+                                    indoor_gicp_T_map_lidar.translation().z(),
+                                    seed_src,
                                     ligo::indoor::getIndoorGicpMapPath().c_str());
 #endif
                     }
@@ -2004,6 +2024,18 @@ int main(int argc, char** argv)
 
                                         const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                         const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                        // Track the last GNSS position (ECEF) with good outdoor quality.
+                                        if (!cov_high_cfg && nmea_global_anchor_ready)
+                                        {
+                                            const Eigen::Vector3d p_enu_cur(
+                                                nmea_cur->pose.pose.position.x,
+                                                nmea_cur->pose.pose.position.y,
+                                                nmea_cur->pose.pose.position.z);
+                                            const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                            const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                            last_good_gnss_ecef       = anc + R * p_enu_cur;
+                                            last_good_gnss_ecef_valid = true;
+                                        }
                                         const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
                                         const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                         if (trigger_normal || trigger_temp)
@@ -2016,19 +2048,27 @@ int main(int argc, char** argv)
                                             }
                                             else
                                             {
-                                                // Convert LIO local pos to global ENU for correct grid lookup and GICP seeding
-                                                if (p_nmea->icp_tf_ready)
+                                                // Position: use last good GNSS ENU as system-ENU fallback
+                                                // (ECEF→map-local-ENU conversion happens later in the reset block).
+                                                if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                                {
+                                                    const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                                    const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                                    indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                                }
+                                                else if (p_nmea->icp_tf_ready)
                                                 {
                                                     indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
                                                                            + p_nmea->icp_t_local_to_enu;
-                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
                                                 }
                                                 else
                                                 {
-                                                    // ICP not aligned yet; approximate (valid only near anchor)
                                                     indoor_reloc_pos_enu = kf_output.x_.pos;
-                                                    indoor_reloc_rot_enu = kf_output.x_.rot;
                                                 }
+                                                if (p_nmea->icp_tf_ready)
+                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                                else
+                                                    indoor_reloc_rot_enu = kf_output.x_.rot;
                                                 indoor_reloc_pose_time = time_predict_last_const;
                                             }
                                             indoor_reloc_applied_once = true;
@@ -2174,6 +2214,17 @@ int main(int argc, char** argv)
 
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                if (!cov_high_cfg && nmea_global_anchor_ready)
+                                {
+                                    const Eigen::Vector3d p_enu_cur(
+                                        nmea_cur->pose.pose.position.x,
+                                        nmea_cur->pose.pose.position.y,
+                                        nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                    const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                    last_good_gnss_ecef       = anc + R * p_enu_cur;
+                                    last_good_gnss_ecef_valid = true;
+                                }
                                 const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
                                 const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
@@ -2186,17 +2237,25 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        if (p_nmea->icp_tf_ready)
+                                        if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                        {
+                                            const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                            const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                            indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                        }
+                                        else if (p_nmea->icp_tf_ready)
                                         {
                                             indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
                                                                    + p_nmea->icp_t_local_to_enu;
-                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
                                         }
                                         else
                                         {
                                             indoor_reloc_pos_enu = kf_output.x_.pos;
-                                            indoor_reloc_rot_enu = kf_output.x_.rot;
                                         }
+                                        if (p_nmea->icp_tf_ready)
+                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                        else
+                                            indoor_reloc_rot_enu = kf_output.x_.rot;
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;
@@ -2493,6 +2552,17 @@ int main(int argc, char** argv)
                                 }
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                if (!cov_high_cfg && nmea_global_anchor_ready)
+                                {
+                                    const Eigen::Vector3d p_enu_cur(
+                                        nmea_cur->pose.pose.position.x,
+                                        nmea_cur->pose.pose.position.y,
+                                        nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                    const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                    last_good_gnss_ecef       = anc + R * p_enu_cur;
+                                    last_good_gnss_ecef_valid = true;
+                                }
                                 const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
                                 const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
@@ -2505,17 +2575,25 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        if (p_nmea->icp_tf_ready)
+                                        if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                        {
+                                            const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                            const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                            indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                        }
+                                        else if (p_nmea->icp_tf_ready)
                                         {
                                             indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
                                                                    + p_nmea->icp_t_local_to_enu;
-                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
                                         }
                                         else
                                         {
                                             indoor_reloc_pos_enu = kf_output.x_.pos;
-                                            indoor_reloc_rot_enu = kf_output.x_.rot;
                                         }
+                                        if (p_nmea->icp_tf_ready)
+                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                        else
+                                            indoor_reloc_rot_enu = kf_output.x_.rot;
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;
@@ -2638,6 +2716,7 @@ int main(int argc, char** argv)
                     feats_down_world,
                     p_nmea->icp_R_local_to_enu,
                     p_nmea->icp_t_local_to_enu,
+                    indoor_gicp_T_map_lidar,
                     lidar_end_time);
 
             }

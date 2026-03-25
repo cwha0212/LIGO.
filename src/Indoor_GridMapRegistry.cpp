@@ -291,5 +291,21 @@ std::optional<std::pair<std::string, std::string>> lookupIndoorGridKnownPcd(cons
   return std::nullopt;
 }
 
+std::optional<GridEcefTransform> lookupIndoorGridTransformByMapId(const std::string &map_id) {
+  for (const auto &g : g_grids) {
+    if (g.map_id == map_id && g.has_enu_transform)
+      return GridEcefTransform{g.anchor_ecef_m, g.R_ecef_enu};
+  }
+  return std::nullopt;
+}
+
+std::optional<GridEcefTransform> getFirstGridMapTransform() {
+  for (const auto &g : g_grids) {
+    if (g.has_enu_transform)
+      return GridEcefTransform{g.anchor_ecef_m, g.R_ecef_enu};
+  }
+  return std::nullopt;
+}
+
 }  // namespace indoor
 }  // namespace ligo
