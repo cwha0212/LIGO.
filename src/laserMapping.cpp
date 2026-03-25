@@ -43,6 +43,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <pcl_conversions/pcl_conversions.h>
@@ -85,6 +86,7 @@ Eigen::Vector3d first_pvt_used, first_lla_used;
 
 bool  flg_reset = false, flg_exit = false;
 bool  flg_reset_indoor_reloc = false;
+bool  flg_reset_outdoor_realign = false;  // full reset triggered on outdoor re-entry
 bool  indoor_reloc_applied_once = false;
 Eigen::Vector3d indoor_reloc_pos_enu = Eigen::Vector3d::Zero();
 Eigen::Matrix3d indoor_reloc_rot_enu = Eigen::Matrix3d::Identity();
@@ -146,9 +148,12 @@ static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odome
     if (nmea_outdoor_good_streak >= need)
     {
         RCLCPP_WARN(rclcpp::get_logger("ligo"),
-                    "NMEA outdoor re-align: Reset() after %d consecutive init-quality covariance samples (wind_size=%d)",
-                    nmea_outdoor_good_streak, p_nmea->wind_size);
+                    "NMEA outdoor re-align: full reset after %d consecutive init-quality covariance samples",
+                    nmea_outdoor_good_streak);
         p_nmea->Reset();
+        // Trigger a full IVox/traj/GICP reset so the robot re-initializes in the outdoor frame.
+        flg_reset_outdoor_realign = true;
+        flg_reset = true;
         nmea_cycle_reopen_pending = true;
         nmea_outdoor_good_streak = 0;
     }
@@ -161,8 +166,12 @@ static void nmeaClearCycleIfRealignComplete()
     indoor_reloc_applied_once = false;
     nmea_cycle_reopen_pending = false;
     nmea_outdoor_good_streak = 0;
+    indoor_flag_dynamic = false;
+#ifdef LIGO_WITH_SMALL_GICP
+    ligo::indoor::resetIndoorGICP();
+#endif
     RCLCPP_INFO(rclcpp::get_logger("ligo"),
-                "NMEA outdoor re-align finished; indoor_reloc_applied_once cleared (indoor can trigger again)");
+                "Outdoor re-align complete: indoor GICP and indoor_flag_dynamic cleared");
 }
 #endif
 
@@ -1415,6 +1424,18 @@ int main(int argc, char** argv)
         p_nmea->pre_integration->setnoise();
     }
 #endif
+#ifdef LIGO_WITH_SMALL_GICP
+    if (indoor_flag && !indoor_map_pcd_path.empty())
+    {
+        ligo::indoor::SmallGICPConfig gicp_cfg;
+        gicp_cfg.num_threads               = 4;
+        gicp_cfg.map_downsampling_resolution  = 0.5;
+        gicp_cfg.scan_downsampling_resolution = 0.5;
+        gicp_cfg.max_correspondence_distance  = 3.0;
+        gicp_cfg.max_iterations               = 50;
+        ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
+    }
+#endif
     // IMU uses h_dyn_share_modified_2; esekfom 2h does not assign slot 2 — always 3h (NMEA slot unused when !LIGO_WITH_NMEA / no NMEA updates).
     kf_output.init_dyn_share_modified_3h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output, h_model_NMEA_output);
     Eigen::Matrix<double, 24, 24> P_init_output; // = MD(24, 24)::Identity() * 0.01;
@@ -1494,6 +1515,26 @@ int main(int argc, char** argv)
     auto pubLaserCloudFullRes_body = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", qos_pub);
     auto pubLaserCloudEffect = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", qos_pub);
     auto pubLaserCloudMap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/Laser_map", qos_pub);
+#ifdef LIGO_WITH_SMALL_GICP
+    rclcpp::QoS qos_latched = rclcpp::QoS(1).transient_local();
+    auto pubIndoorMapCloud  = node->create_publisher<sensor_msgs::msg::PointCloud2>("/indoor/map_cloud", qos_latched);
+    auto pubIndoorAlignedScan = node->create_publisher<sensor_msgs::msg::PointCloud2>("/indoor/aligned_scan", qos_pub);
+    // Subscriber for dynamic indoor/outdoor mode toggle
+    auto subIndoorFlag = node->create_subscription<std_msgs::msg::Bool>(
+        "/ligo/indoor_mode", 10,
+        [](const std_msgs::msg::Bool::SharedPtr msg) {
+            const bool was_indoor = indoor_flag_dynamic;
+            indoor_flag_dynamic = msg->data;
+            if (!was_indoor && msg->data) {
+                RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor] dynamic indoor mode ON");
+            } else if (was_indoor && !msg->data) {
+                RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor] dynamic indoor mode OFF");
+#ifdef LIGO_WITH_SMALL_GICP
+                ligo::indoor::resetIndoorGICP();
+#endif
+            }
+        });
+#endif
     auto pubOdomAftMapped = node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_to_init", qos_pub);
     auto pubPath = node->create_publisher<nav_msgs::msg::Path>("/path", qos_pub);
     auto pubNmeaAlignedOdom = node->create_publisher<nav_msgs::msg::Odometry>("/nmea_aligned_to_init", qos_pub);
@@ -1545,17 +1586,15 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
-            if (!mapping_mode)
-            {
-                ligo::indoor::updateIndoorLocalizationPlaceholder(state_out.pos, state_out.rot, time_current);
-            }
-            // TODO(indoor): enable real graph insertion after localization module is implemented.
-            // ligo::indoor::addIndoorFactorToGraphStubCommented();
             if (flg_reset)
             {
                 if (flg_reset_indoor_reloc)
                 {
                     RCLCPP_WARN(node->get_logger(), "reset by indoor relocalization");
+                }
+                else if (flg_reset_outdoor_realign)
+                {
+                    RCLCPP_WARN(node->get_logger(), "reset by outdoor re-entry after indoor");
                 }
                 else
                 {
@@ -1567,8 +1606,8 @@ int main(int argc, char** argv)
                     state_out = state_output();
                     if (flg_reset_indoor_reloc)
                     {
-                        RCLCPP_WARN(node->get_logger(), "indoor mode on");
-                        // Keep ENU anchor in graph init, but restart local state at origin.
+                        RCLCPP_WARN(node->get_logger(), "indoor mode on: GICP anchor applied");
+                        // Keep ENU anchor in graph init, restart local state at origin with GICP orientation.
                         state_out.pos = Eigen::Vector3d::Zero();
                         state_out.rot = indoor_reloc_rot_enu;
                         state_out.vel = Eigen::Vector3d::Zero();
@@ -1578,6 +1617,20 @@ int main(int argc, char** argv)
                         p_imu->imu_need_init_ = false;
                         p_imu->after_imu_init_ = true;
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
+                        indoor_flag_dynamic = true;
+#ifdef LIGO_WITH_SMALL_GICP
+                        // Seed GICP with the indoor anchor pose so first scan aligns correctly.
+                        indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
+                        indoor_gicp_T_map_lidar.translation() = indoor_reloc_pos_enu;
+                        indoor_gicp_T_map_lidar.linear() = indoor_reloc_rot_enu;
+#endif
+                    }
+                    else if (flg_reset_outdoor_realign)
+                    {
+                        indoor_flag_dynamic = false;
+#ifdef LIGO_WITH_SMALL_GICP
+                        ligo::indoor::resetIndoorGICP();
+#endif
                     }
                     kf_output.change_P(P_init_output);
                 }
@@ -1586,17 +1639,13 @@ int main(int argc, char** argv)
                 is_first_frame = true;
                 flg_reset = false;
                 flg_reset_indoor_reloc = false;
+                flg_reset_outdoor_realign = false;
                 init_map = false;
                 
                 {
                     ivox_.reset(new IVoxType(ivox_options_));
-                    ivox_last_.reset(new IVoxType(ivox_options_)); // = std::make_shared<IVoxType>(*ivox_);
+                    ivox_last_.reset(new IVoxType(ivox_options_));
                     traj_manager.reset(new curvefitter::TrajectoryManager<4>());
-                    // while (!empty_voxels.empty())
-                    // {
-                        // std::unordered_set<Eigen::Matrix<int, 3, 1>, faster_lio::hash_vec<3>>().swap(empty_voxels[0]);
-                        // empty_voxels.pop_front();
-                    // }
                 }
             }
 
@@ -1931,6 +1980,9 @@ int main(int argc, char** argv)
                                             if (p_nmea->icp_tf_ready) { p_nmea->sum_nmea_lio_err_sq_xy += err_sq_xy_pre; p_nmea->n_nmea_fusion_count++; }
                                             kf_output.update_iterated_dyn_share_NMEA();
                                             if (!runtime_pos_log) cout_state_to_file_nmea();
+                                            // Add indoor pose factor alongside the NMEA factor just inserted.
+                                            if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) && indoor_pose_valid)
+                                                ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
                                         }
                                     }
                                     p_nmea->nmea_msg.pop();
@@ -2087,6 +2139,8 @@ int main(int argc, char** argv)
                                     if (p_nmea->icp_tf_ready) { p_nmea->sum_nmea_lio_err_sq_xy += err_sq_xy_pre2; p_nmea->n_nmea_fusion_count++; }
                                     kf_output.update_iterated_dyn_share_NMEA();
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
+                                    if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) && indoor_pose_valid)
+                                        ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
                                 }
                             }
                             p_nmea->nmea_msg.pop();
@@ -2398,6 +2452,8 @@ int main(int argc, char** argv)
                                         // reset_cov_output(kf_output.P_);
                                     }
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
+                                    if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) && indoor_pose_valid)
+                                        ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
                                 }
                             }
                             p_nmea->nmea_msg.pop();
@@ -2469,6 +2525,30 @@ int main(int argc, char** argv)
                 MapIncremental();
             }
 
+#ifdef LIGO_WITH_SMALL_GICP
+            // Indoor GICP localization (runs every frame when indoor and map is loaded)
+            if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) &&
+                indoor_gicp_map_loaded && p_nmea && p_nmea->icp_tf_ready &&
+                feats_down_world && !feats_down_world->empty())
+            {
+                const bool gicp_ok = ligo::indoor::runIndoorGICPUpdate(
+                    feats_down_world,
+                    lidar_end_time,
+                    p_nmea->icp_R_local_to_enu,
+                    p_nmea->icp_t_local_to_enu);
+
+                if (gicp_ok)
+                {
+                    ligo::indoor::publishIndoorViz(
+                        pubIndoorMapCloud, pubIndoorAlignedScan,
+                        feats_down_world,
+                        p_nmea->icp_R_local_to_enu,
+                        p_nmea->icp_t_local_to_enu,
+                        lidar_end_time);
+                }
+            }
+#endif
+
             t5 = omp_get_wtime();
             /******* Publish points *******/
             if (!flg_exit && rclcpp::ok())
@@ -2532,6 +2612,10 @@ int main(int argc, char** argv)
     pubEnuPosition.reset();
     pubEcefPosition.reset();
     pubGlobalNavSat.reset();
+#ifdef LIGO_WITH_SMALL_GICP
+    pubIndoorMapCloud.reset();
+    pubIndoorAlignedScan.reset();
+#endif
     ligo_reset_nmea_stamp_diag_publisher();
 
     fout_out.close();

@@ -194,6 +194,8 @@ install(TARGETS ligo_mapping
 )
 install(PROGRAMS
   scripts/grid_membership_monitor.py
+  ros2_livox_small_gicp.py
+  ros2_indoor_map_gicp.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY config rviz_cfg launch

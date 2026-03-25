@@ -116,6 +116,10 @@ bool indoor_pose_valid = false;
 double indoor_pose_time = 0.0;
 gtsam::noiseModel::Base::shared_ptr indoorPoseNoise;
 gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
+std::string indoor_map_pcd_path;
+bool indoor_gicp_map_loaded = false;
+Eigen::Isometry3d indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
+bool indoor_flag_dynamic = false;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
 std::vector<Eigen::Matrix3d> local_rots;
@@ -280,6 +284,7 @@ void readParameters(rclcpp::Node * node)
     ligo::indoor::initIndoorPoseNoises(indoor_pos_noise, indoor_pos_noise_z, indoor_rot_noise,
                                        indoor_outlier_rej, indoor_outlier_thres, indoor_outlier_thres_init,
                                        indoorPoseNoise, indoorPoseNoiseInit);
+    indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
   }
 #endif
 }

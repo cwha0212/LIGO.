@@ -108,3 +108,19 @@
       pcd_save_en: false
       interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+
+    indoor:
+      # true: enable indoor localization mode (GICP against pre-built PCD map).
+      # Set false (or mapping_mode: true) to disable.
+      indoor_flag: false
+      # Absolute path to the reference PCD map file built during the mapping session.
+      # Typically: <workspace>/src/LIGO./PCD/scans_3.pcd
+      map_pcd_path: ""
+      # Noise models for IndoorLocalizationFactor in the GTSAM graph.
+      pos_noise: 0.2         # (m) horizontal
+      pos_noise_z: 0.5       # (m) vertical
+      rot_noise: 0.05        # (rad)
+      # Outlier rejection (Cauchy robust kernel)
+      outlier_rejection: false
+      outlier_thres: 0.3
+      outlier_thres_init: 1.0
