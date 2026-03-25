@@ -16,7 +16,7 @@
       det_range: 20.0          # distance range (meters)
 
     mapping:
-      mapping_mode: true # true: indoor localization/switching path disabled for pure mapping
+      mapping_mode: false # true: indoor localization/switching path disabled for pure mapping
       det_range: 20.0 # mapping stage effective lidar range limit (meters)
       imu_en: true
       imu_time_inte: 0.005 # = 1 / frequency of IMU
@@ -112,7 +112,7 @@
     indoor:
       # true: enable indoor localization mode (GICP against pre-built PCD map).
       # Set false (or mapping_mode: true) to disable.
-      indoor_flag: false
+      indoor_flag: true
       # Absolute path to the reference PCD map file built during the mapping session.
       # Typically: <workspace>/src/LIGO./PCD/scans_3.pcd
       map_pcd_path: ""

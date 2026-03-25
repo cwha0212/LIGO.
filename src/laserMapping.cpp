@@ -2628,7 +2628,7 @@ int main(int argc, char** argv)
         string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
 #if !defined(LIGO_WITHOUT_GNSS)
         const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
-        const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
+        const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? gnss_comm::ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
         const Eigen::Vector3d anchor_lla_deg_m = saved_in_enu ? first_gps_lla : Eigen::Vector3d::Zero();
 #else
