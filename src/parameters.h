@@ -149,6 +149,11 @@ extern double indoor_pose_time;
 extern gtsam::noiseModel::Base::shared_ptr indoorPoseNoise;
 extern gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
 
+extern std::string indoor_map_pcd_path;
+extern bool indoor_gicp_map_loaded;
+extern Eigen::Isometry3d indoor_gicp_T_map_lidar;
+extern bool indoor_flag_dynamic;
+
 extern MeasureGroup Measures;
 
 extern std::vector<Eigen::Vector3d> est_poses;

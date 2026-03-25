@@ -85,6 +85,38 @@ bool SmallGICPLocalizer::loadMapFromPLY(const std::string& ply_path) {
   return setMap(converted);
 }
 
+bool SmallGICPLocalizer::loadMapFromPCD(const std::string& pcd_path) {
+  pcl::PointCloud<pcl::PointXYZI> cloud_xyzi;
+  if (pcl::io::loadPCDFile<pcl::PointXYZI>(pcd_path, cloud_xyzi) == 0) {
+    auto converted = pcl::make_shared<LidarCloud>();
+    converted->reserve(cloud_xyzi.size());
+    for (const auto& p : cloud_xyzi.points) {
+      LidarPoint q;
+      q.x = p.x; q.y = p.y; q.z = p.z;
+      q.intensity = p.intensity;
+      q.normal_x = 0.0f; q.normal_y = 0.0f; q.normal_z = 0.0f; q.curvature = 0.0f;
+      converted->push_back(q);
+    }
+    return setMap(converted);
+  }
+
+  pcl::PointCloud<pcl::PointXYZ> cloud_xyz;
+  if (pcl::io::loadPCDFile<pcl::PointXYZ>(pcd_path, cloud_xyz) != 0) {
+    std::cerr << "[SmallGICPLocalizer] failed to load map PCD: " << pcd_path << std::endl;
+    return false;
+  }
+  auto converted = pcl::make_shared<LidarCloud>();
+  converted->reserve(cloud_xyz.size());
+  for (const auto& p : cloud_xyz.points) {
+    LidarPoint q;
+    q.x = p.x; q.y = p.y; q.z = p.z;
+    q.intensity = 0.0f;
+    q.normal_x = 0.0f; q.normal_y = 0.0f; q.normal_z = 0.0f; q.curvature = 0.0f;
+    converted->push_back(q);
+  }
+  return setMap(converted);
+}
+
 bool SmallGICPLocalizer::setMap(const LidarCloud::ConstPtr& map_cloud) {
   if (!map_cloud || map_cloud->empty()) {
     std::cerr << "[SmallGICPLocalizer] map cloud is empty." << std::endl;
