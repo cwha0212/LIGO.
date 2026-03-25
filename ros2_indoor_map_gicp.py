@@ -18,16 +18,27 @@ Usage (example):
 Dynamic indoor/outdoor control:
   ros2 topic pub /ligo/indoor_mode std_msgs/Bool "data: true"   # enter indoor
   ros2 topic pub /ligo/indoor_mode std_msgs/Bool "data: false"  # exit indoor
+
+Grid-based map (same rule as scripts/grid_membership_monitor.py — free/occupied cell in ECEF):
+  ros2 run ligo ros2_indoor_map_gicp.py --ros-args \\
+      -p grid_map_dir:=/path/to/PCD \\
+      -p ecef_topic:=/ligo/ecef_position
+  (Subscribe to fused ECEF from ligo; source_pcd from the matching *_grid2d.yaml is loaded.)
 """
 
+import logging
 import math
-import struct
+import os
+from dataclasses import dataclass
+from glob import glob
+from typing import List, Optional, Tuple
+
 import numpy as np
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy, ReliabilityPolicy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PointStamped, PoseStamped
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
@@ -177,6 +188,177 @@ def xyz_to_pointcloud2(pts: np.ndarray, frame_id: str, stamp) -> PointCloud2:
 
 
 # ---------------------------------------------------------------------------
+# Occupancy grid membership (aligned with grid_membership_monitor / ligo C++ registry)
+# ---------------------------------------------------------------------------
+
+
+def _parse_simple_yaml(path: str) -> dict:
+    result = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            result[key.strip()] = value.strip()
+    return result
+
+
+def _parse_origin(origin_text: str) -> Tuple[float, float, float]:
+    text = origin_text.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        raise ValueError(f"invalid origin: {origin_text}")
+    parts = [p.strip() for p in text[1:-1].split(",")]
+    if len(parts) != 3:
+        raise ValueError(origin_text)
+    return float(parts[0]), float(parts[1]), float(parts[2])
+
+
+def _parse_float_list(text: str, n: int) -> Tuple[float, ...]:
+    s = text.strip()
+    if not (s.startswith("[") and s.endswith("]")):
+        raise ValueError(text)
+    parts = [p.strip() for p in s[1:-1].split(",")]
+    nums = tuple(float(p) for p in parts if p)
+    if len(nums) != n:
+        raise ValueError(text)
+    return nums
+
+
+def _read_pgm_p5(path: str) -> Tuple[int, int, bytes]:
+    with open(path, "rb") as f:
+        if f.readline().strip() != b"P5":
+            raise ValueError(f"not P5: {path}")
+
+        def _next() -> bytes:
+            while True:
+                ln = f.readline()
+                if not ln:
+                    raise ValueError(path)
+                if ln.startswith(b"#"):
+                    continue
+                return ln
+
+        wh = _next().split()
+        w, h = int(wh[0]), int(wh[1])
+        if int(_next().strip()) != 255:
+            raise ValueError(path)
+        data = f.read(w * h)
+        if len(data) != w * h:
+            raise ValueError(path)
+        return w, h, data
+
+
+@dataclass
+class _GridMapPy:
+    map_id: str
+    source_pcd: str
+    resolution: float
+    origin_x: float
+    origin_y: float
+    frame_id: str
+    width: int
+    height: int
+    pixels: bytes
+    enu_anchor_ecef_m: Optional[Tuple[float, float, float]] = None
+    r_ecef_enu_row_major: Optional[Tuple[float, ...]] = None
+
+    def _ecef_to_map_xy(self, x: float, y: float, z: float) -> Optional[Tuple[float, float]]:
+        frame = self.frame_id.strip().lower()
+        if frame == "ecef":
+            return x, y
+        if frame == "enu":
+            if self.enu_anchor_ecef_m is None or self.r_ecef_enu_row_major is None:
+                return None
+            ax, ay, az = self.enu_anchor_ecef_m
+            dx, dy, dz = x - ax, y - ay, z - az
+            r = self.r_ecef_enu_row_major
+            enu_x = r[0] * dx + r[3] * dy + r[6] * dz
+            enu_y = r[1] * dx + r[4] * dy + r[7] * dz
+            return enu_x, enu_y
+        return None
+
+    def classify(self, x: float, y: float, z: float) -> Tuple[bool, str]:
+        mxy = self._ecef_to_map_xy(x, y, z)
+        if mxy is None:
+            return False, "outside"
+        mx, my = mxy
+        col = int(math.floor((mx - self.origin_x) / self.resolution))
+        row_from_bottom = int(math.floor((my - self.origin_y) / self.resolution))
+        row = self.height - 1 - row_from_bottom
+        if row < 0 or row >= self.height or col < 0 or col >= self.width:
+            return False, "outside"
+        v = self.pixels[row * self.width + col]
+        if v <= 50:
+            return True, "occupied"
+        if v >= 250:
+            return True, "free"
+        return True, "unknown"
+
+
+def _load_grid_maps_from_dir(map_dir: str) -> List[_GridMapPy]:
+    out: List[_GridMapPy] = []
+    if not map_dir or not os.path.isdir(map_dir):
+        return out
+    yaml_paths = sorted(glob(os.path.join(map_dir, "*_grid2d.yaml")))
+    for ypath in yaml_paths:
+        try:
+            kv = _parse_simple_yaml(ypath)
+            image = kv.get("image", "")
+            if not image:
+                continue
+            pgm_path = image if os.path.isabs(image) else os.path.join(os.path.dirname(ypath), image)
+            if not os.path.isfile(pgm_path):
+                continue
+            src = kv.get("source_pcd", "")
+            if not src:
+                continue
+            pcd_path = src if os.path.isabs(src) else os.path.join(os.path.dirname(ypath), src)
+            pcd_path = os.path.normpath(pcd_path)
+            if not os.path.isfile(pcd_path):
+                continue
+            ox, oy, _oz = _parse_origin(kv.get("origin", "[0,0,0]"))
+            res = float(kv.get("resolution", "1.0"))
+            frame_id = kv.get("frame_id", "ecef")
+            stem = os.path.splitext(os.path.basename(ypath))[0]
+            mid = stem[: -len("_grid2d")] if stem.endswith("_grid2d") else stem
+            w, h, pixels = _read_pgm_p5(pgm_path)
+            enu_a = None
+            rmaj = None
+            at = kv.get("anchor_ecef_m", kv.get("anchor_ecef", ""))
+            rt = kv.get("R_ecef_enu_row_major", "")
+            if at and rt and frame_id.strip().lower() == "enu":
+                enu_a = _parse_float_list(at, 3)
+                rmaj = _parse_float_list(rt, 9)
+            out.append(
+                _GridMapPy(
+                    map_id=mid,
+                    source_pcd=pcd_path,
+                    resolution=res,
+                    origin_x=ox,
+                    origin_y=oy,
+                    frame_id=frame_id,
+                    width=w,
+                    height=h,
+                    pixels=pixels,
+                    enu_anchor_ecef_m=enu_a,
+                    r_ecef_enu_row_major=rmaj,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("indoor_map_gicp").warning("skip grid yaml %s: %s", ypath, exc)
+    return out
+
+
+def _lookup_known_pcd_from_grids(maps: List[_GridMapPy], x: float, y: float, z: float) -> Optional[Tuple[str, str]]:
+    for gm in maps:
+        inside, state = gm.classify(x, y, z)
+        if inside and state in ("free", "occupied"):
+            return gm.map_id, gm.source_pcd
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
 
@@ -195,6 +377,8 @@ class IndoorMapGICPNode(Node):
         self.declare_parameter("min_scan_points",         200)
         self.declare_parameter("max_path_size",           2000)
         self.declare_parameter("indoor_mode_topic",       "/ligo/indoor_mode")
+        self.declare_parameter("grid_map_dir",            "")
+        self.declare_parameter("ecef_topic",              "/ligo/ecef_position")
 
         self.lidar_topic         = self.get_parameter("lidar_topic").value
         self.map_pcd_path        = self.get_parameter("map_pcd_path").value
@@ -206,16 +390,29 @@ class IndoorMapGICPNode(Node):
         self.num_threads         = int(self.get_parameter("num_threads").value)
         self.min_scan_points     = int(self.get_parameter("min_scan_points").value)
         self.max_path_size       = int(self.get_parameter("max_path_size").value)
+        self.grid_map_dir        = str(self.get_parameter("grid_map_dir").value).strip()
+        self.ecef_topic          = str(self.get_parameter("ecef_topic").value)
 
         # State
         self.is_indoor   = False
         self.map_points  = None   # np.ndarray Nx3 in map frame
         self.T_map_lidar = np.eye(4, dtype=np.float64)  # accumulated pose
         self.map_published = False
+        self._grid_maps: List[_GridMapPy] = _load_grid_maps_from_dir(self.grid_map_dir)
+        self._last_ecef: Optional[Tuple[float, float, float]] = None
+        self._grid_resolved_pcd: Optional[str] = None
+        self._no_map_warned = False
 
-        # Load map
-        if self.map_pcd_path:
+        # Load map (fixed path only when not using grid dir, or as sole config)
+        if not self._grid_maps and self.map_pcd_path:
             self._load_map(self.map_pcd_path)
+        elif self._grid_maps:
+            self.get_logger().info(
+                "[gicp] %d grid map(s) in %s — PCD from grid cell (need ECEF on %s)",
+                len(self._grid_maps),
+                self.grid_map_dir,
+                self.ecef_topic,
+            )
 
         # Publishers
         latched_qos = QoSProfile(
@@ -234,11 +431,15 @@ class IndoorMapGICPNode(Node):
         # Subscriptions
         indoor_topic = str(self.get_parameter("indoor_mode_topic").value)
         self.create_subscription(Bool, indoor_topic, self._on_indoor_flag, 10)
+        self.create_subscription(PointStamped, self.ecef_topic, self._on_ecef, 10)
         self.sub_lidar = self.create_subscription(
             PointCloud2, self.lidar_topic, self._on_lidar, qos_profile_sensor_data)
 
         self.get_logger().info(
-            f"IndoorMapGICP started: map={self.map_pcd_path!r} frame={self.map_frame}"
+            "IndoorMapGICP started: map_pcd=%r grid_dir=%r frame=%s",
+            self.map_pcd_path,
+            self.grid_map_dir or None,
+            self.map_frame,
         )
 
     # ------------------------------------------------------------------
@@ -251,12 +452,38 @@ class IndoorMapGICPNode(Node):
         self.map_points = pts
         self.get_logger().info(f"[gicp] map loaded: {pts.shape[0]} points")
         self.map_published = False
+        self._no_map_warned = False
 
     def reset(self) -> None:
         self.T_map_lidar = np.eye(4, dtype=np.float64)
         self.map_published = False
         self.path_msg.poses.clear()
         self.get_logger().info("[gicp] state reset")
+
+    def _on_ecef(self, msg: PointStamped) -> None:
+        self._last_ecef = (float(msg.point.x), float(msg.point.y), float(msg.point.z))
+
+    def _try_resolve_map_from_grid(self) -> bool:
+        """Return True if map_points is ready (from grid, fallback path, or earlier load)."""
+        if not self._grid_maps:
+            return self.map_points is not None
+        if self._last_ecef is None:
+            return self.map_points is not None
+        x, y, z = self._last_ecef
+        hit = _lookup_known_pcd_from_grids(self._grid_maps, x, y, z)
+        if hit:
+            _mid, pcd = hit
+            if self._grid_resolved_pcd != pcd or self.map_points is None:
+                self.get_logger().info("[gicp] grid cell -> map_id=%s pcd=%s", _mid, pcd)
+                self._load_map(pcd)
+                self._grid_resolved_pcd = pcd
+                self.T_map_lidar = np.eye(4, dtype=np.float64)
+                self.path_msg.poses.clear()
+            return self.map_points is not None
+        if self.map_pcd_path and self.map_points is None:
+            self.get_logger().info("[gicp] no grid hit — fallback map_pcd_path")
+            self._load_map(self.map_pcd_path)
+        return self.map_points is not None
 
     # ------------------------------------------------------------------
     def _on_indoor_flag(self, msg: Bool) -> None:
@@ -265,6 +492,7 @@ class IndoorMapGICPNode(Node):
         if not was_indoor and msg.data:
             self.get_logger().info("[gicp] indoor mode ON")
             self.reset()
+            self._try_resolve_map_from_grid()
         elif was_indoor and not msg.data:
             self.get_logger().info("[gicp] indoor mode OFF — reset")
             self.reset()
@@ -272,8 +500,14 @@ class IndoorMapGICPNode(Node):
     def _on_lidar(self, msg: PointCloud2) -> None:
         if not self.is_indoor:
             return
+        if self._grid_maps:
+            self._try_resolve_map_from_grid()
         if self.map_points is None:
-            self.get_logger().warn_once("[gicp] no map loaded — skipping frame")
+            if not self._no_map_warned:
+                self.get_logger().warn(
+                    "[gicp] no map loaded (set map_pcd_path or grid_map_dir + ECEF) — skipping"
+                )
+                self._no_map_warned = True
             return
 
         pts = pointcloud2_to_xyz(msg)

@@ -60,6 +60,9 @@
 void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> node);
 
 #include "Indoor_Processing.h"
+#ifdef LIGO_WITH_SMALL_GICP
+#include "Indoor_GridMapRegistry.h"
+#endif
 #include <malloc.h>
 #include <fstream>
 #include <cmath>
@@ -1425,7 +1428,7 @@ int main(int argc, char** argv)
     }
 #endif
 #ifdef LIGO_WITH_SMALL_GICP
-    if (indoor_flag && !indoor_map_pcd_path.empty())
+    if (indoor_flag)
     {
         ligo::indoor::SmallGICPConfig gicp_cfg;
         gicp_cfg.num_threads               = 4;
@@ -1433,7 +1436,29 @@ int main(int argc, char** argv)
         gicp_cfg.scan_downsampling_resolution = 0.5;
         gicp_cfg.max_correspondence_distance  = 3.0;
         gicp_cfg.max_iterations               = 50;
-        ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
+        ligo::indoor::setIndoorGICPConfigForGridSelection(gicp_cfg);
+        if (!indoor_grid_map_dir.empty())
+        {
+            if (ligo::indoor::loadIndoorGridMapsFromDirectory(indoor_grid_map_dir))
+            {
+                RCLCPP_INFO(node->get_logger(),
+                            "[indoor/gicp] grid_map_dir loaded; reference PCD follows occupancy grid membership (ECEF)");
+            }
+            else
+            {
+                RCLCPP_WARN(node->get_logger(),
+                            "[indoor/gicp] indoor.grid_map_dir=%s invalid or empty — check * _grid2d.yaml",
+                            indoor_grid_map_dir.c_str());
+            }
+            if (!ligo::indoor::indoorGridMapsLoaded() && !indoor_map_pcd_path.empty())
+            {
+                ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
+            }
+        }
+        else if (!indoor_map_pcd_path.empty())
+        {
+            ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
+        }
     }
 #endif
     // IMU uses h_dyn_share_modified_2; esekfom 2h does not assign slot 2 — always 3h (NMEA slot unused when !LIGO_WITH_NMEA / no NMEA updates).
@@ -1619,10 +1644,36 @@ int main(int argc, char** argv)
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
                         indoor_flag_dynamic = true;
 #ifdef LIGO_WITH_SMALL_GICP
+                        // Attempt immediate map load using reloc ENU position → ECEF conversion.
+                        // This does NOT require p_nmea->nmea_ready (uses global anchor directly),
+                        // avoiding the race where NMEA is just-reset and not yet ready.
+#ifdef LIGO_WITH_NMEA
+                        if (ligo::indoor::indoorGridMapsLoaded() && nmea_global_anchor_ready)
+                        {
+                            const Eigen::Vector3d anc_ecef =
+                                gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                            const Eigen::Matrix3d R_ecef_enu =
+                                gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                            const Eigen::Vector3d reloc_ecef =
+                                anc_ecef + R_ecef_enu * indoor_reloc_pos_enu;
+                            ligo::indoor::loadIndoorGICPMapForSession(reloc_ecef);
+                        }
+#endif
+                        if (!indoor_gicp_map_loaded)
+                        {
+                            RCLCPP_ERROR(node->get_logger(),
+                                         "[indoor/gicp] Map NOT loaded at session start! "
+                                         "Set indoor.grid_map_dir or indoor.map_pcd_path in config.");
+                        }
                         // Seed GICP with the indoor anchor pose so first scan aligns correctly.
+                        // Done AFTER map load so loadIndoorGICPMapForSession does not overwrite it.
                         indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
                         indoor_gicp_T_map_lidar.translation() = indoor_reloc_pos_enu;
                         indoor_gicp_T_map_lidar.linear() = indoor_reloc_rot_enu;
+                        RCLCPP_WARN(node->get_logger(),
+                                    "[indoor/gicp] session started — map_loaded=%d  reference_pcd=%s",
+                                    static_cast<int>(indoor_gicp_map_loaded),
+                                    ligo::indoor::getIndoorGicpMapPath().c_str());
 #endif
                     }
                     else if (flg_reset_outdoor_realign)
@@ -1965,8 +2016,19 @@ int main(int argc, char** argv)
                                             }
                                             else
                                             {
-                                                indoor_reloc_pos_enu = kf_output.x_.pos;
-                                                indoor_reloc_rot_enu = kf_output.x_.rot;
+                                                // Convert LIO local pos to global ENU for correct grid lookup and GICP seeding
+                                                if (p_nmea->icp_tf_ready)
+                                                {
+                                                    indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
+                                                                           + p_nmea->icp_t_local_to_enu;
+                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                                }
+                                                else
+                                                {
+                                                    // ICP not aligned yet; approximate (valid only near anchor)
+                                                    indoor_reloc_pos_enu = kf_output.x_.pos;
+                                                    indoor_reloc_rot_enu = kf_output.x_.rot;
+                                                }
                                                 indoor_reloc_pose_time = time_predict_last_const;
                                             }
                                             indoor_reloc_applied_once = true;
@@ -2124,8 +2186,17 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        indoor_reloc_pos_enu = kf_output.x_.pos;
-                                        indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        if (p_nmea->icp_tf_ready)
+                                        {
+                                            indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
+                                                                   + p_nmea->icp_t_local_to_enu;
+                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                        }
+                                        else
+                                        {
+                                            indoor_reloc_pos_enu = kf_output.x_.pos;
+                                            indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        }
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;
@@ -2434,8 +2505,17 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        indoor_reloc_pos_enu = kf_output.x_.pos;
-                                        indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        if (p_nmea->icp_tf_ready)
+                                        {
+                                            indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
+                                                                   + p_nmea->icp_t_local_to_enu;
+                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                        }
+                                        else
+                                        {
+                                            indoor_reloc_pos_enu = kf_output.x_.pos;
+                                            indoor_reloc_rot_enu = kf_output.x_.rot;
+                                        }
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;
@@ -2526,26 +2606,40 @@ int main(int argc, char** argv)
             }
 
 #ifdef LIGO_WITH_SMALL_GICP
-            // Indoor GICP localization (runs every frame when indoor and map is loaded)
-            if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) &&
+            // Grid-based map selection: only in an active indoor session (indoor_flag_dynamic)
+            if (!mapping_mode && indoor_flag_dynamic && ligo::indoor::indoorGridMapsLoaded() &&
+                NMEA_ENABLE)
+            {
+                Eigen::Vector3d p_ecef;
+                if (compute_fused_imu_position_ecef(p_ecef))
+                {
+                    ligo::indoor::ensureIndoorGICPMapFromGridEcef(p_ecef);
+                }
+            }
+            // Always try to publish map cloud during indoor session (no icp_tf_ready needed)
+            if (!mapping_mode && indoor_flag_dynamic && indoor_gicp_map_loaded)
+            {
+                ligo::indoor::publishIndoorMapCloudOnly(pubIndoorMapCloud, lidar_end_time);
+            }
+            // Indoor GICP localization: only during an active indoor session (indoor_flag_dynamic)
+            if (!mapping_mode && indoor_flag_dynamic &&
                 indoor_gicp_map_loaded && p_nmea && p_nmea->icp_tf_ready &&
                 feats_down_world && !feats_down_world->empty())
             {
-                const bool gicp_ok = ligo::indoor::runIndoorGICPUpdate(
+                ligo::indoor::runIndoorGICPUpdate(
                     feats_down_world,
                     lidar_end_time,
                     p_nmea->icp_R_local_to_enu,
                     p_nmea->icp_t_local_to_enu);
 
-                if (gicp_ok)
-                {
-                    ligo::indoor::publishIndoorViz(
-                        pubIndoorMapCloud, pubIndoorAlignedScan,
-                        feats_down_world,
-                        p_nmea->icp_R_local_to_enu,
-                        p_nmea->icp_t_local_to_enu,
-                        lidar_end_time);
-                }
+                // Publish viz every attempt (success or failure) so RViz shows live scan vs map
+                ligo::indoor::publishIndoorViz(
+                    pubIndoorMapCloud, pubIndoorAlignedScan,
+                    feats_down_world,
+                    p_nmea->icp_R_local_to_enu,
+                    p_nmea->icp_t_local_to_enu,
+                    lidar_end_time);
+
             }
 #endif
 

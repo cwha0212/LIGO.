@@ -113,6 +113,10 @@
       # true: enable indoor localization mode (GICP against pre-built PCD map).
       # Set false (or mapping_mode: true) to disable.
       indoor_flag: true
+      # Directory containing * _grid2d.yaml (+ pgm + source_pcd). When set, ligo_mapping loads
+      # the PCD from source_pcd for whichever map contains the rover ECEF in a free/occupied cell
+      # (same rule as scripts/grid_membership_monitor.py). If empty, map_pcd_path is used alone.
+      grid_map_dir: "/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD"
       # Absolute path to the reference PCD map file built during the mapping session.
       # Typically: <workspace>/src/LIGO./PCD/scans_3.pcd
       map_pcd_path: ""

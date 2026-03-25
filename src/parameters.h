@@ -150,6 +150,8 @@ extern gtsam::noiseModel::Base::shared_ptr indoorPoseNoise;
 extern gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
 
 extern std::string indoor_map_pcd_path;
+/** Non-empty: resolve GICP reference PCD via * _grid2d.yaml occupancy (same as indoor map membership). */
+extern std::string indoor_grid_map_dir;
 extern bool indoor_gicp_map_loaded;
 extern Eigen::Isometry3d indoor_gicp_T_map_lidar;
 extern bool indoor_flag_dynamic;

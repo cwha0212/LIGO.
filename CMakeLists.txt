@@ -141,7 +141,10 @@ else()
   message(STATUS "ligo: gnss_comm not found - LiDAR+IMU only (NMEA stub)")
 endif()
 if(LIGO_WITH_SMALL_GICP)
-  list(APPEND ligo_sources src/Indoor_SmallGICP_Localizer.cpp)
+  list(APPEND ligo_sources
+    src/Indoor_SmallGICP_Localizer.cpp
+    src/Indoor_GridMapRegistry.cpp
+  )
   add_compile_definitions(LIGO_WITH_SMALL_GICP)
 endif()
 

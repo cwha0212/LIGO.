@@ -27,11 +27,24 @@ void updateIndoorLocalizationPlaceholder(const Eigen::Vector3d& pos_enu,
 void addIndoorFactorToGraphStubCommented();
 
 #ifdef LIGO_WITH_SMALL_GICP
+/** Config used when loading PCD chosen by indoor grid membership (see ensureIndoorGICPMapFromGridEcef). */
+void setIndoorGICPConfigForGridSelection(const SmallGICPConfig& cfg);
+
+/** At indoor session start: load GICP map for the given ECEF position via grid lookup.
+ *  Does NOT call resetIndoorGICP() — caller is responsible for seeding T_map_lidar afterward. */
+bool loadIndoorGICPMapForSession(const Eigen::Vector3d& ecef_m);
+
+/** During an active session: if the rover has moved to a different grid cell, reload the map. */
+bool ensureIndoorGICPMapFromGridEcef(const Eigen::Vector3d& ecef_m);
+
 /** Load the indoor reference map PCD into the GICP localizer. */
 void initIndoorGICP(const std::string& map_pcd_path, const SmallGICPConfig& cfg);
 
 /** Reset GICP pose tracking (call on every indoor/outdoor transition). */
 void resetIndoorGICP();
+
+/** Returns the absolute path of the currently loaded reference PCD, or empty string. */
+std::string getIndoorGicpMapPath();
 
 /** Run scan-to-map GICP and update indoor_pos_enu_meas / indoor_rot_enu_meas.
  *  scan_world: current scan in LIO local/world frame.
@@ -41,7 +54,14 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
                          const Eigen::Matrix3d& R_local_to_enu,
                          const Eigen::Vector3d& t_local_to_enu);
 
-/** Publish indoor map (one-shot) and aligned current scan to RViz. */
+/** Publish just the indoor reference map cloud (latched).
+ *  Safe to call every frame; no-op after first successful publish. */
+void publishIndoorMapCloudOnly(
+    const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub_map,
+    double timestamp_sec);
+
+/** Publish indoor map (latched, first call or after map change) and GICP-aligned scan.
+ *  Called every frame regardless of convergence so RViz shows live scan vs map. */
 void publishIndoorViz(
     const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub_map,
     const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub_scan,

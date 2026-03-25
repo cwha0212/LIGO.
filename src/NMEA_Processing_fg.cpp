@@ -953,6 +953,20 @@ void NMEAProcess::SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
   frame_count = 0;
   last_nmea_time = init_time_sec;
   runISAM2opt();
+
+  // Derive the LIO-world → ENU transform from the indoor localization anchor so that
+  // downstream consumers (GICP, odometry ENU publish) work immediately without waiting
+  // for a separate LIO-NMEA ICP alignment pass.
+  // Transform: p_enu = R_local_to_enu * p_local + t_local_to_enu
+  //   where anc_enu = R_local_to_enu * anc_local + t_local_to_enu
+  //   => t = anc_enu - R * anc_local
+  icp_R_local_to_enu = r_enu_local;
+  icp_t_local_to_enu = anc_enu - r_enu_local * anc_local;
+  icp_tf_ready = true;
+  RCLCPP_INFO(rclcpp::get_logger("ligo"),
+              "[nmea/init] ICP tf set from indoor reloc: "
+              "t_enu=(%.2f, %.2f, %.2f)",
+              icp_t_local_to_enu.x(), icp_t_local_to_enu.y(), icp_t_local_to_enu.z());
 }
 
 void NMEAProcess::SetInit()

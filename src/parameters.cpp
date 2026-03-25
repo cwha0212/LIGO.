@@ -117,6 +117,7 @@ double indoor_pose_time = 0.0;
 gtsam::noiseModel::Base::shared_ptr indoorPoseNoise;
 gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
 std::string indoor_map_pcd_path;
+std::string indoor_grid_map_dir;
 bool indoor_gicp_map_loaded = false;
 Eigen::Isometry3d indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
 bool indoor_flag_dynamic = false;
@@ -285,6 +286,7 @@ void readParameters(rclcpp::Node * node)
                                        indoor_outlier_rej, indoor_outlier_thres, indoor_outlier_thres_init,
                                        indoorPoseNoise, indoorPoseNoiseInit);
     indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
+    indoor_grid_map_dir = get_param("indoor.grid_map_dir", std::string(""));
   }
 #endif
 }
