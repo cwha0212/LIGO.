@@ -94,7 +94,7 @@ cd /path/to/your_ros2_ws/src
 cd ..
 source /opt/ros/<distro>/setup.bash
 # If using gnss_comm: source /path/to/gnss_comm/install/setup.bash
-colcon build --packages-select ligo
+colcon build --symlink-install --packages-select ligo
 source install/setup.bash
 ```
 

@@ -54,6 +54,8 @@ class NMEAProcess
   ~NMEAProcess();
   
   void Reset();
+  /** Clear ISAM graph and init buffers for outdoor re-align; keep ICP local→ENU until NMEALIAlign replaces it. */
+  void ResetGraphClearingInitRetainIcp();
   void processNMEA(const nav_msgs::msg::Odometry::SharedPtr &gnss_meas, state_output &state);
   void SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
                                const Eigen::Matrix3d &indoor_rot_enu,
@@ -66,8 +68,7 @@ class NMEAProcess
   Eigen::Vector3d local2enu(Eigen::Matrix3d enu_rot, Eigen::Vector3d anc, Eigen::Vector3d &pos);
   void SetInit();
   bool AddFactor(gtsam::Rot3 rel_rot_, gtsam::Point3 rel_pos_, gtsam::Vector3 rel_v_, Eigen::Vector3d state_gravity, double delta_t, double time_current,
-                Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot,
-                bool skip_nmea_measurement = false);
+                Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot);
   // std::vector<ObsPtr> gnss_meas_buf[WINDOW_SIZE+1]; //
   std::vector<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_; //[WINDOW_SIZE+1]; //
   // Eigen::Matrix3d rot_window[WINDOW_SIZE+1]; //
@@ -126,7 +127,8 @@ class NMEAProcess
   // void GnssPsrDoppMeas(const ObsPtr &obs_, const EphemBasePtr &ephem_);
   // void SvPosCals(const ObsPtr &obs_, const EphemBasePtr &ephem_);
   bool Evaluate(state_output &state);
-  bool AdvanceFrameForIndoor(state_output &state);
+  /** ENU 위치 of graph variable E(0) if optimized, else prior anc_enu when icp_tf_ready. */
+  bool graphAnchorEnu(Eigen::Vector3d &out) const;
   state_output state_const_;
   state_output state_const_last;
   double nmea_weight = 1.0;

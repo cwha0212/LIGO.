@@ -405,7 +405,7 @@ void publishIndoorViz(
 // ---------------------------------------------------------------------------
 void addIndoorFactorToGraph(int frame_num) {
 #ifdef LIGO_WITH_NMEA
-  if (!indoor_flag || !indoor_pose_valid) return;
+  if (!(indoor_flag || indoor_flag_dynamic) || !indoor_pose_valid) return;
   if (!p_nmea || !p_nmea->nmea_ready) return;
   if (!indoorPoseNoise || !indoorPoseNoiseInit) return;
 
