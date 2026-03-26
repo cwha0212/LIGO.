@@ -16,6 +16,24 @@ WGS84_F = 1.0 / 298.257223563
 WGS84_E2 = WGS84_F * (2.0 - WGS84_F)
 
 
+def _default_map_dir() -> str:
+    """share/ligo/PCD after install, or <pkg>/PCD when running from source tree."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        p = os.path.join(get_package_share_directory("ligo"), "PCD")
+        if os.path.isdir(p):
+            return p
+    except Exception:
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    if os.path.basename(here) == "scripts":
+        cand = os.path.normpath(os.path.join(here, "..", "PCD"))
+        if os.path.isdir(cand):
+            return cand
+    return ""
+
+
 def lla_to_ecef(lat_deg: float, lon_deg: float, alt_m: float) -> Tuple[float, float, float]:
     lat = math.radians(lat_deg)
     lon = math.radians(lon_deg)
@@ -158,7 +176,7 @@ class GridMembershipMonitor(Node):
     def __init__(self) -> None:
         super().__init__("grid_membership_monitor")
 
-        self.declare_parameter("map_dir", "/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD")
+        self.declare_parameter("map_dir", _default_map_dir())
         self.declare_parameter("gps_quality_topic", "/ublox_driver/receiver_lla")
         self.declare_parameter("position_topic", "/ligo/global_position")
         self.declare_parameter("gps_cov_bad_threshold_m2", 50.0)

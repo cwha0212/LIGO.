@@ -1,11 +1,11 @@
-image: /home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD/scans_2_grid2d.pgm
+image: scans_2_grid2d.pgm
 resolution: 1.000000000000
 origin: [-14.000000000000, -23.000000000000, 0.0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196
 mode: trinary
-source_pcd: /home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD/scans_2.pcd
+source_pcd: scans_2.pcd
 frame_id: enu
 grid_type: occupancy_2d_raycast
 min_points_per_cell: 3

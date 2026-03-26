@@ -1782,8 +1782,7 @@ int main(int argc, char** argv)
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
                         indoor_flag_dynamic = true;
 #ifdef LIGO_WITH_SMALL_GICP
-                        // Compute ECEF position for map selection:
-                        // prefer stored last_good_gnss_ecef, otherwise derive from indoor_reloc_pos_enu.
+                        // ECEF for grid→PCD: last good fix, else anchor + indoor ENU (same as before).
                         Eigen::Vector3d reloc_ecef = Eigen::Vector3d::Zero();
                         bool reloc_ecef_ok = false;
 #ifdef LIGO_WITH_NMEA
@@ -1799,11 +1798,61 @@ int main(int argc, char** argv)
                             reloc_ecef = anc_ecef + R_ecef_enu * indoor_reloc_pos_enu;
                             reloc_ecef_ok = true;
                         }
-                        if (reloc_ecef_ok && ligo::indoor::indoorGridMapsLoaded())
-                        {
-                            ligo::indoor::loadIndoorGICPMapForSession(reloc_ecef);
-                        }
 #endif
+                        ligo::indoor::SmallGICPConfig session_gicp_cfg;
+                        session_gicp_cfg.num_threads               = 4;
+                        session_gicp_cfg.map_downsampling_resolution  = 0.5;
+                        session_gicp_cfg.scan_downsampling_resolution = 0.5;
+                        session_gicp_cfg.max_correspondence_distance  = 3.0;
+                        session_gicp_cfg.max_iterations               = 50;
+                        ligo::indoor::setIndoorGICPConfigForGridSelection(session_gicp_cfg);
+                        RCLCPP_WARN(node->get_logger(),
+                                    "[indoor/gicp] session-start debug: grid_loaded=%d grid_count=%zu "
+                                    "reloc_ecef_ok=%d last_good_ecef=%d anchor_ready=%d "
+                                    "grid_map_dir='%s' map_pcd_path='%s'",
+                                    static_cast<int>(ligo::indoor::indoorGridMapsLoaded()),
+                                    ligo::indoor::indoorGridMapCount(),
+                                    static_cast<int>(reloc_ecef_ok),
+                                    static_cast<int>(last_good_gnss_ecef_valid),
+                                    static_cast<int>(nmea_global_anchor_ready),
+                                    indoor_grid_map_dir.c_str(),
+                                    indoor_map_pcd_path.c_str());
+                        if (reloc_ecef_ok) {
+                            RCLCPP_WARN(node->get_logger(),
+                                        "[indoor/gicp] session-start ECEF=(%.3f, %.3f, %.3f)",
+                                        reloc_ecef.x(), reloc_ecef.y(), reloc_ecef.z());
+                        }
+                        if (ligo::indoor::indoorGridMapsLoaded())
+                        {
+                            if (reloc_ecef_ok)
+                            {
+                                ligo::indoor::loadIndoorGICPMapForSession(reloc_ecef);
+                            }
+                            else if (ligo::indoor::indoorGridMapCount() == 1u)
+                            {
+                                ligo::indoor::loadIndoorGICPMapForSession(Eigen::Vector3d::Zero());
+                            }
+                            else if (!indoor_map_pcd_path.empty())
+                            {
+                                ligo::indoor::loadIndoorGICPMapForSession(Eigen::Vector3d::Zero());
+                            }
+                            else
+                            {
+                                RCLCPP_WARN(node->get_logger(),
+                                            "[indoor/gicp] multiple grid maps but no ECEF yet — set "
+                                            "indoor.map_pcd_path or wait for GNSS anchor / last good fix");
+                            }
+                        }
+                        else if (!indoor_map_pcd_path.empty())
+                        {
+                            ligo::indoor::initIndoorGICP(indoor_map_pcd_path, session_gicp_cfg);
+                        }
+                        else
+                        {
+                            RCLCPP_WARN(node->get_logger(),
+                                        "[indoor/gicp] no grids in memory and indoor.map_pcd_path empty — "
+                                        "check indoor.grid_map_dir and *_grid2d.yaml / PCD paths at startup");
+                        }
                         if (!indoor_gicp_map_loaded)
                         {
                             RCLCPP_ERROR(node->get_logger(),

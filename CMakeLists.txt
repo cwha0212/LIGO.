@@ -31,6 +31,7 @@ endif()
 
 # ROS2 / ament
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -80,6 +81,7 @@ endif()
 # 2) fallback to user-supplied SMALL_GICP_INCLUDE_DIR
 # 3) fallback to system find_package(small_gicp)
 set(LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/small_gicp/include")
+set(LIGO_BUNDLED_SMALL_GICP_ALT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/small_gicp")
 set(SMALL_GICP_INCLUDE_DIR "" CACHE PATH "Path to small_gicp include directory (folder containing small_gicp/...)")
 set(LIGO_WITH_SMALL_GICP OFF)
 set(LIGO_SMALL_GICP_MODE "disabled")
@@ -88,6 +90,10 @@ if(EXISTS "${LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR}/small_gicp/registration/regist
   set(LIGO_WITH_SMALL_GICP ON)
   set(SMALL_GICP_INCLUDE_DIR "${LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR}")
   set(LIGO_SMALL_GICP_MODE "bundled-thirdparty")
+elseif(EXISTS "${LIGO_BUNDLED_SMALL_GICP_ALT_INCLUDE_DIR}/small_gicp/registration/registration.hpp")
+  set(LIGO_WITH_SMALL_GICP ON)
+  set(SMALL_GICP_INCLUDE_DIR "${LIGO_BUNDLED_SMALL_GICP_ALT_INCLUDE_DIR}")
+  set(LIGO_SMALL_GICP_MODE "bundled-thirdparty-alt-layout")
 elseif(SMALL_GICP_INCLUDE_DIR AND EXISTS "${SMALL_GICP_INCLUDE_DIR}/small_gicp/registration/registration.hpp")
   set(LIGO_WITH_SMALL_GICP ON)
   set(LIGO_SMALL_GICP_MODE "external-include-path")
@@ -155,6 +161,7 @@ target_compile_options(ligo_mapping PRIVATE
   "-include${CMAKE_CURRENT_SOURCE_DIR}/include/ligo_gtsam_compat.h")
 
 ament_target_dependencies(ligo_mapping
+  ament_index_cpp
   rclcpp
   sensor_msgs
   nav_msgs
@@ -202,6 +209,9 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY config rviz_cfg launch
+  DESTINATION share/${PROJECT_NAME}
+)
+install(DIRECTORY PCD
   DESTINATION share/${PROJECT_NAME}
 )
 

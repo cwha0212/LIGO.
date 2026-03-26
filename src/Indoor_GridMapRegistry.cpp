@@ -150,6 +150,19 @@ static std::pair<bool, std::string> classify(const GridMapData &g, double x, dou
   return {true, "unknown"};
 }
 
+static double distanceToBboxMeters(const GridMapData &g, double x, double y, double z) {
+  auto map_xy = ecefToMapXY(g, x, y, z);
+  if (!map_xy)
+    return 1e18;
+  const double mx = map_xy->first;
+  const double my = map_xy->second;
+  const double max_x = g.origin_x + static_cast<double>(g.width) * g.resolution;
+  const double max_y = g.origin_y + static_cast<double>(g.height) * g.resolution;
+  const double dx = (mx < g.origin_x) ? (g.origin_x - mx) : ((mx > max_x) ? (mx - max_x) : 0.0);
+  const double dy = (my < g.origin_y) ? (g.origin_y - my) : ((my > max_y) ? (my - max_y) : 0.0);
+  return std::hypot(dx, dy);
+}
+
 }  // namespace
 
 bool loadIndoorGridMapsFromDirectory(const std::string &dir) {
@@ -288,6 +301,33 @@ std::optional<std::pair<std::string, std::string>> lookupIndoorGridKnownPcd(cons
       return std::make_pair(g.map_id, g.source_pcd);
   }
   return std::nullopt;
+}
+
+std::string debugIndoorGridLookup(const Eigen::Vector3d &ecef_m) {
+  std::ostringstream oss;
+  oss << "ecef=(" << ecef_m.x() << "," << ecef_m.y() << "," << ecef_m.z() << ") "
+      << "loaded_maps=" << g_grids.size();
+  if (g_grids.empty())
+    return oss.str();
+
+  double best_dist = 1e18;
+  std::string best_id = "-";
+  for (const auto &g : g_grids) {
+    auto [inside, state] = classify(g, ecef_m.x(), ecef_m.y(), ecef_m.z());
+    const double d = distanceToBboxMeters(g, ecef_m.x(), ecef_m.y(), ecef_m.z());
+    if (d < best_dist) {
+      best_dist = d;
+      best_id = g.map_id;
+    }
+    oss << " | map_id=" << g.map_id
+        << " frame=" << g.frame_id
+        << " inside=" << (inside ? 1 : 0)
+        << " state=" << state
+        << " has_tf=" << (g.has_enu_transform ? 1 : 0)
+        << " dist_to_bbox_m=" << d;
+  }
+  oss << " | nearest_map=" << best_id << " nearest_dist_m=" << best_dist;
+  return oss.str();
 }
 
 std::optional<GridEcefTransform> lookupIndoorGridTransformByMapId(const std::string &map_id) {

@@ -46,6 +46,21 @@ from std_msgs.msg import Bool
 import small_gicp
 
 
+def _default_grid_map_dir() -> str:
+    """share/ligo/PCD after install, or <pkg>/PCD when running from source tree."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        p = os.path.join(get_package_share_directory("ligo"), "PCD")
+        if os.path.isdir(p):
+            return p
+    except Exception:
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    cand = os.path.normpath(os.path.join(here, "PCD"))
+    return cand if os.path.isdir(cand) else ""
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -377,7 +392,7 @@ class IndoorMapGICPNode(Node):
         self.declare_parameter("min_scan_points",         200)
         self.declare_parameter("max_path_size",           2000)
         self.declare_parameter("indoor_mode_topic",       "/ligo/indoor_mode")
-        self.declare_parameter("grid_map_dir",            "")
+        self.declare_parameter("grid_map_dir",            _default_grid_map_dir())
         self.declare_parameter("ecef_topic",              "/ligo/ecef_position")
 
         self.lidar_topic         = self.get_parameter("lidar_topic").value

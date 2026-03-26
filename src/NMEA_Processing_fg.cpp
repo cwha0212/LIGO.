@@ -614,10 +614,13 @@ bool NMEAProcess::NMEALIAlign()
       "time_comp_0.3m+");
   anc_enu = sim_trans.block<3, 1>(0, 3);
   anc_local = init_pos_buf.back();
-  // Use ICP yaw for ENU-local alignment init (keep roll/pitch identity to avoid GNSS z-noise coupling).
+  // Use yaw-only ENU-local alignment (force roll/pitch=0) to avoid GNSS z-noise coupling.
   Rot_nmea_init = Eigen::AngleAxisd(yaw_deg * std::acos(-1.0) / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
   yaw_enu_local = yaw_deg * std::acos(-1.0) / 180.0;
-  icp_R_local_to_enu = sim_trans.block<3, 3>(0, 0);
+  // IMPORTANT:
+  // Keep local->ENU transform level even when 3D ICP returns tilted rotation.
+  // Otherwise ENU pose can drift downward on flat ground from pitch/roll leakage.
+  icp_R_local_to_enu = Rot_nmea_init;
   icp_t_local_to_enu = sim_trans.block<3, 1>(0, 3);
   icp_tf_ready = true;
   // Store alignment pairs for RViz: 0.3m 이후만, 보정된 시각(LIO at T-L) 적용

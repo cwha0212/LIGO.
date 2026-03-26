@@ -87,7 +87,12 @@ void setIndoorGICPConfigForGridSelection(const SmallGICPConfig& cfg) {
 // Called at session start: loads map without resetting indoor_gicp_T_map_lidar.
 // Caller (laserMapping reset block) seeds T_map_lidar immediately after this returns.
 bool loadIndoorGICPMapForSession(const Eigen::Vector3d& ecef_m) {
-  if (!indoorGridMapsLoaded()) return false;
+  if (!indoorGridMapsLoaded()) {
+    RCLCPP_ERROR(rclcpp::get_logger("ligo"),
+                 "[indoor/gicp] grid maps not loaded at session start: ecef=(%.3f, %.3f, %.3f)",
+                 ecef_m.x(), ecef_m.y(), ecef_m.z());
+    return false;
+  }
 
   const auto opt = lookupIndoorGridKnownPcd(ecef_m);
   std::string pcd;
@@ -115,6 +120,9 @@ bool loadIndoorGICPMapForSession(const Eigen::Vector3d& ecef_m) {
       RCLCPP_ERROR(rclcpp::get_logger("ligo"),
                    "[indoor/gicp] grid lookup failed (%zu maps loaded) — ENU→ECEF mismatch? "
                    "Rover position may be outside all grid cells.", n);
+      RCLCPP_WARN(rclcpp::get_logger("ligo"),
+                  "[indoor/gicp] lookup detail: %s",
+                  debugIndoorGridLookup(ecef_m).c_str());
       // Last resort: try map_pcd_path from parameters
       if (!indoor_map_pcd_path.empty()) {
         pcd    = indoor_map_pcd_path;

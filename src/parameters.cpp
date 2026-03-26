@@ -35,8 +35,40 @@
  */
 
 #include "parameters.h"
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <fstream>
+#include <filesystem>
 #include <rclcpp/exceptions.hpp>
+
+namespace {
+
+static std::string trim_ws(std::string s) {
+  while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.pop_back();
+  while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.erase(s.begin());
+  return s;
+}
+
+/** If non-empty and relative, resolve against ligo share (install) or ROOT_DIR (fallback). */
+static std::string resolve_indoor_grid_map_dir(const std::string& raw) {
+  std::string s = trim_ws(raw);
+  if (s.empty()) return s;
+  namespace fs = std::filesystem;
+  fs::path p(s);
+  if (p.is_absolute()) return s;
+  try {
+    const std::string share = ament_index_cpp::get_package_share_directory("ligo");
+    std::error_code ec;
+    fs::path joined = fs::path(share) / p;
+    fs::path canon = fs::weakly_canonical(joined, ec);
+    return ec ? joined.lexically_normal().string() : canon.string();
+  } catch (...) {
+  }
+  std::string root(ROOT_DIR);
+  if (!root.empty() && (root.back() == '/' || root.back() == '\\')) root.pop_back();
+  return (fs::path(root) / p).lexically_normal().string();
+}
+
+}  // namespace
 
 typename curvefitter::TrajectoryManager<4>::Ptr traj_manager = std::make_shared<curvefitter::TrajectoryManager<4>>();
 bool is_first_frame = true;
@@ -288,7 +320,10 @@ void readParameters(rclcpp::Node * node)
                                        indoor_outlier_rej, indoor_outlier_thres, indoor_outlier_thres_init,
                                        indoorPoseNoise, indoorPoseNoiseInit);
     indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
-    indoor_grid_map_dir = get_param("indoor.grid_map_dir", std::string(""));
+    indoor_grid_map_dir = resolve_indoor_grid_map_dir(get_param("indoor.grid_map_dir", std::string("")));
+    if (!indoor_grid_map_dir.empty()) {
+      cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;
+    }
     indoor_gicp_max_factor_error   = get_param("indoor.gicp_max_factor_error", 5.0);
     indoor_gicp_min_factor_inliers = get_param("indoor.gicp_min_factor_inliers", 50);
   }

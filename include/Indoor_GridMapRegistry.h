@@ -25,6 +25,9 @@ bool indoorGridMapsLoaded();
 std::optional<std::pair<std::string, std::string>> lookupIndoorGridKnownPcd(
     const Eigen::Vector3d &ecef_m);
 
+/** Debug helper: returns per-grid membership/classification for the given ECEF input. */
+std::string debugIndoorGridLookup(const Eigen::Vector3d &ecef_m);
+
 /** Number of loaded grid maps. */
 size_t indoorGridMapCount();
 
