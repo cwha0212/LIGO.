@@ -54,6 +54,8 @@ class NMEAProcess
   ~NMEAProcess();
   
   void Reset();
+  /** Clear ISAM graph and init buffers for outdoor re-align; keep ICP local→ENU until NMEALIAlign replaces it. */
+  void ResetGraphClearingInitRetainIcp();
   void processNMEA(const nav_msgs::msg::Odometry::SharedPtr &gnss_meas, state_output &state);
   void SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
                                const Eigen::Matrix3d &indoor_rot_enu,
@@ -125,6 +127,8 @@ class NMEAProcess
   // void GnssPsrDoppMeas(const ObsPtr &obs_, const EphemBasePtr &ephem_);
   // void SvPosCals(const ObsPtr &obs_, const EphemBasePtr &ephem_);
   bool Evaluate(state_output &state);
+  /** ENU 위치 of graph variable E(0) if optimized, else prior anc_enu when icp_tf_ready. */
+  bool graphAnchorEnu(Eigen::Vector3d &out) const;
   state_output state_const_;
   state_output state_const_last;
   double nmea_weight = 1.0;

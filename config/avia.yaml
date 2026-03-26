@@ -68,6 +68,7 @@
       nolidar: false
 
     ligo:
+      # Marker /ligo/nmea_graph_anchor_marker: GTSAM E(0) (optimized) or prior anc_enu; frame_id map; RViz Fixed Frame map
       # PointStamped /ligo/enu_position: same ENU as /aft_mapped_to_init when icp_tf_ready (use "map" with RViz Fixed Frame map)
       enu_position_frame_id: "map"
       global_position_topic: "/ligo/global_position"
@@ -75,6 +76,7 @@
       ecef_position_frame_id: "ecef"
 
     nmea:
+      # 실외 재정렬(실내 후 GNSS 품질): 그래프만 비우고 ICP 유지 → fused ENU 연속; NMEALIAlign 완료 후 IVox만 지연 리셋
       # true: gpsHandler가 nmea_meas_buf에 넣는 stamp 진단을 /ligo/nmea_stamp_diag 로 퍼블리시 (navsatfix 경로만)
       publish_stamp_diag: true
       nmea_enable: true

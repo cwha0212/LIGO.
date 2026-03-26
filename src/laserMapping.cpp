@@ -76,7 +76,7 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
-#include <sstream>
+#include <atomic>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
 #define PUBFRAME_PERIOD     (20)
@@ -94,7 +94,6 @@ Eigen::Vector3d first_pvt_used, first_lla_used;
 
 bool  flg_reset = false, flg_exit = false;
 bool  flg_reset_indoor_reloc = false;
-bool  flg_reset_outdoor_realign = false;  // full reset triggered on outdoor re-entry
 bool  indoor_reloc_applied_once = false;
 Eigen::Vector3d indoor_reloc_pos_enu = Eigen::Vector3d::Zero();
 Eigen::Matrix3d indoor_reloc_rot_enu = Eigen::Matrix3d::Identity();
@@ -105,22 +104,6 @@ Eigen::Vector3d last_good_gnss_ecef       = Eigen::Vector3d::Zero();
 bool            last_good_gnss_ecef_valid = false;
 constexpr bool kTempForceIndoorByNmeaCov = true;
 constexpr double kTempIndoorCovThreshold = 50.0;
-
-static inline long long ligo_dbg_now_ms() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
-}
-static void ligo_dbg_log(const std::string &run_id, const std::string &hypothesis_id,
-                         const std::string &location, const std::string &message,
-                         const std::string &data_json) {
-    std::ofstream ofs("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-8c474b.log",
-                      std::ios::app);
-    if (!ofs.is_open()) return;
-    ofs << "{\"sessionId\":\"8c474b\",\"runId\":\"" << run_id << "\",\"hypothesisId\":\""
-        << hypothesis_id << "\",\"location\":\"" << location << "\",\"message\":\"" << message
-        << "\",\"data\":" << data_json << ",\"timestamp\":" << ligo_dbg_now_ms() << "}\n";
-}
 
 #ifdef LIGO_WITH_SMALL_GICP
 /** Set by /ligo/indoor_mode true; main loop snaps LIO→ENU anchor then clears. */
@@ -163,6 +146,7 @@ static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odom
 
 static int nmea_outdoor_good_streak = 0;
 static bool nmea_cycle_reopen_pending = false;
+static std::atomic<bool> pending_outdoor_realign_ivox_reset{false};
 
 static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
 {
@@ -181,12 +165,13 @@ static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odome
     if (nmea_outdoor_good_streak >= need)
     {
         RCLCPP_WARN(rclcpp::get_logger("ligo"),
-                    "NMEA outdoor re-align: full reset after %d consecutive init-quality covariance samples",
+                    "NMEA outdoor re-align: graph reset after %d good-covariance samples (ICP retained; IVox reset deferred)",
                     nmea_outdoor_good_streak);
-        p_nmea->Reset();
-        // Trigger a full IVox/traj/GICP reset so the robot re-initializes in the outdoor frame.
-        flg_reset_outdoor_realign = true;
-        flg_reset = true;
+        p_nmea->ResetGraphClearingInitRetainIcp();
+        indoor_flag_dynamic = false;
+#ifdef LIGO_WITH_SMALL_GICP
+        ligo::indoor::resetIndoorGICP();
+#endif
         nmea_cycle_reopen_pending = true;
         nmea_outdoor_good_streak = 0;
     }
@@ -203,8 +188,9 @@ static void nmeaClearCycleIfRealignComplete()
 #ifdef LIGO_WITH_SMALL_GICP
     ligo::indoor::resetIndoorGICP();
 #endif
+    pending_outdoor_realign_ivox_reset.store(true, std::memory_order_release);
     RCLCPP_INFO(rclcpp::get_logger("ligo"),
-                "Outdoor re-align complete: indoor GICP and indoor_flag_dynamic cleared");
+                "Outdoor re-align complete: scheduling deferred IVox/traj reset; indoor GICP cleared");
 }
 #endif
 
@@ -976,6 +962,55 @@ static void try_publish_fused_ecef_position(
 #endif
 }
 
+static void try_publish_nmea_graph_anchor_marker(
+    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub)
+{
+#ifdef LIGO_WITH_NMEA
+    if (flg_exit || !rclcpp::ok() || !pub || !NMEA_ENABLE || !p_nmea)
+        return;
+    const double ts = publish_odometry_without_downsample ? time_current : lidar_end_time;
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = static_cast<int32_t>(std::floor(ts));
+    stamp.nanosec = static_cast<uint32_t>(std::round((ts - std::floor(ts)) * 1e9));
+
+    Eigen::Vector3d p;
+    if (!p_nmea->graphAnchorEnu(p))
+    {
+        visualization_msgs::msg::Marker del;
+        del.header.stamp = stamp;
+        del.header.frame_id = "map";
+        del.ns = "nmea_graph_anchor";
+        del.id = 0;
+        del.action = visualization_msgs::msg::Marker::DELETE;
+        pub->publish(del);
+        return;
+    }
+
+    visualization_msgs::msg::Marker m;
+    m.header.stamp = stamp;
+    m.header.frame_id = "map";
+    m.ns = "nmea_graph_anchor";
+    m.id = 0;
+    m.type = visualization_msgs::msg::Marker::SPHERE;
+    m.action = visualization_msgs::msg::Marker::ADD;
+    m.pose.orientation.w = 1.0;
+    m.pose.position.x = p.x();
+    m.pose.position.y = p.y();
+    m.pose.position.z = p.z();
+    constexpr double kSphereDiameterM = 4.0;
+    m.scale.x = kSphereDiameterM;
+    m.scale.y = kSphereDiameterM;
+    m.scale.z = kSphereDiameterM;
+    m.color.r = 1.0f;
+    m.color.g = 0.15f;
+    m.color.b = 1.0f;
+    m.color.a = 0.82f;
+    pub->publish(m);
+#else
+    (void)pub;
+#endif
+}
+
 void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
 {
     if (flg_exit || !rclcpp::ok())
@@ -1642,6 +1677,7 @@ int main(int argc, char** argv)
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEcefPosition;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pubNmeaGraphAnchorMarker;
     if (NMEA_ENABLE)
     {
         pubEnuPosition =
@@ -1656,11 +1692,17 @@ int main(int argc, char** argv)
             node->create_publisher<geometry_msgs::msg::PointStamped>(ecef_position_topic, qos_pub);
         RCLCPP_INFO(node->get_logger(), "ECEF position: topic=%s frame_id=%s", ecef_position_topic.c_str(),
                     ecef_position_frame_id.c_str());
+        pubNmeaGraphAnchorMarker = node->create_publisher<visualization_msgs::msg::Marker>(
+            "/ligo/nmea_graph_anchor_marker", qos_pub);
+        RCLCPP_INFO(node->get_logger(),
+                    "NMEA graph anchor E(0) RViz: topic=/ligo/nmea_graph_anchor_marker frame_id=map "
+                    "(Fixed Frame=map, magenta sphere ~4m)");
     }
 #else
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEcefPosition;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pubNmeaGraphAnchorMarker;
 #endif
 
     rclcpp::on_shutdown([]() {
@@ -1674,6 +1716,19 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
+#ifdef LIGO_WITH_NMEA
+            if (pending_outdoor_realign_ivox_reset.exchange(false, std::memory_order_acq_rel))
+            {
+                RCLCPP_WARN(rclcpp::get_logger("ligo"),
+                            "Outdoor re-align: applying deferred IVox + trajectory map reset (LIO/KF/IMU unchanged)");
+                if (NMEA_ENABLE && traj_manager)
+                    traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
+                ivox_ = std::make_shared<IVoxType>(ivox_options_);
+                ivox_last_ = std::make_shared<IVoxType>(ivox_options_);
+                traj_manager.reset(new curvefitter::TrajectoryManager<4>());
+                init_map = false;
+            }
+#endif
 #if defined(LIGO_WITH_SMALL_GICP) && defined(LIGO_WITH_NMEA)
             if (g_pending_indoor_topic_snap.load(std::memory_order_acquire) && !flg_reset && !mapping_mode)
             {
@@ -1703,10 +1758,6 @@ int main(int argc, char** argv)
                 if (flg_reset_indoor_reloc)
                 {
                     RCLCPP_WARN(node->get_logger(), "reset by indoor relocalization");
-                }
-                else if (flg_reset_outdoor_realign)
-                {
-                    RCLCPP_WARN(node->get_logger(), "reset by outdoor re-entry after indoor");
                 }
                 else
                 {
@@ -1774,13 +1825,6 @@ int main(int argc, char** argv)
                                     ligo::indoor::getIndoorGicpMapPath().c_str());
 #endif
                     }
-                    else if (flg_reset_outdoor_realign)
-                    {
-                        indoor_flag_dynamic = false;
-#ifdef LIGO_WITH_SMALL_GICP
-                        ligo::indoor::resetIndoorGICP();
-#endif
-                    }
                     kf_output.change_P(P_init_output);
                 }
                 is_first_gnss = true;
@@ -1788,7 +1832,6 @@ int main(int argc, char** argv)
                 is_first_frame = true;
                 flg_reset = false;
                 flg_reset_indoor_reloc = false;
-                flg_reset_outdoor_realign = false;
                 init_map = false;
                 
                 {
@@ -2082,19 +2125,6 @@ int main(int argc, char** argv)
                                         }
                                         catch (const std::exception &e)
                                         {
-                                            // #region agent log
-                                            {
-                                                std::ostringstream os;
-                                                os << "{\"error\":\"" << e.what()
-                                                   << "\",\"frame_num\":" << p_nmea->frame_num
-                                                   << ",\"nmea_ready\":" << (p_nmea->nmea_ready ? 1 : 0)
-                                                   << ",\"graph_size\":" << p_nmea->p_assign->gtSAMgraph.size()
-                                                   << ",\"initEstimate_size\":" << p_nmea->p_assign->initialEstimate.size()
-                                                   << "}";
-                                                ligo_dbg_log("pre-fix", "H3", "laserMapping.cpp:EvaluateCatch#1",
-                                                             "evaluate exception captured", os.str());
-                                            }
-                                            // #endregion
                                             RCLCPP_ERROR(
                                                 rclcpp::get_logger("ligo"),
                                                 "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
@@ -2292,19 +2322,6 @@ int main(int argc, char** argv)
                                 }
                                 catch (const std::exception &e)
                                 {
-                                    // #region agent log
-                                    {
-                                        std::ostringstream os;
-                                        os << "{\"error\":\"" << e.what()
-                                           << "\",\"frame_num\":" << p_nmea->frame_num
-                                           << ",\"nmea_ready\":" << (p_nmea->nmea_ready ? 1 : 0)
-                                           << ",\"graph_size\":" << p_nmea->p_assign->gtSAMgraph.size()
-                                           << ",\"initEstimate_size\":" << p_nmea->p_assign->initialEstimate.size()
-                                           << "}";
-                                        ligo_dbg_log("pre-fix", "H3", "laserMapping.cpp:EvaluateCatch#2",
-                                                     "evaluate exception captured", os.str());
-                                    }
-                                    // #endregion
                                     RCLCPP_ERROR(
                                         rclcpp::get_logger("ligo"),
                                         "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
@@ -2652,19 +2669,6 @@ int main(int argc, char** argv)
                                 }
                                 catch (const std::exception &e)
                                 {
-                                    // #region agent log
-                                    {
-                                        std::ostringstream os;
-                                        os << "{\"error\":\"" << e.what()
-                                           << "\",\"frame_num\":" << p_nmea->frame_num
-                                           << ",\"nmea_ready\":" << (p_nmea->nmea_ready ? 1 : 0)
-                                           << ",\"graph_size\":" << p_nmea->p_assign->gtSAMgraph.size()
-                                           << ",\"initEstimate_size\":" << p_nmea->p_assign->initialEstimate.size()
-                                           << "}";
-                                        ligo_dbg_log("pre-fix", "H3", "laserMapping.cpp:EvaluateCatch#3",
-                                                     "evaluate exception captured", os.str());
-                                    }
-                                    // #endregion
                                     RCLCPP_ERROR(
                                         rclcpp::get_logger("ligo"),
                                         "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
@@ -2868,6 +2872,9 @@ int main(int argc, char** argv)
             {
                 publish_nmea_aligned(pubNmeaAlignedOdom, pubNmeaAlignedPath);
                 publish_icp_pairs_marker(pubIcpPairs, pubNmeaLioErrorXy, pubNmea03mDiag);
+#ifdef LIGO_WITH_NMEA
+                try_publish_nmea_graph_anchor_marker(pubNmeaGraphAnchorMarker);
+#endif
                 publish_init_pairs_marker_from_gps_move(pubInitPairsFromGpsMove);
                 if (path_en)                         publish_path(pubPath);
                 if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFullRes);

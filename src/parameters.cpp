@@ -371,16 +371,17 @@ void cout_state_to_file_nmea()
 bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
 {
 #ifdef LIGO_WITH_NMEA
-    if (!NMEA_ENABLE || !p_nmea->nmea_ready)
+    if (!NMEA_ENABLE || !p_nmea)
         return false;
-    // When ICP tf is ready, use the same map-ENU as /aft_mapped_to_init (set_posestamp_enu in laserMapping.cpp):
-    //   p_enu = icp_R_local_to_enu * kf.pos + icp_t_local_to_enu
-    // Do not use GTSAM E(0)/P(0) here — that tracks graph priors and can diverge from published LIO odom.
+    // Same map-ENU as /aft_mapped_to_init during outdoor re-align gap (nmea_ready false, old ICP retained).
     if (p_nmea->icp_tf_ready)
     {
         pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
         return true;
     }
+    if (!p_nmea->nmea_ready)
+        return false;
+    // ICP not ready but graph active: GTSAM E(0)/P(0) (can diverge from published LIO odom).
     if (!nolidar)
     {
         Eigen::Vector3d truth_imu;

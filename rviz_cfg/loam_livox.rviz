@@ -7,6 +7,7 @@ Panels:
         - /Axes1
         - /Odometry1
         - /ICP Pairs1
+        - /NMEA graph anchor1
       Splitter Ratio: 0.5
     Tree Height: 795
 Visualization Manager:
@@ -16,7 +17,7 @@ Visualization Manager:
       Cell Size: 1000
       Class: rviz_default_plugins/Grid
       Color: 160; 160; 164
-      Enabled: false
+      Enabled: true
       Line Style:
         Line Width: 0.029999999329447746
         Value: Lines
@@ -29,7 +30,7 @@ Visualization Manager:
       Plane: XY
       Plane Cell Count: 40
       Reference Frame: <Fixed Frame>
-      Value: false
+      Value: true
     - Class: rviz_default_plugins/Axes
       Enabled: true
       Length: 0.699999988079071
@@ -52,7 +53,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 155
+      Max Intensity: 153.5
       Min Color: 238; 238; 236
       Min Intensity: 0
       Name: surround
@@ -276,13 +277,10 @@ Visualization Manager:
       Use rainbow: false
       Value: true
     - Class: rviz_default_plugins/Marker
-      Enabled: true
+      Enabled: false
       Name: ICP Pairs
       Namespaces:
-        gps_path: true
-        icp_gps: true
-        icp_lines: true
-        icp_lio: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -290,6 +288,19 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /icp_pairs_marker
+      Value: false
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: NMEA graph anchor
+      Namespaces:
+        nmea_graph_anchor: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /ligo/nmea_graph_anchor_marker
       Value: true
   Enabled: true
   Global Options:
@@ -337,25 +348,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 49.723915100097656
+      Distance: 28.732152938842773
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -2.9987921714782715
-        Y: 9.447652816772461
-        Z: 0.5767273902893066
+        X: -1.2633957862854004
+        Y: 5.738638401031494
+        Z: 0.36244532465934753
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.504797339439392
+      Pitch: 1.5697963237762451
       Target Frame: global
       Value: Orbit (rviz_default_plugins)
-      Yaw: 5.807194232940674
+      Yaw: 0.06400971859693527
     Saved: ~
 Window Geometry:
   Displays:
