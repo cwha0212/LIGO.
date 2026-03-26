@@ -54,6 +54,9 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#ifdef LIGO_WITH_SMALL_GICP
+#include <atomic>
+#endif
 #include "li_initialization.h"
 
 /** Implemented in li_initialization.cpp (not declared in li_initialization.h to avoid include-order / GTSAM issues). */
@@ -72,6 +75,8 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
+#include <chrono>
+#include <sstream>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
 #define PUBFRAME_PERIOD     (20)
@@ -100,6 +105,27 @@ Eigen::Vector3d last_good_gnss_ecef       = Eigen::Vector3d::Zero();
 bool            last_good_gnss_ecef_valid = false;
 constexpr bool kTempForceIndoorByNmeaCov = true;
 constexpr double kTempIndoorCovThreshold = 50.0;
+
+static inline long long ligo_dbg_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+static void ligo_dbg_log(const std::string &run_id, const std::string &hypothesis_id,
+                         const std::string &location, const std::string &message,
+                         const std::string &data_json) {
+    std::ofstream ofs("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-8c474b.log",
+                      std::ios::app);
+    if (!ofs.is_open()) return;
+    ofs << "{\"sessionId\":\"8c474b\",\"runId\":\"" << run_id << "\",\"hypothesisId\":\""
+        << hypothesis_id << "\",\"location\":\"" << location << "\",\"message\":\"" << message
+        << "\",\"data\":" << data_json << ",\"timestamp\":" << ligo_dbg_now_ms() << "}\n";
+}
+
+#ifdef LIGO_WITH_SMALL_GICP
+/** Set by /ligo/indoor_mode true; main loop snaps LIO→ENU anchor then clears. */
+static std::atomic<bool> g_pending_indoor_topic_snap{false};
+#endif
 
 //surf feature in map
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
@@ -805,6 +831,18 @@ void set_posestamp_enu(T & out)
         set_posestamp(out);
     }
 }
+
+#ifdef LIGO_WITH_NMEA
+/** Same ENU pose as /aft_mapped_to_init when NMEA_ENABLE and icp_tf_ready (see set_posestamp_enu). */
+static bool ligo_fused_lio_pose_enu(Eigen::Vector3d &p_enu, Eigen::Matrix3d &R_enu)
+{
+    if (!NMEA_ENABLE || !p_nmea || !p_nmea->icp_tf_ready)
+        return false;
+    p_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+    R_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+    return true;
+}
+#endif
 
 void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr & pubOdomAftMapped, tf2_ros::TransformBroadcaster & br)
 {
@@ -1558,13 +1596,29 @@ int main(int argc, char** argv)
         "/ligo/indoor_mode", 10,
         [](const std_msgs::msg::Bool::SharedPtr msg) {
             const bool was_indoor = indoor_flag_dynamic;
-            indoor_flag_dynamic = msg->data;
-            if (!was_indoor && msg->data) {
-                RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor] dynamic indoor mode ON");
-            } else if (was_indoor && !msg->data) {
-                RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor] dynamic indoor mode OFF");
+            if (!msg->data)
+            {
+                g_pending_indoor_topic_snap = false;
+                indoor_flag_dynamic = false;
+                if (was_indoor)
+                {
+                    RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor] dynamic indoor mode OFF");
 #ifdef LIGO_WITH_SMALL_GICP
-                ligo::indoor::resetIndoorGICP();
+                    ligo::indoor::resetIndoorGICP();
+#endif
+                }
+                return;
+            }
+            // Enter: do not set indoor_flag_dynamic here — reloc reset applies anchor then sets it true.
+            if (!was_indoor)
+            {
+#ifdef LIGO_WITH_NMEA
+                RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                            "[indoor] dynamic indoor mode ON (pending fused LIO→ENU snap on next lidar frame)");
+                g_pending_indoor_topic_snap = true;
+#else
+                RCLCPP_ERROR(rclcpp::get_logger("ligo"),
+                             "[indoor] /ligo/indoor_mode ignored: build without gnss_comm/NMEA cannot snap ENU anchor");
 #endif
             }
         });
@@ -1620,6 +1674,30 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
+#if defined(LIGO_WITH_SMALL_GICP) && defined(LIGO_WITH_NMEA)
+            if (g_pending_indoor_topic_snap.load(std::memory_order_acquire) && !flg_reset && !mapping_mode)
+            {
+                if (ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
+                {
+                    indoor_reloc_pose_time = time_predict_last_const;
+                    indoor_reloc_applied_once = true;
+                    flg_reset_indoor_reloc = true;
+                    flg_reset = true;
+                    g_pending_indoor_topic_snap.store(false, std::memory_order_release);
+                    RCLCPP_WARN(
+                        node->get_logger(),
+                        "[indoor] /ligo/indoor_mode: anchor = fused LIO ENU (same as /aft_mapped_to_init) "
+                        "pos=(%.2f,%.2f,%.2f)",
+                        indoor_reloc_pos_enu.x(), indoor_reloc_pos_enu.y(), indoor_reloc_pos_enu.z());
+                }
+                else
+                {
+                    RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 5000,
+                                         "[indoor] /ligo/indoor_mode pending: wait for NMEA icp_tf_ready "
+                                         "(cannot snap to /aft_mapped_to_init ENU yet)");
+                }
+            }
+#endif
             if (flg_reset)
             {
                 if (flg_reset_indoor_reloc)
@@ -2004,10 +2082,32 @@ int main(int argc, char** argv)
                                         }
                                         catch (const std::exception &e)
                                         {
+                                            // #region agent log
+                                            {
+                                                std::ostringstream os;
+                                                os << "{\"error\":\"" << e.what()
+                                                   << "\",\"frame_num\":" << p_nmea->frame_num
+                                                   << ",\"nmea_ready\":" << (p_nmea->nmea_ready ? 1 : 0)
+                                                   << ",\"graph_size\":" << p_nmea->p_assign->gtSAMgraph.size()
+                                                   << ",\"initEstimate_size\":" << p_nmea->p_assign->initialEstimate.size()
+                                                   << "}";
+                                                ligo_dbg_log("pre-fix", "H3", "laserMapping.cpp:EvaluateCatch#1",
+                                                             "evaluate exception captured", os.str());
+                                            }
+                                            // #endregion
                                             RCLCPP_ERROR(
                                                 rclcpp::get_logger("ligo"),
                                                 "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
                                                 e.what());
+                                            const size_t pending_factors = p_nmea->p_assign->gtSAMgraph.size();
+                                            const size_t pending_values = p_nmea->p_assign->initialEstimate.size();
+                                            p_nmea->p_assign->gtSAMgraph.resize(0);
+                                            p_nmea->p_assign->initialEstimate.clear();
+                                            RCLCPP_WARN(
+                                                rclcpp::get_logger("ligo"),
+                                                "[nmea/eval] soft-recovery: dropped pending graph/values "
+                                                "(factors=%zu, values=%zu) to avoid duplicate-key reinsert.",
+                                                pending_factors, pending_values);
                                             update_nmea = false;
                                             p_nmea->nmea_ready = true;
                                         }
@@ -2048,27 +2148,25 @@ int main(int argc, char** argv)
                                             }
                                             else
                                             {
-                                                // Position: use last good GNSS ENU as system-ENU fallback
-                                                // (ECEF→map-local-ENU conversion happens later in the reset block).
-                                                if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                                // Prefer fused LIO in ENU (same as /aft_mapped_to_init); then GNSS; then local.
+                                                if (!ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
                                                 {
-                                                    const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
-                                                    const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
-                                                    indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                                    if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                                    {
+                                                        const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                                        const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                                        indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                                        if (p_nmea->icp_tf_ready)
+                                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                                        else
+                                                            indoor_reloc_rot_enu = kf_output.x_.rot;
+                                                    }
+                                                    else
+                                                    {
+                                                        indoor_reloc_pos_enu = kf_output.x_.pos;
+                                                        indoor_reloc_rot_enu = kf_output.x_.rot;
+                                                    }
                                                 }
-                                                else if (p_nmea->icp_tf_ready)
-                                                {
-                                                    indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
-                                                                           + p_nmea->icp_t_local_to_enu;
-                                                }
-                                                else
-                                                {
-                                                    indoor_reloc_pos_enu = kf_output.x_.pos;
-                                                }
-                                                if (p_nmea->icp_tf_ready)
-                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
-                                                else
-                                                    indoor_reloc_rot_enu = kf_output.x_.rot;
                                                 indoor_reloc_pose_time = time_predict_last_const;
                                             }
                                             indoor_reloc_applied_once = true;
@@ -2194,10 +2292,32 @@ int main(int argc, char** argv)
                                 }
                                 catch (const std::exception &e)
                                 {
+                                    // #region agent log
+                                    {
+                                        std::ostringstream os;
+                                        os << "{\"error\":\"" << e.what()
+                                           << "\",\"frame_num\":" << p_nmea->frame_num
+                                           << ",\"nmea_ready\":" << (p_nmea->nmea_ready ? 1 : 0)
+                                           << ",\"graph_size\":" << p_nmea->p_assign->gtSAMgraph.size()
+                                           << ",\"initEstimate_size\":" << p_nmea->p_assign->initialEstimate.size()
+                                           << "}";
+                                        ligo_dbg_log("pre-fix", "H3", "laserMapping.cpp:EvaluateCatch#2",
+                                                     "evaluate exception captured", os.str());
+                                    }
+                                    // #endregion
                                     RCLCPP_ERROR(
                                         rclcpp::get_logger("ligo"),
                                         "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
                                         e.what());
+                                    const size_t pending_factors = p_nmea->p_assign->gtSAMgraph.size();
+                                    const size_t pending_values = p_nmea->p_assign->initialEstimate.size();
+                                    p_nmea->p_assign->gtSAMgraph.resize(0);
+                                    p_nmea->p_assign->initialEstimate.clear();
+                                    RCLCPP_WARN(
+                                        rclcpp::get_logger("ligo"),
+                                        "[nmea/eval] soft-recovery: dropped pending graph/values "
+                                        "(factors=%zu, values=%zu) to avoid duplicate-key reinsert.",
+                                        pending_factors, pending_values);
                                     update_nmea = false;
                                     p_nmea->nmea_ready = true;
                                 }
@@ -2237,25 +2357,24 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                        if (!ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
                                         {
-                                            const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
-                                            const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
-                                            indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                            if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                            {
+                                                const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                                const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                                indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                                if (p_nmea->icp_tf_ready)
+                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                                else
+                                                    indoor_reloc_rot_enu = kf_output.x_.rot;
+                                            }
+                                            else
+                                            {
+                                                indoor_reloc_pos_enu = kf_output.x_.pos;
+                                                indoor_reloc_rot_enu = kf_output.x_.rot;
+                                            }
                                         }
-                                        else if (p_nmea->icp_tf_ready)
-                                        {
-                                            indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
-                                                                   + p_nmea->icp_t_local_to_enu;
-                                        }
-                                        else
-                                        {
-                                            indoor_reloc_pos_enu = kf_output.x_.pos;
-                                        }
-                                        if (p_nmea->icp_tf_ready)
-                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
-                                        else
-                                            indoor_reloc_rot_enu = kf_output.x_.rot;
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;
@@ -2533,10 +2652,32 @@ int main(int argc, char** argv)
                                 }
                                 catch (const std::exception &e)
                                 {
+                                    // #region agent log
+                                    {
+                                        std::ostringstream os;
+                                        os << "{\"error\":\"" << e.what()
+                                           << "\",\"frame_num\":" << p_nmea->frame_num
+                                           << ",\"nmea_ready\":" << (p_nmea->nmea_ready ? 1 : 0)
+                                           << ",\"graph_size\":" << p_nmea->p_assign->gtSAMgraph.size()
+                                           << ",\"initEstimate_size\":" << p_nmea->p_assign->initialEstimate.size()
+                                           << "}";
+                                        ligo_dbg_log("pre-fix", "H3", "laserMapping.cpp:EvaluateCatch#3",
+                                                     "evaluate exception captured", os.str());
+                                    }
+                                    // #endregion
                                     RCLCPP_ERROR(
                                         rclcpp::get_logger("ligo"),
                                         "[nmea/eval] exception: %s. Skip this NMEA frame and continue.",
                                         e.what());
+                                    const size_t pending_factors = p_nmea->p_assign->gtSAMgraph.size();
+                                    const size_t pending_values = p_nmea->p_assign->initialEstimate.size();
+                                    p_nmea->p_assign->gtSAMgraph.resize(0);
+                                    p_nmea->p_assign->initialEstimate.clear();
+                                    RCLCPP_WARN(
+                                        rclcpp::get_logger("ligo"),
+                                        "[nmea/eval] soft-recovery: dropped pending graph/values "
+                                        "(factors=%zu, values=%zu) to avoid duplicate-key reinsert.",
+                                        pending_factors, pending_values);
                                     update_nmea = false;
                                     p_nmea->nmea_ready = true;
                                 }
@@ -2575,25 +2716,24 @@ int main(int argc, char** argv)
                                     }
                                     else
                                     {
-                                        if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                        if (!ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
                                         {
-                                            const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
-                                            const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
-                                            indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                            if (last_good_gnss_ecef_valid && nmea_global_anchor_ready)
+                                            {
+                                                const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+                                                const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+                                                indoor_reloc_pos_enu = R.transpose() * (last_good_gnss_ecef - anc);
+                                                if (p_nmea->icp_tf_ready)
+                                                    indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
+                                                else
+                                                    indoor_reloc_rot_enu = kf_output.x_.rot;
+                                            }
+                                            else
+                                            {
+                                                indoor_reloc_pos_enu = kf_output.x_.pos;
+                                                indoor_reloc_rot_enu = kf_output.x_.rot;
+                                            }
                                         }
-                                        else if (p_nmea->icp_tf_ready)
-                                        {
-                                            indoor_reloc_pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos
-                                                                   + p_nmea->icp_t_local_to_enu;
-                                        }
-                                        else
-                                        {
-                                            indoor_reloc_pos_enu = kf_output.x_.pos;
-                                        }
-                                        if (p_nmea->icp_tf_ready)
-                                            indoor_reloc_rot_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
-                                        else
-                                            indoor_reloc_rot_enu = kf_output.x_.rot;
                                         indoor_reloc_pose_time = time_predict_last_const;
                                     }
                                     indoor_reloc_applied_once = true;

@@ -11,8 +11,26 @@
 #include "Indoor_GridMapRegistry.h"
 #include <memory>
 #include <pcl/io/pcd_io.h>
+#include <fstream>
+#include <chrono>
+#include <sstream>
 
 namespace {
+  static inline long long ligo_dbg_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  }
+  static void ligo_dbg_log(const std::string &run_id, const std::string &hypothesis_id,
+                           const std::string &location, const std::string &message,
+                           const std::string &data_json) {
+    std::ofstream ofs("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-8c474b.log",
+                      std::ios::app);
+    if (!ofs.is_open()) return;
+    ofs << "{\"sessionId\":\"8c474b\",\"runId\":\"" << run_id << "\",\"hypothesisId\":\""
+        << hypothesis_id << "\",\"location\":\"" << location << "\",\"message\":\"" << message
+        << "\",\"data\":" << data_json << ",\"timestamp\":" << ligo_dbg_now_ms() << "}\n";
+  }
   static std::shared_ptr<ligo::indoor::SmallGICPLocalizer> s_gicp_localizer;
   static bool s_map_published = false;
   static ligo::indoor::SmallGICPConfig s_gicp_cfg_grid;
@@ -42,6 +60,17 @@ namespace {
       s_R_sys_to_map = s_map_R_ecef_enu.transpose() * s_sys_R_ecef_enu;
       s_t_sys_to_map = s_map_R_ecef_enu.transpose() * (s_sys_anchor_ecef - s_map_anchor_ecef);
       s_sys_to_map_valid = true;
+      // #region agent log
+      {
+        std::ostringstream os;
+        os << "{\"sys_to_map_valid\":1"
+           << ",\"t_norm\":" << s_t_sys_to_map.norm()
+           << ",\"det_R\":" << s_R_sys_to_map.determinant()
+           << "}";
+        ligo_dbg_log("pre-fix", "H4", "Indoor_Processing.cpp:recomputeSysToMapTransform",
+                     "sys->map transform ready", os.str());
+      }
+      // #endregion
     }
   }
 }
@@ -243,6 +272,19 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
     scan_map->push_back(q);
   }
   if (static_cast<int>(scan_map->size()) < 50) return false;
+  // #region agent log
+  {
+    std::ostringstream os;
+    os << "{\"scan_pts\":" << scan_map->size()
+       << ",\"sys_to_map_valid\":" << (s_sys_to_map_valid ? 1 : 0)
+       << ",\"seed_tx\":" << indoor_gicp_T_map_lidar.translation().x()
+       << ",\"seed_ty\":" << indoor_gicp_T_map_lidar.translation().y()
+       << ",\"seed_tz\":" << indoor_gicp_T_map_lidar.translation().z()
+       << "}";
+    ligo_dbg_log("pre-fix", "H5", "Indoor_Processing.cpp:runIndoorGICPUpdate:pre-localize",
+                 "gicp input/seed snapshot", os.str());
+  }
+  // #endregion
 
   static size_t s_gicp_total = 0;
   static size_t s_gicp_converged = 0;
@@ -268,6 +310,22 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
   indoor_pose_valid       = true;
 
   if (result.converged) ++s_gicp_converged;
+  // #region agent log
+  {
+    const Eigen::Vector3d t = result.T_map_lidar.translation();
+    std::ostringstream os;
+    os << "{\"success\":" << (result.success ? 1 : 0)
+       << ",\"converged\":" << (result.converged ? 1 : 0)
+       << ",\"err\":" << result.error
+       << ",\"iter\":" << result.iterations
+       << ",\"tx\":" << t.x()
+       << ",\"ty\":" << t.y()
+       << ",\"tz\":" << t.z()
+       << "}";
+    ligo_dbg_log("pre-fix", "H5", "Indoor_Processing.cpp:runIndoorGICPUpdate:post-localize",
+                 "gicp output pose", os.str());
+  }
+  // #endregion
 
   if (s_gicp_total <= 5 || s_gicp_total % 100 == 0) {
     const Eigen::Vector3d t = result.T_map_lidar.translation();
@@ -388,7 +446,7 @@ void publishIndoorViz(
 // ---------------------------------------------------------------------------
 void addIndoorFactorToGraph(int frame_num) {
 #ifdef LIGO_WITH_NMEA
-  if (!indoor_flag || !indoor_pose_valid) return;
+  if (!(indoor_flag || indoor_flag_dynamic) || !indoor_pose_valid) return;
   if (!p_nmea || !p_nmea->nmea_ready) return;
   if (!indoorPoseNoise || !indoorPoseNoiseInit) return;
 

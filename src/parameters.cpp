@@ -343,11 +343,14 @@ void cout_state_to_file_nmea()
 #ifdef LIGO_WITH_NMEA
     {
         Eigen::Vector3d pos_enu;
-        if (!nolidar)
+        if (p_nmea->icp_tf_ready)
+        {
+            pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+        }
+        else if (!nolidar)
         {
             Eigen::Vector3d truth_imu;
             truth_imu << 0.0, 0.0, 0.14; // 0.0, 0.02, -0.43; // 
-            // Eigen::Vector3d pos_r = kf_output.x_.rot * p_nmea->Tex_imu_r + kf_output.x_.pos; // maybe improper.normalized()
             Eigen::Vector3d pos_r = kf_output.x_.rot * truth_imu + kf_output.x_.pos; // maybe improper.normalized()
             Eigen::Matrix3d enu_rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(P(0)).matrix();
             Eigen::Vector3d anc_cur = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector3>(E(0));
@@ -370,6 +373,14 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
 #ifdef LIGO_WITH_NMEA
     if (!NMEA_ENABLE || !p_nmea->nmea_ready)
         return false;
+    // When ICP tf is ready, use the same map-ENU as /aft_mapped_to_init (set_posestamp_enu in laserMapping.cpp):
+    //   p_enu = icp_R_local_to_enu * kf.pos + icp_t_local_to_enu
+    // Do not use GTSAM E(0)/P(0) here — that tracks graph priors and can diverge from published LIO odom.
+    if (p_nmea->icp_tf_ready)
+    {
+        pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
+        return true;
+    }
     if (!nolidar)
     {
         Eigen::Vector3d truth_imu;

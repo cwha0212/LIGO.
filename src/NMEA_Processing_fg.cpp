@@ -42,6 +42,26 @@
 #include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
 #include <gtsam/linear/linearExceptions.h>
+#include <chrono>
+#include <sstream>
+
+namespace {
+static inline long long ligo_dbg_now_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+static void ligo_dbg_log(const std::string &run_id, const std::string &hypothesis_id,
+                         const std::string &location, const std::string &message,
+                         const std::string &data_json) {
+  std::ofstream ofs("/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./.cursor/debug-8c474b.log",
+                    std::ios::app);
+  if (!ofs.is_open()) return;
+  ofs << "{\"sessionId\":\"8c474b\",\"runId\":\"" << run_id << "\",\"hypothesisId\":\""
+      << hypothesis_id << "\",\"location\":\"" << location << "\",\"message\":\"" << message
+      << "\",\"data\":" << data_json << ",\"timestamp\":" << ligo_dbg_now_ms() << "}\n";
+}
+}  // namespace
 
 
 NMEAProcess::NMEAProcess()
@@ -633,6 +653,21 @@ bool NMEAProcess::Evaluate(state_output &state)
   
   if (!nolidar) // && invalid_lidar)
   {
+    // #region agent log
+    {
+      std::ostringstream os;
+      os << "{\"frame_num\":" << frame_num
+         << ",\"frame_delete\":" << frame_delete
+         << ",\"initEstimate_size\":" << p_assign->initialEstimate.size()
+         << ",\"graph_size\":" << p_assign->gtSAMgraph.size()
+         << ",\"isam_has_prev_R\":" << (frame_num > 0 && p_assign->isamCurrentEstimate.exists(R(frame_num - 1)) ? 1 : 0)
+         << ",\"isam_has_prev_A\":" << (frame_num > 0 && p_assign->isamCurrentEstimate.exists(A(frame_num - 1)) ? 1 : 0)
+         << ",\"isam_has_prev_O\":" << (frame_num > 0 && p_assign->isamCurrentEstimate.exists(O(frame_num - 1)) ? 1 : 0)
+         << "}";
+      ligo_dbg_log("pre-fix", "H1", "NMEA_Processing_fg.cpp:Evaluate:insert-precheck",
+                   "pre-insert key/state check", os.str());
+    }
+    // #endregion
     Eigen::Matrix<double, 6, 1> init_vel_bias_vector_imu;
     Eigen::Matrix<double, 12, 1> init_others_vector_imu;
     init_vel_bias_vector_imu.block<3,1>(0,0) = state.pos;
@@ -861,14 +896,50 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
         id_accumulate += 1;
         // Add temporal rotation constraint when NavSatFix is position-only and lidar is invalid.
         // This avoids single-frame yaw gauge issues at marginalization boundaries.
-        if (frame_num > 0)
+        // After soft-recovery or ISAM hiccups, R(frame_num-1) may be missing — never call .at() then.
+        if (frame_num > 0 && p_assign->isamCurrentEstimate.exists(R(frame_num - 1)))
         {
+          // #region agent log
+          {
+            std::ostringstream os;
+            os << "{\"frame_num\":" << frame_num
+               << ",\"exists_prev_R\":1"
+               << ",\"exists_prev_A\":" << (p_assign->isamCurrentEstimate.exists(A(frame_num - 1)) ? 1 : 0)
+               << ",\"exists_prev_O\":" << (p_assign->isamCurrentEstimate.exists(O(frame_num - 1)) ? 1 : 0)
+               << ",\"nmea_pos_only\":1,\"invalid_lidar\":1}";
+            ligo_dbg_log("post-fix", "H2", "NMEA_Processing_fg.cpp:AddFactor:between-precheck",
+                         "between factor applied", os.str());
+          }
+          // #endregion
           const gtsam::Rot3 prev_rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num - 1));
           const gtsam::Rot3 cur_rot = gtsam::Rot3(rot);
           const gtsam::Rot3 rel_meas = prev_rot.between(cur_rot);
           p_assign->gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Rot3>(R(frame_num - 1), R(frame_num), rel_meas, p_assign->margrotNoise));
           factor_id_cur.push_back(id_accumulate);
           id_accumulate += 1;
+        }
+        else if (frame_num > 0)
+        {
+          // #region agent log
+          {
+            std::ostringstream os;
+            os << "{\"frame_num\":" << frame_num
+               << ",\"exists_prev_R\":0,\"skip_between\":1"
+               << ",\"nmea_pos_only\":1,\"invalid_lidar\":1}";
+            ligo_dbg_log("post-fix", "H2", "NMEA_Processing_fg.cpp:AddFactor:between-skipped",
+                         "BetweenFactor skipped (no R(frame-1) in ISAM)", os.str());
+          }
+          // #endregion
+          static std::chrono::steady_clock::time_point s_last_between_skip_log{};
+          const auto now = std::chrono::steady_clock::now();
+          if (now - s_last_between_skip_log > std::chrono::seconds(2))
+          {
+            s_last_between_skip_log = now;
+            RCLCPP_WARN(
+                rclcpp::get_logger("ligo"),
+                "[nmea] BetweenFactor R(%zu)->R(%zu) skipped: previous rotation not in ISAM (e.g. after graph recovery).",
+                static_cast<size_t>(frame_num - 1), static_cast<size_t>(frame_num));
+          }
         }
       }
 
