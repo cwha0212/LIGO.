@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
     common:
-      lid_topic:  "/lidar_points_aligned" 
-      imu_topic:  "/imu/data_raw_aligned" 
+      lid_topic:  "/livox/lidar" 
+      imu_topic:  "/livox/imu" 
       con_frame: false # true: if you need to combine several LiDAR frames into one
       con_frame_num: 1 # the number of frames combined
       scan_rate: 10 # number of scaned circles (360 degree) in one second
@@ -19,7 +19,7 @@
       mapping_mode: false # true: indoor localization/switching path disabled for pure mapping
       det_range: 20.0 # mapping stage effective lidar range limit (meters)
       imu_en: true
-      imu_time_inte: 0.01 # = 1 / frequency of IMU
+      imu_time_inte: 0.05 # = 1 / frequency of IMU
       lidar_time_inte: 0.1 # = 1 / frequency of LiDAR
       satu_acc: 3.0 # the saturation value of IMU's acceleration. not related to the units
       satu_gyro: 35.0 # the saturation value of IMU's angular velocity. not related to the units
