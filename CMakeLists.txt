@@ -76,24 +76,40 @@ if(DEFINED GTSAM_VERSION_STRING)
   message(STATUS "ligo: GTSAM ${GTSAM_VERSION_STRING}")
 endif()
 
-# small_gicp integration policy:
-# 1) prefer bundled thirdparty include directory in this package
-# 2) fallback to user-supplied SMALL_GICP_INCLUDE_DIR
-# 3) fallback to system find_package(small_gicp)
-set(LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/small_gicp/include")
-set(LIGO_BUNDLED_SMALL_GICP_ALT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/small_gicp")
+# small_gicp: prefer building bundled thirdparty/small_gicp (koide3/small_gicp) with CMake,
+# then optional include-only / system installs.
+set(LIGO_THIRDPARTY_SMALL_GICP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/small_gicp")
 set(SMALL_GICP_INCLUDE_DIR "" CACHE PATH "Path to small_gicp include directory (folder containing small_gicp/...)")
 set(LIGO_WITH_SMALL_GICP OFF)
 set(LIGO_SMALL_GICP_MODE "disabled")
+set(LIGO_SMALL_GICP_TARGET "")
 
-if(EXISTS "${LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR}/small_gicp/registration/registration.hpp")
+if(EXISTS "${LIGO_THIRDPARTY_SMALL_GICP_ROOT}/CMakeLists.txt")
+  # Static helper lib avoids shipping a separate small_gicp shared object with colcon install.
+  set(_ligo_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "small_gicp: static lib linked into ligo_mapping" FORCE)
+  set(BUILD_HELPER ON CACHE BOOL "small_gicp: build registration helper" FORCE)
+  set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+  set(BUILD_PYTHON_BINDINGS OFF CACHE BOOL "" FORCE)
+  add_subdirectory(
+    "${LIGO_THIRDPARTY_SMALL_GICP_ROOT}"
+    "${CMAKE_CURRENT_BINARY_DIR}/small_gicp_build"
+  )
+  if(DEFINED _ligo_saved_build_shared_libs)
+    set(BUILD_SHARED_LIBS "${_ligo_saved_build_shared_libs}" CACHE BOOL "" FORCE)
+  endif()
+  unset(_ligo_saved_build_shared_libs)
   set(LIGO_WITH_SMALL_GICP ON)
-  set(SMALL_GICP_INCLUDE_DIR "${LIGO_BUNDLED_SMALL_GICP_INCLUDE_DIR}")
-  set(LIGO_SMALL_GICP_MODE "bundled-thirdparty")
-elseif(EXISTS "${LIGO_BUNDLED_SMALL_GICP_ALT_INCLUDE_DIR}/small_gicp/registration/registration.hpp")
+  set(LIGO_SMALL_GICP_MODE "bundled-subbuild")
+  if(TARGET small_gicp)
+    set(LIGO_SMALL_GICP_TARGET "small_gicp")
+  endif()
+elseif(EXISTS "${LIGO_THIRDPARTY_SMALL_GICP_ROOT}/include/small_gicp/registration/registration.hpp")
   set(LIGO_WITH_SMALL_GICP ON)
-  set(SMALL_GICP_INCLUDE_DIR "${LIGO_BUNDLED_SMALL_GICP_ALT_INCLUDE_DIR}")
-  set(LIGO_SMALL_GICP_MODE "bundled-thirdparty-alt-layout")
+  set(SMALL_GICP_INCLUDE_DIR "${LIGO_THIRDPARTY_SMALL_GICP_ROOT}/include")
+  set(LIGO_SMALL_GICP_MODE "bundled-headers")
 elseif(SMALL_GICP_INCLUDE_DIR AND EXISTS "${SMALL_GICP_INCLUDE_DIR}/small_gicp/registration/registration.hpp")
   set(LIGO_WITH_SMALL_GICP ON)
   set(LIGO_SMALL_GICP_MODE "external-include-path")
@@ -102,6 +118,9 @@ else()
   if(small_gicp_FOUND)
     set(LIGO_WITH_SMALL_GICP ON)
     set(LIGO_SMALL_GICP_MODE "find-package")
+    if(TARGET small_gicp::small_gicp)
+      set(LIGO_SMALL_GICP_TARGET "small_gicp::small_gicp")
+    endif()
   endif()
 endif()
 
@@ -120,7 +139,7 @@ include_directories(
   ${CERES_INCLUDE_DIRS}
   ${Python3_INCLUDE_DIRS}
 )
-if(SMALL_GICP_INCLUDE_DIR)
+if(SMALL_GICP_INCLUDE_DIR AND NOT LIGO_SMALL_GICP_TARGET)
   include_directories(${SMALL_GICP_INCLUDE_DIR})
 endif()
 
@@ -185,8 +204,8 @@ target_link_libraries(ligo_mapping
   Sophus::Sophus
   fmt
 )
-if(TARGET small_gicp::small_gicp)
-  target_link_libraries(ligo_mapping small_gicp::small_gicp)
+if(LIGO_SMALL_GICP_TARGET)
+  target_link_libraries(ligo_mapping ${LIGO_SMALL_GICP_TARGET})
 endif()
 if(gnss_comm_FOUND)
   target_link_libraries(ligo_mapping ${gnss_comm_LIBRARIES})
@@ -204,6 +223,7 @@ install(TARGETS ligo_mapping
 )
 install(PROGRAMS
   scripts/grid_membership_monitor.py
+  scripts/lidar_imu_stamp_align.py
   ros2_livox_small_gicp.py
   ros2_indoor_map_gicp.py
   DESTINATION lib/${PROJECT_NAME}
