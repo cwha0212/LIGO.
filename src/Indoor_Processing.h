@@ -7,6 +7,7 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/publisher.hpp>
 
 #ifdef LIGO_WITH_SMALL_GICP
@@ -69,7 +70,10 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
  *  Safe to call every frame; no-op after first successful publish. */
 void publishIndoorMapCloudOnly(
     const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub_map,
-    double timestamp_sec);
+    double timestamp_sec,
+    const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid = nullptr,
+    /** When align_reference_map_to_lio: skip publish until GICP runs if this is true (same frame will publish after runIndoorGICPUpdate). */
+    bool defer_until_gicp_if_align = false);
 
 /** Publish indoor map (latched, first call or after map change) and GICP-aligned scan.
  *  Called every frame regardless of convergence so RViz shows live scan vs map. */
@@ -80,7 +84,8 @@ void publishIndoorViz(
     const Eigen::Matrix3d& R_local_to_enu,
     const Eigen::Vector3d& t_local_to_enu,
     const Eigen::Isometry3d& T_map_lidar,
-    double timestamp_sec);
+    double timestamp_sec,
+    const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid = nullptr);
 #endif  // LIGO_WITH_SMALL_GICP
 
 /** Add IndoorLocalizationFactor to the GTSAM graph for the given NMEA frame index.

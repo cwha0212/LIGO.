@@ -35,7 +35,11 @@
  */
 
 #include "li_initialization.h"
+#include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
+#ifdef LIGO_WITH_NMEA
+#include <gnss_comm/gnss_utility.hpp>
+#endif
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <fstream>
 #ifdef LIGO_WITH_SMALL_GICP
@@ -81,6 +85,52 @@ double s_plot[MAXN], s_plot3[MAXN];
 bool first_gps = false;
 Eigen::Vector3d first_gps_lla;
 Eigen::Vector3d first_gps_ecef;
+
+void ligo_apply_fixed_nmea_anchor_if_configured()
+{
+#if !defined(LIGO_WITH_NMEA)
+    return;
+#else
+    if (!NMEA_ENABLE || !nmea_use_fixed_anchor)
+        return;
+
+    Eigen::Vector3d geo = Eigen::Vector3d::Zero();
+    const bool have_lla = (nmea_fixed_anchor_lla_deg.size() == 3);
+    if (have_lla)
+    {
+        geo << nmea_fixed_anchor_lla_deg[0], nmea_fixed_anchor_lla_deg[1], nmea_fixed_anchor_lla_deg[2];
+    }
+    else if (ppp_anc.size() == 3)
+    {
+        const Eigen::Vector3d ecef(ppp_anc[0], ppp_anc[1], ppp_anc[2]);
+        geo = gnss_comm::ecef2geo(ecef);
+        RCLCPP_WARN(rclcpp::get_logger("ligo"),
+                    "[nmea] fixed anchor from nmea.ppp_anc (ECEF→LLA). If this is not YOUR site, NMEA–LIO ICP can fail and "
+                    "RViz (Fixed Frame=map) stays empty until icp_tf_ready — prefer nmea.fixed_anchor_lla_deg from map *_grid2d.yaml");
+    }
+    else
+    {
+        RCLCPP_WARN(rclcpp::get_logger("ligo"),
+                    "[nmea] use_fixed_anchor true: set nmea.fixed_anchor_lla_deg [lat,lon,alt] or nmea.ppp_anc ECEF [x,y,z] "
+                    "(3 values each)");
+        return;
+    }
+
+    first_gps_lla = geo;
+    first_gps_ecef = gnss_comm::geo2ecef(geo);
+    nmea_global_anchor_lla = first_gps_lla;
+    nmea_global_anchor_ready = true;
+    first_gps = true;
+#ifdef LIGO_WITH_SMALL_GICP
+    ligo::indoor::setSystemEcefAnchor(gnss_comm::geo2ecef(first_gps_lla), gnss_comm::geo2rotation(first_gps_lla));
+#endif
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "[nmea] fixed ENU anchor: LLA=(%.9f, %.9f, %.3f) deg,m  ECEF=(%.3f, %.3f, %.3f) m — NavSatFix will not re-seat anchor",
+                first_gps_lla.x(), first_gps_lla.y(), first_gps_lla.z(), first_gps_ecef.x(), first_gps_ecef.y(),
+                first_gps_ecef.z());
+#endif
+}
+
 condition_variable sig_buffer;
 int loop_count = 0;
 int scan_count_point = 0;

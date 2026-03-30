@@ -37,6 +37,7 @@
 // #include <so3_math.h>
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <geometry_msgs/msg/point.hpp>
@@ -1505,14 +1506,15 @@ int main(int argc, char** argv)
     }
 #endif
 #ifdef LIGO_WITH_SMALL_GICP
-    if (indoor_flag)
+    // Load grid registry / reference PCD whenever paths are set (also mapping_mode: indoor_flag may be false).
+    if (!indoor_grid_map_dir.empty() || !indoor_map_pcd_path.empty())
     {
         ligo::indoor::SmallGICPConfig gicp_cfg;
-        gicp_cfg.num_threads               = 4;
-        gicp_cfg.map_downsampling_resolution  = 0.5;
-        gicp_cfg.scan_downsampling_resolution = 0.5;
-        gicp_cfg.max_correspondence_distance  = 3.0;
-        gicp_cfg.max_iterations               = 50;
+        gicp_cfg.num_threads                    = 4;
+        gicp_cfg.map_downsampling_resolution    = indoor_gicp_map_voxel_m;
+        gicp_cfg.scan_downsampling_resolution   = indoor_gicp_scan_voxel_m;
+        gicp_cfg.max_correspondence_distance    = indoor_gicp_max_correspondence_m;
+        gicp_cfg.max_iterations                 = indoor_gicp_max_iterations_reg;
         ligo::indoor::setIndoorGICPConfigForGridSelection(gicp_cfg);
         if (!indoor_grid_map_dir.empty())
         {
@@ -1625,6 +1627,8 @@ int main(int argc, char** argv)
 #ifdef LIGO_WITH_SMALL_GICP
     rclcpp::QoS qos_latched = rclcpp::QoS(1).transient_local();
     auto pubIndoorMapCloud  = node->create_publisher<sensor_msgs::msg::PointCloud2>("/indoor/map_cloud", qos_latched);
+    auto pubIndoorMap2d =
+        node->create_publisher<nav_msgs::msg::OccupancyGrid>("/indoor/map_2d", qos_latched);
     auto pubIndoorAlignedScan = node->create_publisher<sensor_msgs::msg::PointCloud2>("/indoor/aligned_scan", qos_pub);
     // Subscriber for dynamic indoor/outdoor mode toggle
     auto subIndoorFlag = node->create_subscription<std_msgs::msg::Bool>(
@@ -1800,11 +1804,11 @@ int main(int argc, char** argv)
                         }
 #endif
                         ligo::indoor::SmallGICPConfig session_gicp_cfg;
-                        session_gicp_cfg.num_threads               = 4;
-                        session_gicp_cfg.map_downsampling_resolution  = 0.5;
-                        session_gicp_cfg.scan_downsampling_resolution = 0.5;
-                        session_gicp_cfg.max_correspondence_distance  = 3.0;
-                        session_gicp_cfg.max_iterations               = 50;
+                        session_gicp_cfg.num_threads                  = 4;
+                        session_gicp_cfg.map_downsampling_resolution  = indoor_gicp_map_voxel_m;
+                        session_gicp_cfg.scan_downsampling_resolution = indoor_gicp_scan_voxel_m;
+                        session_gicp_cfg.max_correspondence_distance  = indoor_gicp_max_correspondence_m;
+                        session_gicp_cfg.max_iterations               = indoor_gicp_max_iterations_reg;
                         ligo::indoor::setIndoorGICPConfigForGridSelection(session_gicp_cfg);
                         RCLCPP_WARN(node->get_logger(),
                                     "[indoor/gicp] session-start debug: grid_loaded=%d grid_count=%zu "
@@ -1872,6 +1876,35 @@ int main(int argc, char** argv)
                                     indoor_gicp_T_map_lidar.translation().z(),
                                     seed_src,
                                     ligo::indoor::getIndoorGicpMapPath().c_str());
+#if defined(LIGO_WITH_NMEA)
+                        if (nmea_global_anchor_ready && ligo::indoor::indoorGridMapsLoaded())
+                        {
+                            if (auto gtf = ligo::indoor::getFirstGridMapTransform())
+                            {
+                                const Eigen::Vector3d lla_grid =
+                                    gnss_comm::ecef2geo(gtf->anchor_ecef_m);
+                                const Eigen::Vector3d d = lla_grid - nmea_global_anchor_lla;
+                                const double lat_rad = lla_grid.x() * M_PI / 180.0;
+                                const double horiz_m =
+                                    std::hypot(d.x() * 111319.9, d.y() * 111319.9 * std::max(0.1, std::cos(lat_rad)));
+                                if (std::abs(d.x()) > 1e-6 || std::abs(d.y()) > 1e-6 || std::abs(d.z()) > 2.0)
+                                {
+                                    RCLCPP_WARN(node->get_logger(),
+                                                "[indoor/align] grid yaml anchor LLA != this session "
+                                                "nmea_global_anchor (d_lat=%.2e deg d_lon=%.2e d_alt=%.2f m, ~%.1f m horiz). "
+                                                "Cross-session drift: set nmea.use_fixed_anchor true and "
+                                                "nmea.fixed_anchor_lla_deg = anchor_lla_deg_m from *_grid2d.yaml",
+                                                d.x(), d.y(), d.z(), horiz_m);
+                                }
+                                else
+                                {
+                                    RCLCPP_INFO(node->get_logger(),
+                                                "[indoor/align] grid vs session anchor LLA consistent (within tol); "
+                                                "remaining map vs live offset is mostly per-run NMEA–LIO ICP (icp_R/t) difference");
+                                }
+                            }
+                        }
+#endif
 #endif
                     }
                     kf_output.change_P(P_init_output);
@@ -2887,12 +2920,7 @@ int main(int argc, char** argv)
                     ligo::indoor::ensureIndoorGICPMapFromGridEcef(p_ecef);
                 }
             }
-            // Always try to publish map cloud during indoor session (no icp_tf_ready needed)
-            if (!mapping_mode && indoor_flag_dynamic && indoor_gicp_map_loaded)
-            {
-                ligo::indoor::publishIndoorMapCloudOnly(pubIndoorMapCloud, lidar_end_time);
-            }
-            // Indoor GICP localization: only during an active indoor session (indoor_flag_dynamic)
+            // Indoor GICP first when possible so reference map can latch T^{-1} before first /indoor/map_cloud.
             if (!mapping_mode && indoor_flag_dynamic &&
                 indoor_gicp_map_loaded && p_nmea && p_nmea->icp_tf_ready &&
                 feats_down_world && !feats_down_world->empty())
@@ -2910,12 +2938,26 @@ int main(int argc, char** argv)
                     p_nmea->icp_R_local_to_enu,
                     p_nmea->icp_t_local_to_enu,
                     indoor_gicp_T_map_lidar,
-                    lidar_end_time);
+                    lidar_end_time,
+                    pubIndoorMap2d);
 
+            }
+            else if (!mapping_mode && indoor_flag_dynamic && indoor_gicp_map_loaded)
+            {
+                // No GICP this frame (no icp_tf / no feats): publish map without align deferral
+                const bool defer_align = false;
+                ligo::indoor::publishIndoorMapCloudOnly(pubIndoorMapCloud, lidar_end_time, pubIndoorMap2d,
+                                                        defer_align);
             }
 #endif
 
             t5 = omp_get_wtime();
+            if (log_lidar_frame_time_ms) {
+                RCLCPP_INFO(
+                    node->get_logger(),
+                    "[lidar/timing] frame_wall_ms=%.2f lidar_end_t=%.6f feats_down=%d",
+                    (t5 - t0) * 1000.0, lidar_end_time, feats_down_size);
+            }
             /******* Publish points *******/
             if (!flg_exit && rclcpp::ok())
             {
@@ -2983,6 +3025,7 @@ int main(int argc, char** argv)
     pubGlobalNavSat.reset();
 #ifdef LIGO_WITH_SMALL_GICP
     pubIndoorMapCloud.reset();
+    pubIndoorMap2d.reset();
     pubIndoorAlignedScan.reset();
 #endif
     ligo_reset_nmea_stamp_diag_publisher();

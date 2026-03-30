@@ -79,6 +79,8 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg);
 void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in);
 bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg);
 void ligo_reset_nmea_stamp_diag_publisher();
+/** After readParameters: if nmea.use_fixed_anchor, sets first_gps_* and nmea_global_anchor_* from yaml. */
+void ligo_apply_fixed_nmea_anchor_if_configured();
 #ifdef LIGO_WITH_NMEA
 void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg);
 void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg);

@@ -105,7 +105,7 @@ extern std::vector<double> gravity_init, gravity;
 extern std::vector<double> extrinT, extrinT_gnss;
 extern std::vector<double> extrinR, extrinR_gnss;
 extern std::vector<double> ppp_anc;
-extern bool   runtime_pos_log, pcd_save_en, path_en;
+extern bool   runtime_pos_log, log_lidar_frame_time_ms, pcd_save_en, path_en;
 extern bool   scan_pub_en, scan_body_pub_en;
 extern shared_ptr<Preprocess> p_pre;
 extern shared_ptr<ImuProcess> p_imu;
@@ -126,6 +126,11 @@ extern std::string ecef_position_topic;
 extern std::string ecef_position_frame_id;
 extern bool nmea_global_anchor_ready;
 extern Eigen::Vector3d nmea_global_anchor_lla;
+#ifdef LIGO_WITH_NMEA
+/** If true, ENU anchor is set from yaml at startup (not first NavSatFix). See nmea.fixed_anchor_lla_deg or nmea.ppp_anc (ECEF). */
+extern bool nmea_use_fixed_anchor;
+extern std::vector<double> nmea_fixed_anchor_lla_deg;
+#endif
 extern std::vector<double> default_gnss_iono_params;
 extern double gnss_local_time_diff, gnss_ekf_noise;
 extern bool next_pulse_time_valid, update_gnss, update_nmea;
@@ -157,6 +162,13 @@ extern Eigen::Isometry3d indoor_gicp_T_map_lidar;
 extern bool indoor_flag_dynamic;
 extern double indoor_gicp_max_factor_error;
 extern int    indoor_gicp_min_factor_inliers;
+/** small_gicp registration: max point–point distance (m) for correspondences. */
+extern double indoor_gicp_max_correspondence_m;
+extern double indoor_gicp_map_voxel_m;
+extern double indoor_gicp_scan_voxel_m;
+extern int    indoor_gicp_max_iterations_reg;
+/** If true: defer first /indoor/map_cloud until one GICP result, then shift PCD by T_map_lidar^{-1} so it matches raw LIO in map (same frame as pre-indoor map). */
+extern bool indoor_gicp_align_reference_map_to_lio;
 
 extern MeasureGroup Measures;
 

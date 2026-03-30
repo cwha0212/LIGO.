@@ -11,10 +11,12 @@
 #include "Indoor_GridMapRegistry.h"
 #include <memory>
 #include <pcl/io/pcd_io.h>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 
 namespace {
   static std::shared_ptr<ligo::indoor::SmallGICPLocalizer> s_gicp_localizer;
   static bool s_map_published = false;
+  static bool s_occ_grid_published = false;
   static ligo::indoor::SmallGICPConfig s_gicp_cfg_grid;
   static std::string s_gicp_grid_resolved_pcd;
   // Display-resolution cached map cloud (published latched to RViz)
@@ -35,6 +37,30 @@ namespace {
   static Eigen::Matrix3d s_R_sys_to_map = Eigen::Matrix3d::Identity();
   static Eigen::Vector3d s_t_sys_to_map = Eigen::Vector3d::Zero();
   static bool s_sys_to_map_valid = false;
+  // Latch T_map_lidar^{-1} (map-local): shifts reference PCD to where raw LIO places the scan.
+  static Eigen::Isometry3d s_refmap_display_T_inv = Eigen::Isometry3d::Identity();
+  static bool s_refmap_display_T_inv_valid = false;
+  static uint64_t s_gicp_session_nonce = 0;
+
+  static void applyRefMapDisplayCorrectionToGrid(nav_msgs::msg::OccupancyGrid& grid) {
+    if (!indoor_gicp_align_reference_map_to_lio || !s_refmap_display_T_inv_valid) return;
+    const Eigen::Isometry3d& T = s_refmap_display_T_inv;
+    Eigen::Vector3d p0(grid.info.origin.position.x, grid.info.origin.position.y,
+                       grid.info.origin.position.z);
+    Eigen::Quaterniond q0(grid.info.origin.orientation.w, grid.info.origin.orientation.x,
+                           grid.info.origin.orientation.y, grid.info.origin.orientation.z);
+    Eigen::Matrix3d R0 = q0.toRotationMatrix();
+    const Eigen::Vector3d p1 = T * p0;
+    const Eigen::Matrix3d R1 = T.rotation() * R0;
+    const Eigen::Quaterniond q1(R1);
+    grid.info.origin.position.x = p1.x();
+    grid.info.origin.position.y = p1.y();
+    grid.info.origin.position.z = p1.z();
+    grid.info.origin.orientation.w = q1.w();
+    grid.info.origin.orientation.x = q1.x();
+    grid.info.origin.orientation.y = q1.y();
+    grid.info.origin.orientation.z = q1.z();
+  }
 
   static void recomputeSysToMapTransform() {
     if (s_map_transform_valid && s_sys_anchor_valid) {
@@ -43,6 +69,64 @@ namespace {
       s_t_sys_to_map = s_map_R_ecef_enu.transpose() * (s_sys_anchor_ecef - s_map_anchor_ecef);
       s_sys_to_map_valid = true;
     }
+  }
+
+  static void applySysTransformToOccupancyGrid(nav_msgs::msg::OccupancyGrid& grid) {
+    if (!s_sys_to_map_valid) return;
+    const Eigen::Matrix3d R_m2s = s_R_sys_to_map.transpose();
+    const Eigen::Vector3d t_m2s = -R_m2s * s_t_sys_to_map;
+    const Eigen::Vector3d p0(grid.info.origin.position.x, grid.info.origin.position.y,
+                             grid.info.origin.position.z);
+    const Eigen::Vector3d ps = R_m2s * p0 + t_m2s;
+    grid.info.origin.position.x = ps.x();
+    grid.info.origin.position.y = ps.y();
+    grid.info.origin.position.z = ps.z();
+    const Eigen::Quaterniond q(R_m2s);
+    grid.info.origin.orientation.w = q.w();
+    grid.info.origin.orientation.x = q.x();
+    grid.info.origin.orientation.y = q.y();
+    grid.info.origin.orientation.z = q.z();
+  }
+
+  static void maybePublishIndoorOccGrid(
+      const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub,
+      double timestamp_sec) {
+    if (!pub || s_occ_grid_published) return;
+    if (!ligo::indoor::indoorGridMapsLoaded()) {
+      s_occ_grid_published = true;
+      return;
+    }
+
+    std::string map_id;
+    if (auto m = ligo::indoor::lookupIndoorMapIdBySourcePcd(s_gicp_grid_resolved_pcd)) map_id = *m;
+    if (map_id.empty()) {
+      RCLCPP_WARN_ONCE(rclcpp::get_logger("ligo"),
+                       "[indoor/gicp] no 2D grid for loaded PCD (no matching *_grid2d source_pcd) — "
+                       "skip /indoor/map_2d");
+      s_occ_grid_published = true;
+      return;
+    }
+
+    nav_msgs::msg::OccupancyGrid grid;
+    if (!ligo::indoor::buildIndoorOccupancyGridForMapId(map_id, grid)) {
+      s_occ_grid_published = true;
+      return;
+    }
+
+    applyRefMapDisplayCorrectionToGrid(grid);
+    applySysTransformToOccupancyGrid(grid);
+
+    const int32_t sec = static_cast<int32_t>(std::floor(timestamp_sec));
+    const uint32_t nanosec = static_cast<uint32_t>(std::round((timestamp_sec - sec) * 1e9));
+    grid.header.stamp.sec = sec;
+    grid.header.stamp.nanosec = nanosec;
+    grid.info.map_load_time = grid.header.stamp;
+
+    pub->publish(grid);
+    s_occ_grid_published = true;
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "[indoor/gicp] 2D occupancy map published -> /indoor/map_2d  %ux%u  res=%.3f  frame=map",
+                grid.info.width, grid.info.height, grid.info.resolution);
   }
 }
 #endif  // LIGO_WITH_SMALL_GICP
@@ -170,6 +254,8 @@ bool ensureIndoorGICPMapFromGridEcef(const Eigen::Vector3d& ecef_m) {
   // Keeping current T_map_lidar is better than resetting to Identity here.
   initIndoorGICP(pcd, s_gicp_cfg_grid);
   s_map_published = false;
+  s_refmap_display_T_inv.setIdentity();
+  s_refmap_display_T_inv_valid = false;
   RCLCPP_WARN(rclcpp::get_logger("ligo"), "[indoor/gicp] map switched mid-session: map_id=%s  file=%s",
               opt->first.c_str(), pcd.c_str());
   return indoor_gicp_map_loaded;
@@ -178,7 +264,11 @@ bool ensureIndoorGICPMapFromGridEcef(const Eigen::Vector3d& ecef_m) {
 void initIndoorGICP(const std::string& map_pcd_path, const SmallGICPConfig& cfg) {
   s_gicp_localizer = std::make_shared<SmallGICPLocalizer>(cfg);
   s_map_published = false;
+  s_occ_grid_published = false;
   s_map_cloud_ready = false;
+  s_map_cloud_sys_ready = false;
+  s_refmap_display_T_inv.setIdentity();
+  s_refmap_display_T_inv_valid = false;
   if (s_gicp_localizer->loadMapFromPCD(map_pcd_path)) {
     indoor_gicp_map_loaded = true;
     s_gicp_grid_resolved_pcd = map_pcd_path;
@@ -221,7 +311,11 @@ void resetIndoorGICP() {
   indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
   indoor_pose_valid = false;
   s_map_published = false;
+  s_occ_grid_published = false;
   s_map_cloud_sys_ready = false;
+  s_refmap_display_T_inv.setIdentity();
+  s_refmap_display_T_inv_valid = false;
+  ++s_gicp_session_nonce;
   RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor/gicp] state reset");
 }
 
@@ -254,6 +348,14 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
 
   static size_t s_gicp_total = 0;
   static size_t s_gicp_converged = 0;
+  static size_t s_gicp_rejected = 0;
+  static uint64_t s_gicp_sess_seen = 0;
+  if (s_gicp_sess_seen != s_gicp_session_nonce) {
+    s_gicp_sess_seen   = s_gicp_session_nonce;
+    s_gicp_total       = 0;
+    s_gicp_converged   = 0;
+    s_gicp_rejected    = 0;
+  }
 
   const SmallGICPResult result = s_gicp_localizer->localize(scan_map, indoor_gicp_T_map_lidar);
   ++s_gicp_total;
@@ -290,8 +392,24 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
     indoor_pose_valid = false;
   }
 
-  static size_t s_gicp_rejected = 0;
   if (!quality_ok) ++s_gicp_rejected;
+
+  // One-shot display alignment: PCD is in "map file" frame; LIO scan is in map-local after sys_to_map.
+  // GICP finds T with T * scan_map ≈ pcd, so shifting PCD by T^{-1} matches raw LIO in map frame.
+  if (indoor_gicp_align_reference_map_to_lio && !s_refmap_display_T_inv_valid) {
+    if (result.converged || s_gicp_total >= 25) {
+      s_refmap_display_T_inv         = indoor_gicp_T_map_lidar.inverse();
+      s_refmap_display_T_inv_valid = true;
+      s_map_cloud_sys_ready          = false;
+      s_map_published                = false;
+      s_occ_grid_published           = false;
+      const Eigen::Vector3d te = s_refmap_display_T_inv.translation();
+      RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                  "[indoor/gicp] reference map display aligned to raw LIO (T_inv trans=%.3f,%.3f,%.3f m) "
+                  "conv=%d frame=%zu",
+                  te.x(), te.y(), te.z(), result.converged ? 1 : 0, s_gicp_total);
+    }
+  }
 
   if (s_gicp_total <= 5 || s_gicp_total % 100 == 0 || !quality_ok) {
     const Eigen::Vector3d t = result.T_map_lidar.translation();
@@ -315,6 +433,10 @@ static void buildMapCloudSysEnu() {
 
   const Eigen::Matrix3d R_m2s = s_R_sys_to_map.transpose();
   const Eigen::Vector3d t_m2s = -R_m2s * s_t_sys_to_map;
+  const Eigen::Isometry3d Tpre =
+      (indoor_gicp_align_reference_map_to_lio && s_refmap_display_T_inv_valid)
+          ? s_refmap_display_T_inv
+          : Eigen::Isometry3d::Identity();
 
   pcl::PointCloud<pcl::PointXYZI> raw;
   pcl::fromROSMsg(s_map_cloud_msg, raw);
@@ -322,7 +444,8 @@ static void buildMapCloudSysEnu() {
   pcl::PointCloud<pcl::PointXYZI> transformed;
   transformed.reserve(raw.size());
   for (const auto& p : raw.points) {
-    Eigen::Vector3d ps = R_m2s * Eigen::Vector3d(p.x, p.y, p.z) + t_m2s;
+    const Eigen::Vector3d pm = Tpre * Eigen::Vector3d(p.x, p.y, p.z);
+    Eigen::Vector3d ps        = R_m2s * pm + t_m2s;
     pcl::PointXYZI q;
     q.x = static_cast<float>(ps.x());
     q.y = static_cast<float>(ps.y());
@@ -338,8 +461,14 @@ static void buildMapCloudSysEnu() {
 
 void publishIndoorMapCloudOnly(
     const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub_map,
-    double timestamp_sec) {
+    double timestamp_sec,
+    const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid,
+    bool defer_until_gicp_if_align) {
   if (!pub_map || !s_map_cloud_ready || s_map_published) return;
+  if (indoor_gicp_align_reference_map_to_lio && !s_refmap_display_T_inv_valid &&
+      defer_until_gicp_if_align) {
+    return;
+  }
 
   buildMapCloudSysEnu();
 
@@ -351,6 +480,7 @@ void publishIndoorMapCloudOnly(
   msg.header.stamp.nanosec = nanosec;
   pub_map->publish(msg);
   s_map_published = true;
+  maybePublishIndoorOccGrid(pub_occ_grid, timestamp_sec);
   RCLCPP_INFO(rclcpp::get_logger("ligo"),
               "[indoor/gicp] map cloud published (%u pts, frame=%s) -> /indoor/map_cloud",
               msg.width * msg.height,
@@ -364,14 +494,15 @@ void publishIndoorViz(
     const Eigen::Matrix3d& R_local_to_enu,
     const Eigen::Vector3d& t_local_to_enu,
     const Eigen::Isometry3d& T_map_lidar,
-    double timestamp_sec) {
+    double timestamp_sec,
+    const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid) {
   if (!s_gicp_localizer || !s_gicp_localizer->hasMap()) return;
 
   const int32_t  sec     = static_cast<int32_t>(std::floor(timestamp_sec));
   const uint32_t nanosec = static_cast<uint32_t>(std::round((timestamp_sec - sec) * 1e9));
 
-  // --- map cloud (latched): delegate to dedicated function ---
-  publishIndoorMapCloudOnly(pub_map, timestamp_sec);
+  // --- map cloud (latched): defer if align mode until first GICP latch (same frame ok after runIndoorGICPUpdate) ---
+  publishIndoorMapCloudOnly(pub_map, timestamp_sec, pub_occ_grid, true);
 
   // --- GICP-aligned scan in system-global-ENU (matches outdoor frame) ---
   if (pub_scan && scan_world && !scan_world->empty()) {

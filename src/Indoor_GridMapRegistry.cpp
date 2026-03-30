@@ -346,5 +346,69 @@ std::optional<GridEcefTransform> getFirstGridMapTransform() {
   return std::nullopt;
 }
 
+std::optional<std::string> lookupIndoorMapIdBySourcePcd(const std::string &abs_pcd_path) {
+  std::error_code ec;
+  const std::filesystem::path want = std::filesystem::weakly_canonical(abs_pcd_path, ec);
+  if (ec)
+    return std::nullopt;
+  for (const auto &g : g_grids) {
+    const std::filesystem::path have = std::filesystem::weakly_canonical(g.source_pcd, ec);
+    if (!ec && have == want)
+      return g.map_id;
+  }
+  return std::nullopt;
+}
+
+bool buildIndoorOccupancyGridForMapId(const std::string &map_id, nav_msgs::msg::OccupancyGrid &out) {
+  const GridMapData *gp = nullptr;
+  for (const auto &g : g_grids) {
+    if (g.map_id == map_id) {
+      gp = &g;
+      break;
+    }
+  }
+  if (!gp || gp->width <= 0 || gp->height <= 0 || gp->pixels.empty())
+    return false;
+
+  std::string frame = gp->frame_id;
+  for (auto &c : frame) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (frame == "ecef") {
+    RCLCPP_WARN(
+        rclcpp::get_logger("ligo"),
+        "[indoor/grid] OccupancyGrid skipped for map_id=%s: frame_id=ecef (export grid as enu for RViz /map)",
+        map_id.c_str());
+    return false;
+  }
+
+  out.info.width = static_cast<uint32_t>(gp->width);
+  out.info.height = static_cast<uint32_t>(gp->height);
+  out.info.resolution = static_cast<float>(gp->resolution);
+  out.info.origin.position.x = gp->origin_x;
+  out.info.origin.position.y = gp->origin_y;
+  out.info.origin.position.z = 0.0;
+  out.info.origin.orientation.w = 1.0;
+  out.info.origin.orientation.x = 0.0;
+  out.info.origin.orientation.y = 0.0;
+  out.info.origin.orientation.z = 0.0;
+
+  const size_t n = static_cast<size_t>(gp->width) * static_cast<size_t>(gp->height);
+  out.data.resize(n, static_cast<int8_t>(-1));
+  for (int ros_y = 0; ros_y < gp->height; ++ros_y) {
+    const int row_pgm = gp->height - 1 - ros_y;
+    for (int col = 0; col < gp->width; ++col) {
+      const std::uint8_t v =
+          gp->pixels[static_cast<size_t>(row_pgm) * static_cast<size_t>(gp->width) + static_cast<size_t>(col)];
+      int8_t o = static_cast<int8_t>(-1);
+      if (v <= 50)
+        o = 100;
+      else if (v >= 250)
+        o = 0;
+      out.data[static_cast<size_t>(ros_y) * static_cast<size_t>(gp->width) + static_cast<size_t>(col)] = o;
+    }
+  }
+  out.header.frame_id = "map";
+  return true;
+}
+
 }  // namespace indoor
 }  // namespace ligo

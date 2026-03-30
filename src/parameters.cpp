@@ -35,6 +35,9 @@
  */
 
 #include "parameters.h"
+#ifdef LIGO_WITH_NMEA
+#include "li_initialization.h"
+#endif
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <fstream>
 #include <filesystem>
@@ -106,7 +109,7 @@ std::vector<double> gravity_init, gravity;
 std::vector<double> extrinT(3, 0.0), extrinT_gnss(3, 0.0);
 std::vector<double> extrinR(9, 0.0), extrinR_gnss(9, 0.0);
 std::vector<double> ppp_anc(3, 0.0);
-bool   runtime_pos_log, pcd_save_en, path_en;
+bool   runtime_pos_log, log_lidar_frame_time_ms, pcd_save_en, path_en;
 bool   scan_pub_en, scan_body_pub_en;
 shared_ptr<Preprocess> p_pre;
 // shared_ptr<LI_Init> Init_LI;
@@ -125,6 +128,10 @@ std::string ecef_position_topic = "/ligo/ecef_position";
 std::string ecef_position_frame_id = "ecef";
 bool nmea_global_anchor_ready = false;
 Eigen::Vector3d nmea_global_anchor_lla = Eigen::Vector3d::Zero();
+#ifdef LIGO_WITH_NMEA
+bool nmea_use_fixed_anchor = false;
+std::vector<double> nmea_fixed_anchor_lla_deg;
+#endif
 std::vector<double> default_gnss_iono_params(8, 0.0);
 double gnss_local_time_diff = 18.0;
 bool next_pulse_time_valid = false, update_gnss = false, update_nmea = false;
@@ -153,8 +160,13 @@ std::string indoor_grid_map_dir;
 bool indoor_gicp_map_loaded = false;
 Eigen::Isometry3d indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
 bool indoor_flag_dynamic = false;
-double indoor_gicp_max_factor_error = 5.0;
+double indoor_gicp_max_factor_error = 250.0;
 int    indoor_gicp_min_factor_inliers = 50;
+double indoor_gicp_max_correspondence_m = 8.0;
+double indoor_gicp_map_voxel_m = 0.5;
+double indoor_gicp_scan_voxel_m = 0.5;
+int    indoor_gicp_max_iterations_reg = 50;
+bool indoor_gicp_align_reference_map_to_lio = true;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
 std::vector<Eigen::Matrix3d> local_rots;
@@ -228,6 +240,7 @@ void readParameters(rclcpp::Node * node)
   scan_pub_en = get_param("publish.scan_publish_en", true);
   scan_body_pub_en = get_param("publish.scan_bodyframe_pub_en", true);
   runtime_pos_log = get_param("runtime_pos_log_enable", false);
+  log_lidar_frame_time_ms = get_param("mapping.log_lidar_frame_time_ms", false);
   pcd_save_en = get_param("pcd_save.pcd_save_en", false);
   pcd_save_interval = get_param("pcd_save.interval", -1);
   lidar_time_inte = get_param("mapping.lidar_time_inte", 0.1);
@@ -306,9 +319,13 @@ void readParameters(rclcpp::Node * node)
     global_position_topic = get_param("ligo.global_position_topic", global_position_topic);
     ecef_position_topic = get_param("ligo.ecef_position_topic", ecef_position_topic);
     ecef_position_frame_id = get_param("ligo.ecef_position_frame_id", ecef_position_frame_id);
+    nmea_use_fixed_anchor = get_param("nmea.use_fixed_anchor", false);
+    nmea_fixed_anchor_lla_deg = get_param("nmea.fixed_anchor_lla_deg", std::vector<double>());
+    ligo_apply_fixed_nmea_anchor_if_configured();
   }
 
-  if (indoor_flag)
+  // Indoor map assets + GICP/noise: always load from yaml even when indoor_flag is false
+  // (e.g. mapping_mode forces indoor_flag off but /ligo/indoor_mode still needs grids under PCD/).
   {
     const bool indoor_outlier_rej = get_param("indoor.outlier_rejection", false);
     const double indoor_outlier_thres = get_param("indoor.outlier_thres", 0.1);
@@ -324,8 +341,14 @@ void readParameters(rclcpp::Node * node)
     if (!indoor_grid_map_dir.empty()) {
       cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;
     }
-    indoor_gicp_max_factor_error   = get_param("indoor.gicp_max_factor_error", 5.0);
+    indoor_gicp_max_factor_error   = get_param("indoor.gicp_max_factor_error", 250.0);
     indoor_gicp_min_factor_inliers = get_param("indoor.gicp_min_factor_inliers", 50);
+    indoor_gicp_max_correspondence_m = get_param("indoor.gicp_max_correspondence_m", 8.0);
+    indoor_gicp_map_voxel_m   = get_param("indoor.gicp_map_voxel_m", 0.5);
+    indoor_gicp_scan_voxel_m  = get_param("indoor.gicp_scan_voxel_m", 0.5);
+    indoor_gicp_max_iterations_reg = get_param("indoor.gicp_max_iterations", 50);
+    indoor_gicp_align_reference_map_to_lio =
+        get_param("indoor.gicp_align_reference_map_to_lio", true);
   }
 #endif
 }

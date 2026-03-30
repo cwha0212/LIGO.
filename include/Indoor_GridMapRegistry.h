@@ -2,6 +2,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <optional>
 #include <string>
 #include <utility>
@@ -39,6 +40,13 @@ std::optional<GridEcefTransform> lookupIndoorGridTransformByMapId(const std::str
 
 /** Returns the ecef_from_enu transform of the first loaded grid map, or nullopt. */
 std::optional<GridEcefTransform> getFirstGridMapTransform();
+
+/** Resolve map_id whose grid `source_pcd` matches `abs_pcd_path` (canonical path compare). */
+std::optional<std::string> lookupIndoorMapIdBySourcePcd(const std::string &abs_pcd_path);
+
+/** Fill `out` from loaded *_grid2d (PGM) for RViz Map. Map-local ENU: origin + identity orientation.
+ *  Returns false if map_id missing, frame is pure ECEF (not supported for /map overlay), or empty grid. */
+bool buildIndoorOccupancyGridForMapId(const std::string &map_id, nav_msgs::msg::OccupancyGrid &out);
 
 }  // namespace indoor
 }  // namespace ligo
