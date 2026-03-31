@@ -169,7 +169,6 @@ extern double indoor_gicp_scan_voxel_m;
 extern int    indoor_gicp_max_iterations_reg;
 /** If true: defer first /indoor/map_cloud until one GICP result, then shift PCD by T_map_lidar^{-1} so it matches raw LIO in map (same frame as pre-indoor map). */
 extern bool indoor_gicp_align_reference_map_to_lio;
-
 extern MeasureGroup Measures;
 
 extern std::vector<Eigen::Vector3d> est_poses;

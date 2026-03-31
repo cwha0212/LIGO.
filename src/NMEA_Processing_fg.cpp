@@ -650,8 +650,13 @@ bool NMEAProcess::NMEALIAlign()
 
 bool NMEAProcess::Evaluate(state_output &state)
 {
+  // After /ligo/indoor_mode: use GICP (IndoorLocalizationFactor) for global ENU — do not reject this step on GNSS covariance.
+  const bool indoor_gicp_replaces_nmea = indoor_flag_dynamic;
   // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
-  if (nmea_meas_[0]->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[7] > p_assign->ppp_std_threshold || nmea_meas_[0]->pose.covariance[14] > p_assign->ppp_std_threshold)
+  if (!indoor_gicp_replaces_nmea &&
+      (nmea_meas_[0]->pose.covariance[0] > p_assign->ppp_std_threshold ||
+       nmea_meas_[0]->pose.covariance[7] > p_assign->ppp_std_threshold ||
+       nmea_meas_[0]->pose.covariance[14] > p_assign->ppp_std_threshold))
   {
     return false;
   }
@@ -889,71 +894,73 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     id_accumulate += 1;
   }
   {
-    const bool nmea_navsatfix_pos_only = (nmea_input_type == "navsatfix");
-    double values[17];
-    values[0] = Tex_imu_r[0]; values[1] = Tex_imu_r[1]; values[2] = Tex_imu_r[2]; values[3] = anc_local[0]; values[4] = anc_local[1]; values[5] = anc_local[2];
-    values[6] = nmea_meas_[0]->pose.pose.position.x; values[7] = nmea_meas_[0]->pose.pose.position.y; values[8] = nmea_meas_[0]->pose.pose.position.z; 
-    values[9] = nmea_meas_[0]->twist.twist.linear.x; values[10] = nmea_meas_[0]->twist.twist.linear.y; values[11] = nmea_meas_[0]->twist.twist.linear.z;
-    values[12] = nmea_meas_[0]->pose.pose.orientation.w; values[13] = nmea_meas_[0]->pose.pose.orientation.x; values[14] = nmea_meas_[0]->pose.pose.orientation.y;
-    values[15] = nmea_meas_[0]->pose.pose.orientation.z; 
-    values[16] = nmea_weight; 
-    RCLCPP_INFO(rclcpp::get_logger("ligo"), "[NMEA FACTOR INPUT]");
-    if (!nolidar)
+    const bool indoor_gicp_replaces_nmea = indoor_flag_dynamic;
+    if (!indoor_gicp_replaces_nmea)
     {
-      // Eigen::Vector3d RTex1 = rot * Tex_imu_r;
-      // values[0] = RTex1[0]; values[1] = RTex1[1]; values[2] = RTex1[2]; 
-      if (frame_num < delete_thred)
+      const bool nmea_navsatfix_pos_only = (nmea_input_type == "navsatfix");
+      double values[17];
+      values[0] = Tex_imu_r[0]; values[1] = Tex_imu_r[1]; values[2] = Tex_imu_r[2]; values[3] = anc_local[0]; values[4] = anc_local[1]; values[5] = anc_local[2];
+      values[6] = nmea_meas_[0]->pose.pose.position.x; values[7] = nmea_meas_[0]->pose.pose.position.y; values[8] = nmea_meas_[0]->pose.pose.position.z;
+      values[9] = nmea_meas_[0]->twist.twist.linear.x; values[10] = nmea_meas_[0]->twist.twist.linear.y; values[11] = nmea_meas_[0]->twist.twist.linear.z;
+      values[12] = nmea_meas_[0]->pose.pose.orientation.w; values[13] = nmea_meas_[0]->pose.pose.orientation.x; values[14] = nmea_meas_[0]->pose.pose.orientation.y;
+      values[15] = nmea_meas_[0]->pose.pose.orientation.z;
+      values[16] = nmea_weight;
+      RCLCPP_INFO(rclcpp::get_logger("ligo"), "[NMEA FACTOR INPUT]");
+      if (!nolidar)
       {
-        p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise_init,
-                                  nmea_navsatfix_pos_only));
-      }
-      else
-      {
-        p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
-                                  nmea_navsatfix_pos_only));
-      }
-      // When NMEA is position-only and lidar is invalid, R(frame) can become underconstrained.
-      // Add a lightweight rotational anchor from current propagated rotation.
-      if (nmea_navsatfix_pos_only && invalid_lidar)
-      {
-        p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
-        factor_id_cur.push_back(id_accumulate);
-        id_accumulate += 1;
-        // Add temporal rotation constraint when NavSatFix is position-only and lidar is invalid.
-        // This avoids single-frame yaw gauge issues at marginalization boundaries.
-        // After soft-recovery or ISAM hiccups, R(frame_num-1) may be missing — never call .at() then.
-        if (frame_num > 0 && p_assign->isamCurrentEstimate.exists(R(frame_num - 1)))
+        if (frame_num < delete_thred)
         {
-          const gtsam::Rot3 prev_rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num - 1));
-          const gtsam::Rot3 cur_rot = gtsam::Rot3(rot);
-          const gtsam::Rot3 rel_meas = prev_rot.between(cur_rot);
-          p_assign->gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Rot3>(R(frame_num - 1), R(frame_num), rel_meas, p_assign->margrotNoise));
+          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise_init,
+                                    nmea_navsatfix_pos_only));
+        }
+        else
+        {
+          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
+                                    nmea_navsatfix_pos_only));
+        }
+        if (nmea_navsatfix_pos_only && invalid_lidar)
+        {
+          p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
           factor_id_cur.push_back(id_accumulate);
           id_accumulate += 1;
-        }
-        else if (frame_num > 0)
-        {
-          static std::chrono::steady_clock::time_point s_last_between_skip_log{};
-          const auto now = std::chrono::steady_clock::now();
-          if (now - s_last_between_skip_log > std::chrono::seconds(2))
+          if (frame_num > 0 && p_assign->isamCurrentEstimate.exists(R(frame_num - 1)))
           {
-            s_last_between_skip_log = now;
-            RCLCPP_WARN(
-                rclcpp::get_logger("ligo"),
-                "[nmea] BetweenFactor R(%zu)->R(%zu) skipped: previous rotation not in ISAM (e.g. after graph recovery).",
-                static_cast<size_t>(frame_num - 1), static_cast<size_t>(frame_num));
+            const gtsam::Rot3 prev_rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num - 1));
+            const gtsam::Rot3 cur_rot = gtsam::Rot3(rot);
+            const gtsam::Rot3 rel_meas = prev_rot.between(cur_rot);
+            p_assign->gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Rot3>(R(frame_num - 1), R(frame_num), rel_meas, p_assign->margrotNoise));
+            factor_id_cur.push_back(id_accumulate);
+            id_accumulate += 1;
+          }
+          else if (frame_num > 0)
+          {
+            static std::chrono::steady_clock::time_point s_last_between_skip_log{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - s_last_between_skip_log > std::chrono::seconds(2))
+            {
+              s_last_between_skip_log = now;
+              RCLCPP_WARN(
+                  rclcpp::get_logger("ligo"),
+                  "[nmea] BetweenFactor R(%zu)->R(%zu) skipped: previous rotation not in ISAM (e.g. after graph recovery).",
+                  static_cast<size_t>(frame_num - 1), static_cast<size_t>(frame_num));
+            }
           }
         }
       }
-
+      else
+      {
+        p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
+                                                         nmea_navsatfix_pos_only));  // not work
+      }
+      factor_id_cur.push_back(id_accumulate);
+      id_accumulate += 1;
     }
     else
     {
-      p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
-                                                       nmea_navsatfix_pos_only)); // not work
+      RCLCPP_DEBUG(
+          rclcpp::get_logger("ligo"),
+          "[indoor] skip NMEAFactor: using GICP IndoorLocalizationFactor (frame=%d)", frame_num);
     }
-    factor_id_cur.push_back(id_accumulate);
-    id_accumulate += 1;
   }
 
   {
@@ -1000,7 +1007,8 @@ void NMEAProcess::SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
     p_assign->initialEstimate.insert(G(0), gtsam::Vector3(gravity_init));
 
     p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(P(0), gtsam::Rot3(gtsam::Rot3(Rot_nmea_init)), p_assign->priorextrotNoise));
-    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]), p_assign->priorextposNoise));
+    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]),
+                            p_assign->priorextposNoise));
     p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(0), gtsam::Rot3(r_enu_local), p_assign->priorrotNoise));
     p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector6>(A(0), gtsam::Vector6(init_vel_bias_vector), p_assign->priorNoise));
     p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector12>(O(0), gtsam::Vector12(init_others_vector), p_assign->priorBiasNoise));

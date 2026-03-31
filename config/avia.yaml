@@ -99,7 +99,7 @@
       # 앵커 고정(nmea.use_fixed_anchor)은 "지리 원점"만 맞춤. PCD는 icp_tf_ready 이후 LIO→ENU(ICP)로 저장되므로
       # 실행마다 icp_R/t가 조금씩 달라져 예전 맵과 현재 LIO map이 완전 일치하지 않을 수 있음(수 cm~dm).
       # 그리드와 맞추기: 쓰는 맵의 *_grid2d.yaml → ecef_from_enu.anchor_lla_deg_m 를 아래에 그대로 복사
-      use_fixed_anchor: true
+      use_fixed_anchor: false
       fixed_anchor_lla_deg: [37.411727467108, 127.093002446390, 113.795535463840] # scans_3_grid2d.yaml 과 동일
       ppp_anc: [3959058.559396, -87615.730649, 4983325.235812] # 참고용 ECEF; 고정앵커 켤 땐 현장과 일치하는지 확인
              # [-2152900.934855,4380649.467661,4091851.462459] # bri 
@@ -122,11 +122,11 @@
       # true: GTSAM indoor factor + continuous indoor. mapping_mode:true forces this false but
       # grid_map_dir / map_pcd_path are still loaded for /ligo/indoor_mode GICP.
       indoor_flag: true
-      # *_grid2d.yaml + pgm + source_pcd. Relative → share/ligo/<path> (e.g. colcon install …/share/ligo/PCD).
+      # *_grid2d.yaml + pgm + source_pcd. Relative: package source <src>/LIGO./<path> if that dir exists, else share/ligo/<path>.
       grid_map_dir: "PCD"
       # Absolute path to the reference PCD map file built during the mapping session.
       # Typically: <workspace>/src/LIGO./PCD/scans_3.pcd
-      map_pcd_path: "PCD"
+      map_pcd_path: ""
       # 실내 GICP → GTSAM factor 허용 조건. small_gicp result.error 스케일은 보통 수십~수백(레거시 기본 5면 100% REJECT).
       gicp_max_factor_error: 400.0
       gicp_min_factor_inliers: 400

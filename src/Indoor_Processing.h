@@ -88,8 +88,7 @@ void publishIndoorViz(
     const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid = nullptr);
 #endif  // LIGO_WITH_SMALL_GICP
 
-/** Add IndoorLocalizationFactor to the GTSAM graph for the given NMEA frame index.
- *  frame_num must correspond to A(frame_num), R(frame_num) already in the graph. */
+/** Add IndoorLocalizationFactor(P,E,A,R) — same variable layout as outdoor NMEAFactor; used when indoor (NMEAFactor off). */
 void addIndoorFactorToGraph(int frame_num);
 
 }  // namespace indoor

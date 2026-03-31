@@ -9,6 +9,7 @@
 #ifdef LIGO_WITH_SMALL_GICP
 #include "Indoor_SmallGICP_Localizer.h"
 #include "Indoor_GridMapRegistry.h"
+#include "common_lib.h"
 #include <memory>
 #include <pcl/io/pcd_io.h>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -382,8 +383,15 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
 
   if (quality_ok)
   {
-    indoor_pos_enu_meas = result.T_map_lidar.translation();
-    indoor_rot_enu_meas = Eigen::Quaterniond(result.T_map_lidar.rotation()).normalized();
+    // Scan points are already warped into map-local ENU before GICP; T_map_lidar is then a small
+    // scan↔map registration residual (~Identity), NOT sensor absolute pose in map (see laserMapping
+    // seed comment). Factor ENU pose must match the same LIO→ENU chain as scan conversion.
+    const Eigen::Vector3d p_lio_enu =
+        R_local_to_enu * kf_output.x_.pos + t_local_to_enu;
+    const Eigen::Matrix3d R_lio_enu =
+        R_local_to_enu * kf_output.x_.rot;
+    indoor_pos_enu_meas = p_lio_enu;
+    indoor_rot_enu_meas = Eigen::Quaterniond(R_lio_enu).normalized();
     indoor_pose_time    = timestamp;
     indoor_pose_valid   = true;
   }
@@ -545,7 +553,7 @@ void publishIndoorViz(
 void addIndoorFactorToGraph(int frame_num) {
 #ifdef LIGO_WITH_NMEA
   if (!(indoor_flag || indoor_flag_dynamic) || !indoor_pose_valid) return;
-  if (!p_nmea || !p_nmea->nmea_ready) return;
+  if (!p_nmea) return;
   if (!indoorPoseNoise || !indoorPoseNoiseInit) return;
 
   double values[17] = {};
@@ -567,9 +575,9 @@ void addIndoorFactorToGraph(int frame_num) {
 
   const bool init_phase = (frame_num < p_nmea->delete_thred);
   const auto& noise = init_phase ? indoorPoseNoiseInit : indoorPoseNoise;
+  // Same keys/geometry as outdoor NMEAFactor: P(0), E(0), A, R — global ENU pose vs graph anchor E(0).
   p_nmea->p_assign->gtSAMgraph.add(ligo::IndoorLocalizationFactor(
-      P(0), E(0), A(frame_num), R(frame_num),
-      false, values, Eigen::Vector3d::Zero(), p_nmea->Rex_imu_r, noise));
+      P(0), E(0), A(frame_num), R(frame_num), false, values, Eigen::Vector3d::Zero(), p_nmea->Rex_imu_r, noise));
 
   static size_t s_indoor_factor_cnt = 0;
   ++s_indoor_factor_cnt;

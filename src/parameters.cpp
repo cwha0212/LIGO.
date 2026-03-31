@@ -51,24 +51,31 @@ static std::string trim_ws(std::string s) {
   return s;
 }
 
-/** If non-empty and relative, resolve against ligo share (install) or ROOT_DIR (fallback). */
+/** If non-empty and relative: prefer package source ROOT_DIR/p when that directory exists, else share/ligo/p. */
 static std::string resolve_indoor_grid_map_dir(const std::string& raw) {
   std::string s = trim_ws(raw);
   if (s.empty()) return s;
   namespace fs = std::filesystem;
   fs::path p(s);
   if (p.is_absolute()) return s;
+
+  std::string root(ROOT_DIR);
+  if (!root.empty() && (root.back() == '/' || root.back() == '\\')) root.pop_back();
+  fs::path src_joined = (fs::path(root) / p).lexically_normal();
+  std::error_code ec;
+  if (fs::is_directory(src_joined, ec)) {
+    fs::path canon = fs::weakly_canonical(src_joined, ec);
+    return ec ? src_joined.string() : canon.string();
+  }
+
   try {
     const std::string share = ament_index_cpp::get_package_share_directory("ligo");
-    std::error_code ec;
     fs::path joined = fs::path(share) / p;
     fs::path canon = fs::weakly_canonical(joined, ec);
     return ec ? joined.lexically_normal().string() : canon.string();
   } catch (...) {
   }
-  std::string root(ROOT_DIR);
-  if (!root.empty() && (root.back() == '/' || root.back() == '\\')) root.pop_back();
-  return (fs::path(root) / p).lexically_normal().string();
+  return src_joined.string();
 }
 
 }  // namespace

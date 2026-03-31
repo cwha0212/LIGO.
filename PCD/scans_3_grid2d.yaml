@@ -1,11 +1,11 @@
-image: /home/tae/last_navi/src/LIGO./PCD/scans_3_grid2d.pgm
+image: scans_3_grid2d.pgm
 resolution: 1.000000000000
 origin: [-37.000000000000, -14.000000000000, 0.0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196
 mode: trinary
-source_pcd: /home/tae/last_navi/src/LIGO./PCD/scans_3.pcd
+source_pcd: scans_3.pcd
 frame_id: enu
 grid_type: occupancy_2d_raycast
 min_points_per_cell: 3
