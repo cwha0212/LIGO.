@@ -15,7 +15,7 @@ struct GridEcefTransform {
   Eigen::Matrix3d R_ecef_enu;
 };
 
-/** Load all * _grid2d.yaml under dir (same layout as grid export / grid_membership_monitor). */
+/** Load all * _grid2d.yaml under dir (same layout as grid export). */
 bool loadIndoorGridMapsFromDirectory(const std::string &dir);
 
 void clearIndoorGridMaps();

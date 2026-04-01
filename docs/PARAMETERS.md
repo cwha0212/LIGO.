@@ -61,6 +61,8 @@
 
 ## `gnss.*` (NMEA/GTSAM 그래프·EKF 관련)
 
+YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라인은 코드에서 제거**되었고 아래 키는 NMEA·GTSAM·프런트 EKF에 쓰인다. **`gnss.gnss_enable` 같은 파라미터는 없다**(과거 문서·설명 잔재).
+
 | 키 | 설명 | 고급 |
 |----|------|------|
 | `outlier_rejection` | 강건 M-estimator 사용 | |
@@ -71,7 +73,7 @@
 | `prior_noise`, `marg_noise`, `odo_noise`, `grav_noise` | 각종 노이즈 | ✓ |
 | `b_acc_noise`, `b_omg_noise`, `acc_noise`, `omg_noise` | 바이어스/관측 노이즈 | ✓ |
 | `gnss_ekf_noise` | EKF 측정 노이즈 스케일 ([Estimator.cpp](../src/Estimator.cpp)) | ✓ |
-| `gnss_extrinsic_T`, `gnss_extrinsic_R` | GNSS–IMU 외부표정 | |
+| `gnss_extrinsic_T`, `gnss_extrinsic_R` | 안테나(GNSS 수신기 기준점)–IMU 외부표정; `NMEA_ENABLE`일 때 `laserMapping.cpp`에서 `p_nmea->Tex_imu_r` / `Rex_imu_r`에 반영 | |
 | `nolidar` | LiDAR 없이 GNSS만 (특수 모드) | ✓ |
 
 ## `nmea.*` (`LIGO_WITH_NMEA` 빌드 시)
