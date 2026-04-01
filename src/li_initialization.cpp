@@ -80,7 +80,6 @@ mutex mtx_buffer;
 sensor_msgs::msg::Imu imu_last, imu_next;
 // sensor_msgs::Imu::ConstPtr imu_last_ptr;
 PointCloudXYZI::Ptr  ptr_con(new PointCloudXYZI());
-double s_plot[MAXN], s_plot3[MAXN];
 
 bool first_gps = false;
 Eigen::Vector3d first_gps_lla;
@@ -140,7 +139,6 @@ bool lidar_pushed = false, imu_pushed = false;
 std::deque<PointCloudXYZI::Ptr>  lidar_buffer;
 std::deque<double>               time_buffer;
 std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_deque;
-std::queue<std::vector<gnss_comm::ObsPtr>> gnss_meas_buf;
 std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_buf;
 
 #ifdef LIGO_WITH_NMEA
@@ -406,7 +404,6 @@ void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in)
 
 bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg)
 {
-    std::queue<std::vector<gnss_comm::ObsPtr>> gnss_msg;
     static uint64_t sync_call_count = 0;
     ++sync_call_count;
 
@@ -414,47 +411,13 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
     {
         RCLCPP_DEBUG(
             rclcpp::get_logger("ligo"),
-            "sync diag: lidar_buf=%zu imu_buf=%zu gnss_buf=%zu nmea_buf=%zu time_diff_valid=%d dt_gnss=%.6f dt_nmea=%.6f last_imu=%.6f",
-            lidar_buffer.size(), imu_deque.size(), gnss_meas_buf.size(), nmea_meas_buf.size(),
-            time_diff_valid ? 1 : 0, time_diff_gnss_local, time_diff_nmea_local, last_timestamp_imu);
+            "sync diag: lidar_buf=%zu imu_buf=%zu nmea_buf=%zu time_diff_valid=%d dt_nmea=%.6f last_imu=%.6f",
+            lidar_buffer.size(), imu_deque.size(), nmea_meas_buf.size(),
+            time_diff_valid ? 1 : 0, time_diff_nmea_local, last_timestamp_imu);
     }
 
     if (nolidar)
     {
-        if (is_first_gnss && !NMEA_ENABLE)
-        {
-            if (gnss_meas_buf.empty())
-            {
-                // imu_pushed = false;
-                return false;
-            }
-            else
-            {
-                // double imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds();
-                // double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-                // if (last_timestamp_imu < front_gnss_ts - time_diff_gnss_local)
-                // {
-                    // return false;
-                // }
-                // while (front_gnss_ts - imu_time > time_diff_gnss_local) // wrong
-                // {
-                    // imu_last = *(imu_deque.front());
-                    // imu_deque.pop_front();
-                    // if(imu_deque.empty()) break;
-                    // imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
-                    // imu_next = *(imu_deque.front());
-                // }
-                // else
-                while (!imu_deque.empty())
-                {
-                    imu_deque.pop_front();
-                }
-                {
-                    is_first_gnss = false;
-                }
-            }
-        }
-
         if (is_first_nmea && NMEA_ENABLE)
         {
             if (nmea_meas_buf.empty())
@@ -480,11 +443,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
         }
         
         imu_first_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // 
-
-        if ((latest_gnss_time < time_diff_gnss_local + imu_first_time + lidar_time_inte) && GNSS_ENABLE)
-        {
-            return false;
-        }
 
         if ((last_nmea_time < time_diff_nmea_local + imu_first_time + lidar_time_inte) && NMEA_ENABLE)
         {
@@ -527,20 +485,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
                     imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
                     imu_next = *(imu_deque.front());
                 }
-                if (!gnss_meas_buf.empty())
-                {
-                    double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-                    while (front_gnss_ts < imu_first_time + lidar_time_inte + time_diff_gnss_local)
-                    {
-                        gnss_meas_buf.pop();
-                        if(gnss_meas_buf.empty()) break;
-                        front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-                    }
-                    if (meas.imu.empty())
-                    {
-                        return false;
-                    }
-                }
                 if (!nmea_meas_buf.empty())
                 {
                     double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
@@ -563,45 +507,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
             imu_pushed = true;
         }
 
-        if (GNSS_ENABLE)
-        {
-            if (!gnss_meas_buf.empty()) // or can wait for a short time?
-            {
-                // double back_gnss_ts = time2sec(gnss_meas_buf.back()[0]->time);
-                
-                // if (back_gnss_ts - imu_first_time < time_diff_gnss_local + lidar_time_inte)
-                // {
-                //     return false;
-                // }
-                double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-                while (front_gnss_ts - imu_first_time < time_diff_gnss_local + lidar_time_inte) 
-                {
-                    gnss_msg.push(gnss_meas_buf.front());
-                    gnss_meas_buf.pop();
-                    if (gnss_meas_buf.empty()) break;
-                    front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
-                }
-
-                if (!gnss_msg.empty())
-                {
-                    imu_pushed = false;
-                    return true;
-                }
-            }
-
-            // if (gnss_meas_buf.empty())
-            // {
-            //     wait_num ++;
-            //     if (wait_num > 2) 
-            //     {
-            //         wait_num = 0;
-            //     }
-            //     else
-            //     {
-            //         return false;
-            //     }
-            // }
-        }
         if (NMEA_ENABLE)
         {
             if (!nmea_meas_buf.empty()) // or can wait for a short time?
@@ -629,20 +534,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
     {
     if (!imu_en)
     {
-        if (is_first_gnss && GNSS_ENABLE)
-        {
-            if (gnss_meas_buf.empty())
-            {
-                return false;
-            }
-            else
-            {
-                while (!lidar_buffer.empty())
-                {
-                    lidar_buffer.pop_front();
-                }
-            }
-        }
         if (!lidar_buffer.empty())
         {
             if (!lidar_pushed)
@@ -672,47 +563,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
                 lidar_pushed = true;
             }
             
-            if (GNSS_ENABLE)
-            {
-                if (!gnss_meas_buf.empty()) // or can wait for a short time?
-                {
-                    double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
-                    while (front_gnss_ts < meas.lidar_beg_time + time_diff_gnss_local) // 0.05
-                    {
-                        RCLCPP_WARN(rclcpp::get_logger("ligo"), "throw gnss, only should happen at the beginning 542");
-                        gnss_meas_buf.pop();
-                        if (gnss_meas_buf.empty()) break;
-                        front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
-                    }
-                    if (!gnss_meas_buf.empty())
-                    {
-                    while ((!lose_lid && (front_gnss_ts <= lidar_end_time + time_diff_gnss_local)) || (lose_lid && (front_gnss_ts <= meas.lidar_beg_time + time_diff_gnss_local + lidar_time_inte) ))
-                    {
-                        gnss_msg.push(gnss_meas_buf.front());
-                        gnss_meas_buf.pop();
-                        if (gnss_meas_buf.empty()) break;
-                        front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
-                    }
-                    if (!gnss_msg.empty())
-                    {
-                        /* Fall through to fill nmea_msg too when NMEA_ENABLE, so both GNSS and NMEA are used in same frame */
-                    }
-                    }
-                }
-
-                // if (gnss_meas_buf.empty())
-                // {
-                //     wait_num ++;
-                //     if (wait_num > 2) 
-                //     {
-                //         wait_num = 0;
-                //     }
-                //     else
-                //     {
-                //         return false;
-                //     }
-                // }
-            }
             if (NMEA_ENABLE)
             {
                 if (!nmea_meas_buf.empty()) // or can wait for a short time?
@@ -757,26 +607,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
             }
         }        
         return false;
-    }
-
-    if (0) // (is_first_gnss && GNSS_ENABLE)
-    {
-        if (gnss_meas_buf.empty())
-        {
-            return false;
-        }
-        else
-        {
-            while (!lidar_buffer.empty())
-            {
-                lidar_buffer.pop_front();
-            }
-            is_first_gnss = false;
-            while (!imu_deque.empty())
-            {
-                imu_deque.pop_front();
-            }
-        }
     }
 
     if (lidar_buffer.empty() || imu_deque.empty())
@@ -843,28 +673,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
                 imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
                 imu_next = *(imu_deque.front());
             }
-            if (GNSS_ENABLE)
-            {
-                if (!gnss_meas_buf.empty())
-                {
-                    const size_t gnss_buf_before_trim = gnss_meas_buf.size();
-                    double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take timedouble front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
-                    while (front_gnss_ts < lidar_end_time + time_diff_gnss_local)
-                    {
-                        gnss_meas_buf.pop();
-                        if(gnss_meas_buf.empty()) break;
-                        front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-                    }
-                    const size_t gnss_trimmed = gnss_buf_before_trim - gnss_meas_buf.size();
-                    if (gnss_trimmed > 0)
-                    {
-                        RCLCPP_DEBUG(
-                            rclcpp::get_logger("ligo"),
-                            "[sync/lidar] GNSS pre-trim: trimmed=%zu remain=%zu end=%.6f dt=%.6f",
-                            gnss_trimmed, gnss_meas_buf.size(), lidar_end_time, time_diff_gnss_local);
-                    }
-                }
-            }
             if (NMEA_ENABLE)
             {
                 if (!nmea_meas_buf.empty())
@@ -915,29 +723,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
                 imu_next = *(imu_deque.front());
             }
 
-            if (GNSS_ENABLE)
-            {
-                if (!gnss_meas_buf.empty())
-                {
-                    const size_t gnss_buf_before_trim = gnss_meas_buf.size();
-                    double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-                    while (front_gnss_ts < meas.lidar_beg_time + lidar_time_inte + time_diff_gnss_local)
-                    {
-                        gnss_meas_buf.pop();
-                        if(gnss_meas_buf.empty()) break;
-                        front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-                    }
-                    const size_t gnss_trimmed = gnss_buf_before_trim - gnss_meas_buf.size();
-                    if (gnss_trimmed > 0)
-                    {
-                        RCLCPP_DEBUG(
-                            rclcpp::get_logger("ligo"),
-                            "[sync/lidar-lose] GNSS pre-trim: trimmed=%zu remain=%zu end=%.6f dt=%.6f",
-                            gnss_trimmed, gnss_meas_buf.size(), meas.lidar_beg_time + lidar_time_inte, time_diff_gnss_local);
-                    }
-                }
-            }
-
             if (NMEA_ENABLE)
             {
                 if (!nmea_meas_buf.empty())
@@ -969,35 +754,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
         imu_pushed = true;
     }
 
-    if (GNSS_ENABLE)
-    {
-        if (!gnss_meas_buf.empty()) // or can wait for a short time?
-        {
-            const size_t gnss_buf_before_fill = gnss_meas_buf.size();
-            const size_t gnss_msg_before_fill = gnss_msg.size();
-            double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time); // take time
-            while ((!lose_lid && (front_gnss_ts < lidar_end_time + time_diff_gnss_local)) || (lose_lid && (front_gnss_ts < meas.lidar_beg_time + time_diff_gnss_local + lidar_time_inte) )) // (front_gnss_ts >= meas.lidar_beg_time + time_diff_gnss_local) && 
-            {
-                gnss_msg.push(gnss_meas_buf.front());
-                gnss_meas_buf.pop();
-                if (gnss_meas_buf.empty()) break;
-                front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
-            }
-            if (!gnss_msg.empty())
-            {
-                /* Fall through to fill nmea_msg too when NMEA_ENABLE */
-            }
-            const size_t gnss_pushed = gnss_msg.size() - gnss_msg_before_fill;
-            const size_t gnss_popped = gnss_buf_before_fill - gnss_meas_buf.size();
-            if (gnss_pushed > 0 || gnss_popped > 0)
-            {
-                RCLCPP_DEBUG(
-                    rclcpp::get_logger("ligo"),
-                    "[sync/lidar] GNSS fill: pushed=%zu popped=%zu remain_buf=%zu lose_lid=%d",
-                    gnss_pushed, gnss_popped, gnss_meas_buf.size(), lose_lid ? 1 : 0);
-            }
-        }
-    }
     if (NMEA_ENABLE)
     {
         if (!nmea_meas_buf.empty()) // or can wait for a short time?
@@ -1044,9 +800,9 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
     time_buffer.pop_front();
     RCLCPP_DEBUG(
         rclcpp::get_logger("ligo"),
-        "[sync/lidar] frame consume(final): lidar_buf %zu->%zu time_buf %zu->%zu gnss_buf=%zu nmea_buf=%zu",
+        "[sync/lidar] frame consume(final): lidar_buf %zu->%zu time_buf %zu->%zu nmea_buf=%zu",
         lidar_buf_before_pop, lidar_buffer.size(), time_buf_before_pop, time_buffer.size(),
-        gnss_meas_buf.size(), nmea_meas_buf.size());
+        nmea_meas_buf.size());
     lidar_pushed = false;
     imu_pushed = false;
     return true;

@@ -111,7 +111,6 @@ double vel_cov, acc_cov_input, gyr_cov_input;
 double gyr_cov_output, acc_cov_output, b_gyr_cov, b_acc_cov;
 double imu_meas_acc_cov, imu_meas_omg_cov; 
 int    lidar_type, pcd_save_interval;
-int    gt_file_type;
 std::vector<double> gravity_init, gravity;
 std::vector<double> extrinT(3, 0.0), extrinT_gnss(3, 0.0);
 std::vector<double> extrinR(9, 0.0), extrinR_gnss(9, 0.0);
@@ -124,7 +123,7 @@ shared_ptr<ImuProcess> p_imu;
 shared_ptr<NMEAProcess> p_nmea;
 double time_update_last = 0.0, time_current = 0.0, time_predict_last_const = 0.0, t_last = 0.0;
 
-std::string gt_fname, ephem_fname, ppp_fname;
+std::string ppp_fname;
 std::string nmea_meas_topic;
 std::string nmea_input_type;
 bool nmea_publish_stamp_diag = false;
@@ -138,24 +137,21 @@ Eigen::Vector3d nmea_global_anchor_lla = Eigen::Vector3d::Zero();
 #ifdef LIGO_WITH_NMEA
 bool nmea_use_fixed_anchor = false;
 std::vector<double> nmea_fixed_anchor_lla_deg;
+bool nmea_force_indoor_on_high_cov = true;
+double nmea_indoor_high_cov_threshold = 50.0;
 #endif
-std::vector<double> default_gnss_iono_params(8, 0.0);
-double gnss_local_time_diff = 18.0;
-bool next_pulse_time_valid = false, update_gnss = false, update_nmea = false;
-bool time_diff_valid = false, is_first_gnss = true, is_first_nmea;
-double latest_gnss_time = -1, next_pulse_time = 0.0, last_nmea_time = -1; 
-double time_diff_gnss_local = 0.0, time_diff_nmea_local = 0.0;
+bool update_nmea = false;
+bool time_diff_valid = false, is_first_nmea;
+double last_nmea_time = -1;
+double time_diff_nmea_local = 0.0;
 double nmea_gps_latency = 0.0;
-bool gnss_local_online_sync = true, nolidar = false; 
-double li_init_gyr_cov = 0.1, li_init_acc_cov = 0.1, lidar_time_inte = 0.1, first_imu_time = 0.0;
-int orig_odom_freq = 10;
-double online_refine_time = 20.0; //unit: s
+bool nolidar = false; 
+double lidar_time_inte = 0.1, first_imu_time = 0.0;
 bool NMEA_ENABLE = true;
 bool mapping_mode = false;
 bool indoor_flag = false;
 bool dyn_filter = false;
 double dyn_filter_resolution = 1.0;
-Eigen::Matrix3d Rot_gnss_init(Eye3d);
 Eigen::Vector3d indoor_pos_enu_meas = Eigen::Vector3d::Zero();
 Eigen::Quaterniond indoor_rot_enu_meas = Eigen::Quaterniond::Identity();
 bool indoor_pose_valid = false;
@@ -181,7 +177,7 @@ std::vector<double> time_frame;
 
 MeasureGroup Measures;
 
-ofstream fout_out, fout_rtk, fout_global, fout_ppp; 
+ofstream fout_out, fout_global, fout_ppp; 
 
 void readParameters(rclcpp::Node * node)
 {
@@ -232,7 +228,6 @@ void readParameters(rclcpp::Node * node)
   p_pre->blind = get_param("preprocess.blind", 1.0);
   p_pre->det_range = get_param("preprocess.det_range", 1.0);
   lidar_type = get_param("preprocess.lidar_type", 1);
-  gt_file_type = get_param("gnss.gt_file_type", 1);
   p_pre->N_SCANS = get_param("preprocess.scan_line", 16);
   p_pre->SCAN_RATE = get_param("preprocess.scan_rate", 10);
   p_pre->time_unit = get_param("preprocess.timestamp_unit", 1);
@@ -274,7 +269,6 @@ void readParameters(rclcpp::Node * node)
   NMEA_ENABLE = false;
 #else
   time_diff_valid = true;
-  gt_fname = get_param("gnss.gt_file_name", std::string("UrbanNav_TST_GT_raw.txt"));
   ppp_fname = get_param("nmea.ppp_file_name", std::string("TST.pos"));
   NMEA_ENABLE = get_param("nmea.nmea_enable", false);
   cout << "nmea enable:" << NMEA_ENABLE << endl;
@@ -312,6 +306,8 @@ void readParameters(rclcpp::Node * node)
     p_nmea->p_assign->outlier_thres_init = get_param("gnss.outlier_thres_init", 0.1);
     p_nmea->nmea_sample_period = get_param("gnss.gnss_sample_period", 0.1);
     p_nmea->p_assign->ppp_std_threshold = get_param("nmea.ppp_std_thres", 20.0);
+    nmea_force_indoor_on_high_cov = get_param("nmea.force_indoor_on_high_cov", true);
+    nmea_indoor_high_cov_threshold = get_param("nmea.indoor_high_cov_threshold", 50.0);
     const double legacy_lio_disp_m = get_param("nmea.init_min_lio_disp_m", 3.0);
     const double legacy_nmea_disp_m = get_param("nmea.init_min_nmea_disp_m", 3.0);
     p_nmea->init_min_lio_total_move_m = get_param("nmea.init_min_lio_total_move_m", legacy_lio_disp_m);
@@ -400,11 +396,6 @@ void open_file()
     else
         cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
 
-}
-
-void cout_state_to_file(Eigen::Vector3d &pos_lla)
-{
-    (void)pos_lla;
 }
 
 void cout_state_to_file_nmea()
@@ -500,39 +491,6 @@ bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef)
     if (!nmea_global_anchor_ready) {
         return false;
     }
-    const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
-    const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
-    out_ecef = anchor_ecef + R_ecef_enu * p_enu;
-    return true;
-#else
-    (void)out_ecef;
-    return false;
-#endif
-}
-
-bool compute_system_output_pose_enu(Eigen::Vector3d &pos_enu)
-{
-#ifdef LIGO_WITH_NMEA
-    if (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready)
-    {
-        pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
-        return true;
-    }
-    return compute_fused_imu_position_enu(pos_enu);
-#else
-    (void)pos_enu;
-    return false;
-#endif
-}
-
-bool compute_system_output_pose_ecef(Eigen::Vector3d &out_ecef)
-{
-#ifdef LIGO_WITH_NMEA
-    Eigen::Vector3d p_enu;
-    if (!compute_system_output_pose_enu(p_enu))
-        return false;
-    if (!nmea_global_anchor_ready)
-        return false;
     const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
     const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
     out_ecef = anchor_ecef + R_ecef_enu * p_enu;

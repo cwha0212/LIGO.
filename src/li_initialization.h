@@ -43,7 +43,6 @@
 #include <ligo/msg/local_sensor_external_trigger.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include "Estimator.h"
-#define MAXN                (720000)
 
 extern bool data_accum_finished, data_accum_start, online_calib_finish, refine_print;
 extern int frame_num_init;
@@ -60,7 +59,6 @@ extern int frame_ct, wait_num;
 extern std::deque<PointCloudXYZI::Ptr>  lidar_buffer;
 extern std::deque<double>               time_buffer;
 extern std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_deque;
-extern std::queue<std::vector<gnss_comm::ObsPtr>> gnss_meas_buf;
 extern std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_buf;
 extern std::mutex m_time;
 extern bool lidar_pushed, imu_pushed;
@@ -68,7 +66,6 @@ extern double imu_first_time;
 extern bool lose_lid;
 extern sensor_msgs::msg::Imu imu_last, imu_next;
 extern PointCloudXYZI::Ptr  ptr_con;
-extern double s_plot[MAXN], s_plot3[MAXN];
 extern bool first_gps;
 extern Eigen::Vector3d first_gps_lla;
 extern Eigen::Vector3d first_gps_ecef;

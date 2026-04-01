@@ -35,10 +35,6 @@
  */
 
 #pragma once
-/** Raw GNSS (ephemeris/obs) pipeline removed; keep macro for legacy conditionals. */
-#ifndef GNSS_ENABLE
-#define GNSS_ENABLE 0
-#endif
 #include <rclcpp/rclcpp.hpp>
 #include <Eigen/Eigen>
 #include <Eigen/Core>
@@ -61,7 +57,6 @@
 #include <csignal>
 #include <unistd.h>
 #include <ivox/ivox3d.h>
-#include <Python.h>
 #include <condition_variable>
 #include <sensor_msgs/msg/imu.hpp>
 #include <pcl/common/transforms.h>
@@ -100,7 +95,6 @@ extern double acc_cov_input, gyr_cov_input, vel_cov;
 extern double gyr_cov_output, acc_cov_output, b_gyr_cov, b_acc_cov;
 extern double imu_meas_acc_cov, imu_meas_omg_cov; 
 extern int    lidar_type, pcd_save_interval;
-extern int    gt_file_type;
 extern std::vector<double> gravity_init, gravity;
 extern std::vector<double> extrinT, extrinT_gnss;
 extern std::vector<double> extrinR, extrinR_gnss;
@@ -114,7 +108,7 @@ extern bool is_first_frame;
 extern bool dyn_filter;
 extern double dyn_filter_resolution;
 
-extern std::string gt_fname, ephem_fname, ppp_fname;
+extern std::string ppp_fname;
 extern std::string nmea_meas_topic;
 extern std::string nmea_input_type;
 /** If true, gpsHandler publishes stamp diagnostics on /ligo/nmea_stamp_diag (NavSatFix path). */
@@ -130,23 +124,22 @@ extern Eigen::Vector3d nmea_global_anchor_lla;
 /** If true, ENU anchor is set from yaml at startup (not first NavSatFix). See nmea.fixed_anchor_lla_deg or nmea.ppp_anc (ECEF). */
 extern bool nmea_use_fixed_anchor;
 extern std::vector<double> nmea_fixed_anchor_lla_deg;
+/** If true, high NMEA covariance can trigger indoor reloc path (see nmea.indoor_high_cov_threshold). */
+extern bool nmea_force_indoor_on_high_cov;
+extern double nmea_indoor_high_cov_threshold;
 #endif
-extern std::vector<double> default_gnss_iono_params;
-extern double gnss_local_time_diff, gnss_ekf_noise;
-extern bool next_pulse_time_valid, update_gnss, update_nmea;
-extern bool time_diff_valid, is_first_gnss, is_first_nmea;
-extern double latest_gnss_time, next_pulse_time, last_nmea_time;
-extern double time_diff_gnss_local, time_diff_nmea_local;
+extern double gnss_ekf_noise;
+extern bool update_nmea;
+extern bool time_diff_valid, is_first_nmea;
+extern double last_nmea_time;
+extern double time_diff_nmea_local;
 extern double nmea_gps_latency;
-extern bool gnss_local_online_sync, nolidar; 
-extern double li_init_gyr_cov, li_init_acc_cov, lidar_time_inte, first_imu_time;
-extern int orig_odom_freq;
-extern double online_refine_time; //unit: s
+extern bool nolidar; 
+extern double lidar_time_inte, first_imu_time;
 extern bool NMEA_ENABLE;
 extern bool mapping_mode;
 extern bool indoor_flag;
 extern double time_update_last, time_current, time_predict_last_const, t_last;
-extern Eigen::Matrix3d Rot_gnss_init;
 extern Eigen::Vector3d indoor_pos_enu_meas;
 extern Eigen::Quaterniond indoor_rot_enu_meas;
 extern bool indoor_pose_valid;
@@ -176,11 +169,10 @@ extern std::vector<Eigen::Vector3d> local_poses;
 extern std::vector<Eigen::Matrix3d> local_rots;
 extern std::vector<double> time_frame;
 
-extern ofstream fout_out, fout_rtk, fout_global, fout_ppp;
+extern ofstream fout_out, fout_global, fout_ppp;
 void readParameters(rclcpp::Node * node);
 void open_file();
 Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &orient);
-void cout_state_to_file(Eigen::Vector3d &pos_enu);
 void cout_state_to_file_nmea();
 /** Fused IMU position in ENU (same geometry as @ref cout_state_to_file_nmea). False if NMEA inactive or not ready. */
 bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu);
@@ -188,8 +180,4 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu);
 bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla);
 /** WGS84 ECEF (m) from fused ENU + anchor. False if no anchor data. */
 bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef);
-/** ENU position consistent with published /aft_mapped when ICP tf is ready; else fused ISAM ENU. */
-bool compute_system_output_pose_enu(Eigen::Vector3d &pos_enu);
-/** ECEF from @ref compute_system_output_pose_enu + anchor. */
-bool compute_system_output_pose_ecef(Eigen::Vector3d &out_ecef);
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output);

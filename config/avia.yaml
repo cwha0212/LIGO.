@@ -43,8 +43,6 @@
                     0.0, 0.0, 1.0] # extrinsics of LiDAR to IMU represented in IMU frame
 
     gnss:
-      gt_file_name: " "
-      gt_file_type: 1                    # 1: livox, 2: urban, 3: m2dgr
       outlier_rejection: true            # true: use robust function for gnss factors
       gtsam_variable_thres: 150            # the window size for GNSS obs
       gtsam_marg_variable_thres: 3
@@ -83,6 +81,9 @@
       posit_odo_topic: "/ublox_driver/receiver_lla"
       nmea_input_type: "navsatfix"
       ppp_std_thres: 0.01
+      # 높은 NMEA 공분산(실내 등)일 때 indoor reloc 트리거 허용 (기존 하드코딩 상수 대체)
+      force_indoor_on_high_cov: true
+      indoor_high_cov_threshold: 50.0
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
       init_min_lio_total_move_m: 5.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
       init_min_nmea_total_move_m: 5.0

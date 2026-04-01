@@ -42,7 +42,7 @@ The codes of this repo are contributed by [Dongjiao He (贺东娇)](https://gith
 ### 2.1 ROS 2·빌드 도구
 
 - `ros-<distro>-desktop` 또는 `ros-base` + 개발 패키지
-- `python3`, `python3-dev` (CMake에서 `Python3` 컴포넌트 요구)
+- `python3` (ROS 2·런치·번들 Python 스크립트용; C++ 노드 빌드에는 libpython 개발 헤더 불필요)
 - `git`
 
 ### 2.2 일반적으로 apt로 설치 가능한 항목 (예: Ubuntu)
@@ -80,8 +80,7 @@ The codes of this repo are contributed by [Dongjiao He (贺东娇)](https://gith
 | 항목 | 역할 |
 |------|------|
 | **gnss_comm** | `find_package(gnss_comm)` 성공 시 NMEA/PPP 등 **GNSS 파이프라인** 빌드. 없으면 **LiDAR+IMU 스텁**만 사용. |
-| **small_gicp (C++)** | `thirdparty/small_gicp`에 **[koide3/small_gicp](https://github.com/koide3/small_gicp)** 서브모듈이 있으면 `colcon` 빌드 시 **같이 빌드**되어 `ligo_mapping`에 정적 링크된다. |
-| **small_gicp (Python)** | `ros2_livox_small_gicp.py`, `ros2_indoor_map_gicp.py` 등은 **`pip install small_gicp`** 로 별도 설치 (C++ 번들과 별개). |
+| **small_gicp (C++)** | `thirdparty/small_gicp`에 **[koide3/small_gicp](https://github.com/koide3/small_gicp)** 서브모듈이 있으면 `colcon` 빌드 시 **같이 빌드**되어 `ligo_mapping`에 정적 링크되고, 실내 GICP/그리드는 **동일 바이너리**에서 처리한다. Python 바인딩 예제가 필요하면 upstream 저장소를 참고한다. |
 
 ---
 
@@ -124,40 +123,50 @@ source install/setup.bash
 
 ## 5. 실행 예시
 
+공통 런치 파일은 `mapping_avia.launch.py` 하나이며, **센서·플랫폼별 차이는 `config/` 아래 YAML 프리셋**으로 바꾼다.
+
 ```bash
 ros2 launch ligo mapping_avia.launch.py
 ```
 
-또는:
+기본은 `config/avia.yaml`이다. 다른 프리셋을 쓰려면 노드에 직접 파라미터 파일을 넘긴다.
+
+```bash
+ros2 run ligo ligo_mapping --ros-args --params-file $(ros2 pkg prefix ligo)/share/ligo/config/hesai.yaml
+```
+
+또는 절대 경로:
 
 ```bash
 ros2 run ligo ligo_mapping --ros-args -p __params:=/path/to/config/avia.yaml
 ```
 
-설정 YAML은 ROS 1과 유사한 구조이며, 파라미터 이름은 점으로 구분한다 (예: `common.lid_topic`).
+### 설정 프리셋 (`config/`)
+
+| 파일 | 용도 |
+|------|------|
+| `avia.yaml` | Livox Avia / Mid360 기본 (ROS 2 `ros__parameters` 형식) |
+| `avia_septentrio.yaml` | Septentrio 등 GNSS 예시 |
+| `avia_deg.yaml` | Avia + 각도/중력 실험용 |
+| `hesai.yaml` | Hesai Pandar (`lidar_type: 4`) |
+| `velody.yaml` | Velodyne + `sensor_msgs/PointCloud2` |
+| `robosense.yaml` | Robosense + PointCloud2 |
+
+파라미터 이름은 **점으로 구분**한다 (예: `common.lid_topic`). ROS 2에서는 패키지 YAML 상단에 `/**:` / `ros__parameters:` 가 오는 경우가 많다.
+
+**파라미터 전체 목록·설명**은 [docs/PARAMETERS.md](docs/PARAMETERS.md)를 본다.
+
+### 디버깅 (gdb)
+
+```bash
+gdb -ex run --args ros2 run ligo ligo_mapping --ros-args --params-file $(ros2 pkg prefix ligo)/share/ligo/config/avia.yaml
+```
 
 ---
 
-## 6. ROS 1 (Noetic) — 참고
+## 6. ROS 1 (Noetic) — 레거시
 
-Ubuntu 20.04, ROS Noetic, C++17, Eigen 3, GTSAM 4, OpenCV 4.2, PCL 1.10 환경에서 테스트되었다.
-
-```bash
-sudo apt-get install libboost-all-dev
-```
-
-- Livox: [livox_ros_driver](https://github.com/Livox-SDK/livox_ros_driver)
-- gnss_comm: [gnss_comm](https://github.com/HKUST-Aerial-Robotics/gnss_comm) — [빌드 안내](https://github.com/HKUST-Aerial-Robotics/gnss_comm#2-build-gnss_comm-library)
-
-```bash
-cd ~/catkin_ws/src/
-git clone https://github.com/Joanna-HE/LIGO..git
-cd ~/catkin_ws/
-source /PATH/TO/LIVOX_DRIVER/DEVEL/setup.bash
-source /PATH/TO/GNSS_COMM/DEVEL/setup.bash
-catkin_make
-source ~/catkin_ws/devel/setup.bash
-```
+이 저장소는 **ROS 2만 지원**한다. 예전 ROS 1용 `roslaunch` XML은 제거되었다. ROS 1에서 실험하려면 원저자 포크·구버전 태그나 [Joanna-HE/LIGO](https://github.com/Joanna-HE) 쪽 이력을 참고한다. 의존성으로는 `livox_ros_driver`, `gnss_comm` 등이 catkin 워크스페이스에 필요했다.
 
 ---
 

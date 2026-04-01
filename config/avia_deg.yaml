@@ -38,8 +38,6 @@ mapping:
                     0.0, 0.0, 1.0] # extrinsics of LiDAR to IMU represented in IMU frame
 
 gnss:
-    gt_file_name: "gt_deg2.txt"
-    gt_file_type: 1                    # 1: livox, 2: urban, 3: m2dgr
     outlier_rejection: true            # true: use robust function for gnss factors
     gtsam_variable_thres: 30            # the window size for GNSS obs
     gtsam_marg_variable_thres: 1

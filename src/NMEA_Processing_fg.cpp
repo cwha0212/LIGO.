@@ -154,24 +154,6 @@ void NMEAProcess::ResetGraphClearingInitRetainIcp()
   p_assign->isam = gtsam::ISAM2(parameters);
 }
 
-Eigen::Vector3d NMEAProcess::local2enu(Eigen::Matrix3d R_enu_local_, Eigen::Vector3d anc, Eigen::Vector3d &pos)
-{
-  Eigen::Vector3d enu_pos;
-  if (!nolidar)
-  {
-    enu_pos = R_enu_local_ * (pos - anc_local) + anc; // 
-    // enu_pos = ecef2enu(first_lla_pvt, ecef_pos_ - first_xyz_ecef_pvt);
-  }
-  else
-  {
-    Eigen::Vector3d pos_r = pos;
-    enu_pos = pos_r;
-    // Eigen::Vector3d lla_pos = ecef2geo(first_xyz_enu_pvt);
-    // enu_pos = ecef2enu(first_lla_pvt, pos_r - first_xyz_ecef_pvt);
-  }
-  return enu_pos;
-}
-
 void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_meas, state_output &state)
 {
   if (!nmea_ready)
@@ -308,64 +290,6 @@ void NMEAProcess::runISAM2opt(void) //
     pre_integration->repropagate(p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(6),
                                 p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(9));
   }
-}
-
-void NMEAProcess::TrajAlign(Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>&local_traj, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>&enu_traj, Eigen::Vector3d &pos, Eigen::Matrix3d &rot)
-{
-// Eigen::Matrix<Type, 4,4> ComputeSim3<Type>::GetSim3() {
-    // Eigen::Matrix<Type, Eigen::Dynamic, Eigen::Dynamic> trajPoints_1;
-    // Eigen::Matrix<Type, Eigen::Dynamic, Eigen::Dynamic> trajPoints_2;
-
-    // const int n = _vSyncedTraj_1.size();
-    // trajPoints_1.resize(3, n);
-    // trajPoints_2.resize(3, n);
-
-    // for (int i = 0; i < _vSyncedTraj_1.size(); ++i) {
-    //     trajPoints_1.block(0, i, 3, 1) = _vSyncedTraj_1[i].translation;
-    //     trajPoints_2.block(0, i, 3, 1) = _vSyncedTraj_2[i].translation;
-    // }
-    const int n = local_traj.cols();
-
-    Eigen::Matrix<double, 3, 1> means_1;
-    Eigen::Matrix<double, 3, 1> means_2;
-
-    double one_over_n = 1 / static_cast<double>(n);
-    means_1 = local_traj.rowwise().sum() * one_over_n;
-    means_2 = enu_traj.rowwise().sum() * one_over_n;
-
-    Eigen::Matrix<double, 3, Eigen::Dynamic> demeans_1;
-    Eigen::Matrix<double, 3, Eigen::Dynamic> demeans_2;
-    demeans_1 = local_traj.colwise() - means_1;
-    demeans_2 = enu_traj.colwise() - means_2;
-
-    double var_1 = demeans_1.rowwise().squaredNorm().sum() * one_over_n;
-    // std::cout << demeans_1.rowwise().squaredNorm().sum() << ";" << demeans_1.squaredNorm() << ";" << var_1 << std::endl;
-
-    Eigen::Matrix<double, 3, 3> sigma;
-    sigma = demeans_2 * demeans_1.transpose() * one_over_n;
-
-    Eigen::JacobiSVD<Eigen::Matrix<double, 3, 3>> svd(sigma, Eigen::ComputeFullU | Eigen::ComputeFullV);
-
-    Eigen::Matrix<double, 3, 1> S;
-    S = Eigen::Matrix<double, 3, 1>::Ones();
-
-    if (svd.matrixU().determinant() * svd.matrixV().determinant() < 0)
-        S(2) = -1;
-
-    // Eigen::Matrix<double, 4,4> sim3 = Eigen::Matrix<Type, 4,4>::Identity();
-
-    // sim3.block(0,0,3,3).noalias() = svd.matrixU() * S.asDiagonal() * svd.matrixV().transpose();
-    rot = svd.matrixU() * S.asDiagonal() * svd.matrixV().transpose();
-
-    double c = 1 / var_1 * svd.singularValues().dot(S);
-
-    // sim3.block(0,3,3,1) = means_2 - c * sim3.block(0,0,3,3)*means_1;
-    pos = means_2 - c * rot * means_1;
-    // sim3.block(0,0,3,3) = sim3.block(0,0,3,3)*c;
-    rot = rot * c;
-    rot.normalized();
-    // return sim3;
-    return;
 }
 
 bool NMEAProcess::NMEALIAlign()

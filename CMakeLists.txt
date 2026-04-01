@@ -57,7 +57,6 @@ ament_export_dependencies(rosidl_default_runtime)
 find_package(gnss_comm QUIET)
 
 # Third-party
-find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 find_package(Eigen3 REQUIRED)
 find_package(PCL 1.8 REQUIRED)
 find_package(OpenCV REQUIRED)
@@ -137,7 +136,6 @@ include_directories(
   ${OpenCV_INCLUDE_DIRS}
   ${GTSAM_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
-  ${Python3_INCLUDE_DIRS}
 )
 if(SMALL_GICP_INCLUDE_DIR AND NOT LIGO_SMALL_GICP_TARGET)
   include_directories(${SMALL_GICP_INCLUDE_DIR})
@@ -213,7 +211,6 @@ if(gnss_comm_FOUND)
 endif()
 
 target_include_directories(ligo_mapping PRIVATE
-  ${Python3_INCLUDE_DIRS}
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include>"
 )
@@ -223,12 +220,12 @@ install(TARGETS ligo_mapping
 )
 install(PROGRAMS
   scripts/grid_membership_monitor.py
-  scripts/lidar_imu_stamp_align.py
-  ros2_livox_small_gicp.py
-  ros2_indoor_map_gicp.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY config rviz_cfg launch
+  DESTINATION share/${PROJECT_NAME}
+)
+install(DIRECTORY docs
   DESTINATION share/${PROJECT_NAME}
 )
 install(DIRECTORY PCD

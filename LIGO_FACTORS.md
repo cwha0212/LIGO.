@@ -324,7 +324,7 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 ### 8.1 실행 경로 요약
 
 - `mapping_avia.launch.py`는 `avia.yaml`을 파라미터로 `ligo_mapping` 노드를 실행한다.
-- `parameters.cpp`에서 `NMEA_ENABLE`(및 `gnss.*` 네임스페이스의 GTSAM/윈도우 파라미터)를 로드한다. Raw `GNSS_ENABLE` 경로는 비활성이다.
+- `parameters.cpp`에서 `NMEA_ENABLE`(및 `gnss.*` 네임스페이스의 GTSAM/윈도우 파라미터)를 로드한다. raw GNSS 관측(obs) 큐·동기화(`GNSS_ENABLE`) 경로는 코드에서 제거되어 있으며, NMEA만 사용한다.
 - 실제 factor 추가는 `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`의 `SetInit()`와 `AddFactor()`에서 수행된다.
 
 ### 8.2 초기화 시점(`SetInit`)에 추가되는 factor

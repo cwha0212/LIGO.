@@ -86,8 +86,6 @@ const float MOV_THRESHOLD = 1.5f;
 
 string root_dir = ROOT_DIR;
 
-int time_log_counter = 0; 
-
 bool init_map = false, flg_first_scan = true;
 nav_msgs::msg::Odometry::SharedPtr nmea_cur;
 Eigen::Vector3d first_pvt_anc, first_lla_anc;
@@ -103,8 +101,6 @@ double indoor_reloc_pose_time = 0.0;
 // Converted to the loaded map's local ENU at indoor session start for the GICP seed.
 Eigen::Vector3d last_good_gnss_ecef       = Eigen::Vector3d::Zero();
 bool            last_good_gnss_ecef_valid = false;
-constexpr bool kTempForceIndoorByNmeaCov = true;
-constexpr double kTempIndoorCovThreshold = 50.0;
 
 #ifdef LIGO_WITH_SMALL_GICP
 /** Set by /ligo/indoor_mode true; main loop snaps LIO→ENU anchor then clears. */
@@ -1909,7 +1905,6 @@ int main(int argc, char** argv)
                     }
                     kf_output.change_P(P_init_output);
                 }
-                is_first_gnss = true;
                 flg_first_scan = true;
                 is_first_frame = true;
                 flg_reset = false;
@@ -2235,7 +2230,7 @@ int main(int argc, char** argv)
                                         }
 
                                         const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
-                                        const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                        const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, nmea_indoor_high_cov_threshold);
                                         // Track the last GNSS position (ECEF) with good outdoor quality.
                                         if (!cov_high_cfg && nmea_global_anchor_ready)
                                         {
@@ -2249,7 +2244,7 @@ int main(int argc, char** argv)
                                             last_good_gnss_ecef_valid = true;
                                         }
                                         const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                        const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                        const bool trigger_temp = !mapping_mode && nmea_force_indoor_on_high_cov && !indoor_reloc_applied_once && cov_high_temp;
                                         if (trigger_normal || trigger_temp)
                                         {
                                             if (trigger_normal)
@@ -2432,7 +2427,7 @@ int main(int argc, char** argv)
                                 }
 
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
-                                const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, nmea_indoor_high_cov_threshold);
                                 if (!cov_high_cfg && nmea_global_anchor_ready)
                                 {
                                     const Eigen::Vector3d p_enu_cur(
@@ -2445,7 +2440,7 @@ int main(int argc, char** argv)
                                     last_good_gnss_ecef_valid = true;
                                 }
                                 const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                const bool trigger_temp = !mapping_mode && nmea_force_indoor_on_high_cov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
                                 {
                                     if (trigger_normal)
@@ -2778,7 +2773,7 @@ int main(int argc, char** argv)
                                     break;
                                 }
                                 const bool cov_high_cfg = nmeaCovarianceIsHigh(nmea_cur, p_nmea->p_assign->ppp_std_threshold);
-                                const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, kTempIndoorCovThreshold);
+                                const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, nmea_indoor_high_cov_threshold);
                                 if (!cov_high_cfg && nmea_global_anchor_ready)
                                 {
                                     const Eigen::Vector3d p_enu_cur(
@@ -2791,7 +2786,7 @@ int main(int argc, char** argv)
                                     last_good_gnss_ecef_valid = true;
                                 }
                                 const bool trigger_normal = !mapping_mode && indoor_flag && indoor_pose_valid && !indoor_reloc_applied_once && cov_high_cfg;
-                                const bool trigger_temp = !mapping_mode && kTempForceIndoorByNmeaCov && !indoor_reloc_applied_once && cov_high_temp;
+                                const bool trigger_temp = !mapping_mode && nmea_force_indoor_on_high_cov && !indoor_reloc_applied_once && cov_high_temp;
                                 if (trigger_normal || trigger_temp)
                                 {
                                     if (trigger_normal)
@@ -2977,9 +2972,6 @@ int main(int argc, char** argv)
             {
                 frame_num ++;
                 aver_time_consu = aver_time_consu * (frame_num - 1) / frame_num + (t5 - t0) / frame_num;
-                s_plot[time_log_counter] = t5 - t0;
-                s_plot3[time_log_counter] = aver_time_consu;
-                time_log_counter ++;
                 if (!publish_odometry_without_downsample)
                 {
                     {
