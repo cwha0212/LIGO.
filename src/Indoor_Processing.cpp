@@ -512,23 +512,30 @@ void publishIndoorViz(
   // --- map cloud (latched): defer if align mode until first GICP latch (same frame ok after runIndoorGICPUpdate) ---
   publishIndoorMapCloudOnly(pub_map, timestamp_sec, pub_occ_grid, true);
 
-  // --- GICP-aligned scan in system-global-ENU (matches outdoor frame) ---
+  // --- GICP-aligned scan in system-global-ENU (same pipeline as /indoor/map_cloud) ---
   if (pub_scan && scan_world && !scan_world->empty()) {
     const Eigen::Matrix3d R_gicp = T_map_lidar.rotation();
     const Eigen::Vector3d t_gicp = T_map_lidar.translation();
     const Eigen::Matrix3d R_m2s = s_R_sys_to_map.transpose();
     const Eigen::Vector3d t_m2s = -R_m2s * s_t_sys_to_map;
+    // Must match buildMapCloudSysEnu(): optional Tpre shifts map-local points before sys-ENU,
+    // so the aligned scan overlaps /indoor/map_cloud when indoor_gicp_align_reference_map_to_lio is on.
+    const Eigen::Isometry3d Tpre_map_display =
+        (indoor_gicp_align_reference_map_to_lio && s_refmap_display_T_inv_valid)
+            ? s_refmap_display_T_inv
+            : Eigen::Isometry3d::Identity();
 
     CloudT scan_aligned;
     scan_aligned.reserve(scan_world->size());
     for (const auto& p : scan_world->points) {
       if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
       Eigen::Vector3d p_sys = R_local_to_enu * Eigen::Vector3d(p.x, p.y, p.z) + t_local_to_enu;
-      // local → sys-ENU → map-local-ENU → GICP → sys-ENU
+      // local → sys-ENU → map-local → GICP → (same Tpre as reference PCD) → sys-ENU
       if (s_sys_to_map_valid) {
         Eigen::Vector3d p_map = s_R_sys_to_map * p_sys + s_t_sys_to_map;
         Eigen::Vector3d p_aligned_map = R_gicp * p_map + t_gicp;
-        p_sys = R_m2s * p_aligned_map + t_m2s;
+        const Eigen::Vector3d pm_for_viz = Tpre_map_display * p_aligned_map;
+        p_sys = R_m2s * pm_for_viz + t_m2s;
       }
       PointT q = p;
       q.x = static_cast<float>(p_sys.x());

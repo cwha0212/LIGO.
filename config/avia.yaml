@@ -24,14 +24,14 @@
       satu_acc: 3.0 # the saturation value of IMU's acceleration. not related to the units
       satu_gyro: 35.0 # the saturation value of IMU's angular velocity. not related to the units
       acc_norm: 1.0 # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
-      lidar_meas_cov: 0.01 # 0.001; 0.01
-      acc_cov_output: 500.0
-      gyr_cov_output: 1000.0 
+      lidar_meas_cov: 0.001 # 0.001; 0.01
+      acc_cov_output: 1.0
+      gyr_cov_output: 1.0 
       b_acc_cov: 0.0001 
       b_gyr_cov: 0.0001 
       imu_meas_acc_cov: 0.1 
-      imu_meas_omg_cov: 0.1 # 0.01
-      plane_thr: 0.1 # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
+      imu_meas_omg_cov: 0.01 # 0.01
+      plane_thr: 0.05 # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
       match_s: 81.0 # parameter for matching check, the larger, the harder to manifest a match
       ivox_grid_resolution: 1.0 # length (m) of voxels for grid map
       gravity: [0.0, 0.0, -9.81] # 
@@ -60,9 +60,12 @@
       omg_noise: 0.10
       gnss_ekf_noise: 0.01
       gnss_extrinsic_T: [0.011, 0.03155, 0.02365]
-      gnss_extrinsic_R: [ 1.0, 0.0, 0.0,
+      gnss_extrinsic_R: [ 0.992546, 0.0, -0.121869,
                     0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0 ]
+                    0.121869, 0.0, 0.992546 ]
+      # gnss_extrinsic_R: [ 0.992546,  0.0,  0.121869,
+      #                     0.0,       1.0,  0.0,
+      #                    -0.121869,  0.0,  0.992546 ]
       nolidar: false
 
     ligo:
