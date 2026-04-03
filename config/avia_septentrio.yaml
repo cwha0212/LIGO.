@@ -90,6 +90,9 @@
       init_min_nmea_total_move_m: 5.0
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
+      lio_align_rotation_mode: "yaw_only"
+      lio_align_z_weight: 0.2
+      lio_align_max_tilt_deg: 25.0
       pos_noise: 1.0
       pos_noise_z: 1.0
       rot_noise: 5.0

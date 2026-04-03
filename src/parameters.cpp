@@ -314,6 +314,13 @@ void readParameters(rclcpp::Node * node)
     p_nmea->init_min_nmea_total_move_m = get_param("nmea.init_min_nmea_total_move_m", legacy_nmea_disp_m);
     p_nmea->init_icp_max_iterations = get_param("nmea.init_icp_max_iterations", 80);
     p_nmea->init_icp_max_fitness = get_param("nmea.init_icp_max_fitness", 5.0);
+    {
+      const std::string lio_rot_mode = get_param("nmea.lio_align_rotation_mode", std::string("yaw_only"));
+      p_nmea->lio_align_rotation_mode =
+          (lio_rot_mode == "weighted_3d" || lio_rot_mode == "weighted3d") ? 1 : 0;
+      p_nmea->lio_align_z_weight = get_param("nmea.lio_align_z_weight", 0.2);
+      p_nmea->lio_align_max_tilt_deg = get_param("nmea.lio_align_max_tilt_deg", 25.0);
+    }
     nolidar = get_param("gnss.nolidar", false);
     p_nmea->wind_size = get_param("gnss.window_size", 2);
     p_nmea->p_assign->initNoises();

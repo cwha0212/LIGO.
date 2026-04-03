@@ -145,6 +145,12 @@ class NMEAProcess
   double diag_03m_lio_disp = 0.0, diag_03m_gps_disp_at_t_lio = 0.0;  // start 대비 변위
   double init_min_lio_total_move_m = 3.0;
   double init_min_nmea_total_move_m = 3.0;
+  /** 0: 2D Procrustes + yaw-only (default). 1: Z-downweighted 3D Kabsch; optional roll/pitch with tilt gate. */
+  int lio_align_rotation_mode = 0;
+  /** Relative axis weight for Z vs XY in weighted_3d (0,1]; lower = trust GNSS z less. */
+  double lio_align_z_weight = 0.2;
+  /** If |roll| or |pitch| from weighted Kabsch exceeds this (deg), fall back to yaw-only about Z. */
+  double lio_align_max_tilt_deg = 25.0;
   int init_icp_max_iterations = 80;
   double init_icp_max_fitness = 5.0;
   Eigen::Matrix<double, 24, 24> sqrt_lidar;

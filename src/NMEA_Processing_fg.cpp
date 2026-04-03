@@ -462,37 +462,96 @@ bool NMEAProcess::NMEALIAlign()
   }
   mu_lio /= n_used; mu_nmea /= n_used; mu_lio_z /= n_used; mu_nmea_z /= n_used;
 
-  Eigen::Matrix2d sigma = Eigen::Matrix2d::Zero();
-  for (int i = 0; i < n_valid; ++i)
-  {
-    if (!pair_usable(i)) continue;
-    const Eigen::Vector3d pl3 = get_lio_corrected(i);
-    const Eigen::Vector2d pl(pl3(0), pl3(1));
-    const Eigen::Vector3d pn3 = get_nmea_pos(i);
-    const Eigen::Vector2d pn(pn3.x(), pn3.y());
-    sigma += (pn - mu_nmea) * (pl - mu_lio).transpose();
-  }
-  sigma /= n_used;
+  const Eigen::Vector3d mu_lio3(mu_lio.x(), mu_lio.y(), mu_lio_z);
+  const Eigen::Vector3d mu_nmea3(mu_nmea.x(), mu_nmea.y(), mu_nmea_z);
 
-  Eigen::JacobiSVD<Eigen::Matrix2d> svd(sigma, Eigen::ComputeFullU | Eigen::ComputeFullV);
-  Eigen::Matrix2d R2 = svd.matrixU() * svd.matrixV().transpose();
-  if (R2.determinant() < 0.0)
+  Eigen::Matrix3d R_align = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d t_align = Eigen::Vector3d::Zero();
+
+  if (lio_align_rotation_mode != 1)
   {
-    Eigen::Matrix2d U = svd.matrixU();
-    U.col(1) *= -1.0;
-    R2 = U * svd.matrixV().transpose();
+    Eigen::Matrix2d sigma = Eigen::Matrix2d::Zero();
+    for (int i = 0; i < n_valid; ++i)
+    {
+      if (!pair_usable(i)) continue;
+      const Eigen::Vector3d pl3 = get_lio_corrected(i);
+      const Eigen::Vector2d pl(pl3(0), pl3(1));
+      const Eigen::Vector3d pn3 = get_nmea_pos(i);
+      const Eigen::Vector2d pn(pn3.x(), pn3.y());
+      sigma += (pn - mu_nmea) * (pl - mu_lio).transpose();
+    }
+    sigma /= n_used;
+
+    Eigen::JacobiSVD<Eigen::Matrix2d> svd(sigma, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    Eigen::Matrix2d R2 = svd.matrixU() * svd.matrixV().transpose();
+    if (R2.determinant() < 0.0)
+    {
+      Eigen::Matrix2d U = svd.matrixU();
+      U.col(1) *= -1.0;
+      R2 = U * svd.matrixV().transpose();
+    }
+    const Eigen::Vector2d t2 = mu_nmea - R2 * mu_lio;
+    const double tz = mu_nmea_z - mu_lio_z;
+    R_align.setIdentity();
+    R_align.block<2, 2>(0, 0) = R2;
+    t_align << t2.x(), t2.y(), tz;
   }
-  const Eigen::Vector2d t2 = mu_nmea - R2 * mu_lio;
-  const double tz = mu_nmea_z - mu_lio_z;
+  else
+  {
+    const double pi = std::acos(-1.0);
+    const double wz = std::max(1e-6, std::min(1.0, lio_align_z_weight));
+    const double sz = std::sqrt(wz);
+    Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+    for (int i = 0; i < n_valid; ++i)
+    {
+      if (!pair_usable(i)) continue;
+      const Eigen::Vector3d pl3 = get_lio_corrected(i) - mu_lio3;
+      const Eigen::Vector3d pn3 = get_nmea_pos(i) - mu_nmea3;
+      const Eigen::Vector3d pls(pl3.x(), pl3.y(), sz * pl3.z());
+      const Eigen::Vector3d pns(pn3.x(), pn3.y(), sz * pn3.z());
+      H += pns * pls.transpose();
+    }
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd3(H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    Eigen::Matrix3d Rk = svd3.matrixU() * svd3.matrixV().transpose();
+    if (Rk.determinant() < 0.0)
+    {
+      Eigen::Matrix3d U3 = svd3.matrixU();
+      U3.col(2) *= -1.0;
+      Rk = U3 * svd3.matrixV().transpose();
+    }
+    const double roll = std::atan2(Rk(2, 1), Rk(2, 2));
+    const double cp = std::sqrt(Rk(0, 0) * Rk(0, 0) + Rk(1, 0) * Rk(1, 0));
+    const double pitch = std::atan2(-Rk(2, 0), cp);
+    const double max_t = lio_align_max_tilt_deg * pi / 180.0;
+    if (std::abs(roll) > max_t || std::abs(pitch) > max_t)
+    {
+      const double yaw = std::atan2(Rk(1, 0), Rk(0, 0));
+      R_align = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      RCLCPP_WARN(
+          logger,
+          "[nmea/init] weighted_3d: |roll|=%.2fdeg |pitch|=%.2fdeg exceed max_tilt_deg=%.1f → yaw-only yaw=%.2fdeg",
+          roll * 180.0 / pi,
+          pitch * 180.0 / pi,
+          lio_align_max_tilt_deg,
+          yaw * 180.0 / pi);
+    }
+    else
+    {
+      R_align = Rk;
+    }
+    t_align = mu_nmea3 - R_align * mu_lio3;
+    RCLCPP_INFO(
+        logger,
+        "[nmea/init] weighted_3d Kabsch: z_weight=%.3f kabsch_roll=%.2fdeg kabsch_pitch=%.2fdeg kabsch_yaw=%.2fdeg",
+        wz,
+        roll * 180.0 / pi,
+        pitch * 180.0 / pi,
+        std::atan2(Rk(1, 0), Rk(0, 0)) * 180.0 / pi);
+  }
 
   Eigen::Matrix4d sim_trans = Eigen::Matrix4d::Identity();
-  sim_trans(0, 0) = R2(0, 0);
-  sim_trans(0, 1) = R2(0, 1);
-  sim_trans(1, 0) = R2(1, 0);
-  sim_trans(1, 1) = R2(1, 1);
-  sim_trans(0, 3) = t2.x();
-  sim_trans(1, 3) = t2.y();
-  sim_trans(2, 3) = tz;
+  sim_trans.block<3, 3>(0, 0) = R_align;
+  sim_trans.block<3, 1>(0, 3) = t_align;
 
   auto rmse_after_transform = [&](const Eigen::Matrix4d &tf) -> double {
     double acc = 0.0;
@@ -538,12 +597,8 @@ bool NMEAProcess::NMEALIAlign()
       "time_comp_0.3m+");
   anc_enu = sim_trans.block<3, 1>(0, 3);
   anc_local = init_pos_buf.back();
-  // Use yaw-only ENU-local alignment (force roll/pitch=0) to avoid GNSS z-noise coupling.
-  Rot_nmea_init = Eigen::AngleAxisd(yaw_deg * std::acos(-1.0) / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-  yaw_enu_local = yaw_deg * std::acos(-1.0) / 180.0;
-  // IMPORTANT:
-  // Keep local->ENU transform level even when 3D ICP returns tilted rotation.
-  // Otherwise ENU pose can drift downward on flat ground from pitch/roll leakage.
+  Rot_nmea_init = R_align;
+  yaw_enu_local = std::atan2(R_align(1, 0), R_align(0, 0));
   icp_R_local_to_enu = Rot_nmea_init;
   icp_t_local_to_enu = sim_trans.block<3, 1>(0, 3);
   icp_tf_ready = true;

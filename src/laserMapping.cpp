@@ -2701,7 +2701,7 @@ int main(int argc, char** argv)
                                     if (nolidar)
                                     {
                                         Eigen::Matrix3d R_enu_local;
-                                        R_enu_local = Eigen::AngleAxisd(p_nmea->yaw_enu_local, Eigen::Vector3d::UnitZ()); 
+                                        R_enu_local = p_nmea->Rot_nmea_init; 
                                         kf_output.x_.pos = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(0);
                                         kf_output.x_.rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_nmea->frame_num-1)).matrix();
                                         kf_output.x_.vel = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(3);
