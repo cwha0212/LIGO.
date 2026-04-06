@@ -101,6 +101,8 @@ extern std::vector<double> extrinR, extrinR_gnss;
 extern std::vector<double> ppp_anc;
 extern bool   runtime_pos_log, log_lidar_frame_time_ms, pcd_save_en, path_en;
 extern bool   scan_pub_en, scan_body_pub_en;
+/** ENU 2D occupancy grid (PGM) cell size (m) when exporting *_grid2d alongside PCD; independent of ivox voxel size. */
+extern double pcd_save_grid2d_resolution_m;
 extern shared_ptr<Preprocess> p_pre;
 extern shared_ptr<ImuProcess> p_imu;
 extern shared_ptr<NMEAProcess> p_nmea;

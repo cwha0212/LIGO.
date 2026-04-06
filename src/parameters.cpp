@@ -117,6 +117,7 @@ std::vector<double> extrinR(9, 0.0), extrinR_gnss(9, 0.0);
 std::vector<double> ppp_anc(3, 0.0);
 bool   runtime_pos_log, log_lidar_frame_time_ms, pcd_save_en, path_en;
 bool   scan_pub_en, scan_body_pub_en;
+double pcd_save_grid2d_resolution_m = 0.2;
 shared_ptr<Preprocess> p_pre;
 // shared_ptr<LI_Init> Init_LI;
 shared_ptr<ImuProcess> p_imu;
@@ -264,6 +265,10 @@ void readParameters(rclcpp::Node * node)
   } else {
     ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY18;
   }
+  pcd_save_grid2d_resolution_m = get_param(
+      "pcd_save.grid2d_resolution", static_cast<double>(ivox_options_.resolution_));
+  if (pcd_save_grid2d_resolution_m <= 0.0)
+    pcd_save_grid2d_resolution_m = static_cast<double>(ivox_options_.resolution_);
   p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
 #ifndef LIGO_WITH_NMEA
   NMEA_ENABLE = false;

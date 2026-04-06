@@ -60,12 +60,14 @@
       omg_noise: 0.10
       gnss_ekf_noise: 0.01
       gnss_extrinsic_T: [0.011, 0.03155, 0.02365]
-      gnss_extrinsic_R: [ 0.992546, 0.0, -0.121869,
+      gnss_extrinsic_R: [ 1.0, 0.0, -0.0,
                     0.0, 1.0, 0.0,
-                    0.121869, 0.0, 0.992546 ]
-      # gnss_extrinsic_R: [ 0.992546,  0.0,  0.121869,
-      #                     0.0,       1.0,  0.0,
-      #                    -0.121869,  0.0,  0.992546 ]
+                    0.0, 0.0, 1.0 ]
+
+      # gnss_extrinsic_R: [ 0.992546, 0.0, -0.121869,
+      #               0.0, 1.0, 0.0,
+      #               0.121869, 0.0, 0.992546 ]                    
+  
       nolidar: false
 
     ligo:
@@ -93,7 +95,7 @@
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
       # LIO–NMEA init rotation: yaw_only (2D, default) | weighted_3d (Z-downweighted Kabsch; see z_weight / max_tilt_deg)
-      lio_align_rotation_mode: "weighted_3d"
+      lio_align_rotation_mode: "yaw_only"
       lio_align_z_weight: 0.5
       lio_align_max_tilt_deg: 10.0
       pos_noise: 1.0
@@ -122,14 +124,16 @@
       scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
 
     pcd_save:
-      pcd_save_en: false
+      pcd_save_en: true
       interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+      # 2D PGM 그리드 셀 크기 (m). 생략 시 mapping.ivox_grid_resolution 과 동일
+      grid2d_resolution: 0.2
 
     indoor:
       # true: GTSAM indoor factor + continuous indoor. mapping_mode:true forces this false but
       # grid_map_dir / map_pcd_path are still loaded for /ligo/indoor_mode GICP.
-      indoor_flag: true
+      indoor_flag: false
       # *_grid2d.yaml + pgm + source_pcd. Relative: package source <src>/LIGO./<path> if that dir exists, else share/ligo/<path>.
       grid_map_dir: "PCD"
       # Absolute path to the reference PCD map file built during the mapping session.

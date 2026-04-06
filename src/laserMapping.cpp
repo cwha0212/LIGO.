@@ -619,7 +619,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
 
         PointCloudXYZI::Ptr   laserCloudWorld(new PointCloudXYZI(size, 1));
         bool use_enu_for_pub = false;
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
         use_enu_for_pub = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
         Eigen::Matrix3d R_local_to_enu = Eigen::Matrix3d::Identity();
         Eigen::Vector3d t_local_to_enu = Eigen::Vector3d::Zero();
@@ -636,7 +636,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 feats_down_world->points[i].x,
                 feats_down_world->points[i].y,
                 feats_down_world->points[i].z);
-#ifndef LIGO_WITHOUT_GNSS
+#ifdef LIGO_WITH_NMEA
             const Eigen::Vector3d p_pub = use_enu_for_pub ? (R_local_to_enu * p_local + t_local_to_enu) : p_local;
 #else
             const Eigen::Vector3d p_pub = p_local;
@@ -661,7 +661,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
     /* 2. noted that pcd save will influence the real-time performences **/
     if (pcd_save_en)
     {
-#if !defined(LIGO_WITHOUT_GNSS)
+#ifdef LIGO_WITH_NMEA
         if (NMEA_ENABLE && p_nmea)
         {
             static int scan_wait_num = 0;
@@ -715,7 +715,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                     if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
                     {
                         save_grid2d_from_cloud_with_rays(
-                            pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", ivox_options_.resolution_,
+                            pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                             3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla);
                     }
                     pcl_wait_save->clear();
@@ -796,6 +796,7 @@ void set_posestamp(T & out)
 template<typename T>
 void set_posestamp_enu(T & out)
 {
+#ifdef LIGO_WITH_NMEA
     if (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready)
     {
         const Eigen::Vector3d p_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
@@ -808,11 +809,10 @@ void set_posestamp_enu(T & out)
         out.orientation.y = q.coeffs()[1];
         out.orientation.z = q.coeffs()[2];
         out.orientation.w = q.coeffs()[3];
+        return;
     }
-    else
-    {
-        set_posestamp(out);
-    }
+#endif
+    set_posestamp(out);
 }
 
 #ifdef LIGO_WITH_NMEA
@@ -833,7 +833,11 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     {
         return;
     }
+#ifdef LIGO_WITH_NMEA
     const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+#else
+    const bool use_enu = false;
+#endif
     odomAftMapped.header.frame_id = use_enu ? "map" : "camera_init";
     odomAftMapped.child_frame_id = "aft_mapped";
     if (publish_odometry_without_downsample)
@@ -858,6 +862,7 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     transform.transform.translation.z = odomAftMapped.pose.pose.position.z;
     transform.transform.rotation = odomAftMapped.pose.pose.orientation;
     br.sendTransform(transform);
+#ifdef LIGO_WITH_NMEA
     if (use_enu)
     {
         geometry_msgs::msg::TransformStamped tf_enu_cam;
@@ -876,6 +881,7 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
         tf_enu_cam.transform.rotation.w = q.coeffs()[3];
         br.sendTransform(tf_enu_cam);
     }
+#endif
 }
 
 static void try_publish_fused_enu_position(
@@ -1014,7 +1020,11 @@ void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPat
     {
         return;
     }
+#ifdef LIGO_WITH_NMEA
     const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+#else
+    const bool use_enu = false;
+#endif
     static bool was_enu = false;
     if (use_enu && !was_enu)
     {
@@ -1779,7 +1789,9 @@ int main(int argc, char** argv)
                         kf_output.x_ = state_out;
                         p_imu->imu_need_init_ = false;
                         p_imu->after_imu_init_ = true;
+#ifdef LIGO_WITH_NMEA
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
+#endif
                         indoor_flag_dynamic = true;
 #ifdef LIGO_WITH_SMALL_GICP
                         // ECEF for grid→PCD: last good fix, else anchor + indoor ENU (same as before).
@@ -2916,6 +2928,7 @@ int main(int argc, char** argv)
                 }
             }
             // Indoor GICP first when possible so reference map can latch T^{-1} before first /indoor/map_cloud.
+#ifdef LIGO_WITH_NMEA
             if (!mapping_mode && indoor_flag_dynamic &&
                 indoor_gicp_map_loaded && p_nmea && p_nmea->icp_tf_ready &&
                 feats_down_world && !feats_down_world->empty())
@@ -2937,7 +2950,9 @@ int main(int argc, char** argv)
                     pubIndoorMap2d);
 
             }
-            else if (!mapping_mode && indoor_flag_dynamic && indoor_gicp_map_loaded)
+            else
+#endif
+            if (!mapping_mode && indoor_flag_dynamic && indoor_gicp_map_loaded)
             {
                 // No GICP this frame (no icp_tf / no feats): publish map without align deferral
                 const bool defer_align = false;
@@ -3030,7 +3045,7 @@ int main(int argc, char** argv)
     {
         pcd_index++;
         string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
-#if !defined(LIGO_WITHOUT_GNSS)
+#ifdef LIGO_WITH_NMEA
         const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
         const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? gnss_comm::ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
@@ -3045,7 +3060,7 @@ int main(int argc, char** argv)
         if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save) && saved_in_enu)
         {
             save_grid2d_from_cloud_with_rays(
-                pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", ivox_options_.resolution_,
+                pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                 3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m);
         }
     }
