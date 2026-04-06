@@ -659,7 +659,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
     /**************** save map ****************/
     /* 1. make sure you have enough memories
     /* 2. noted that pcd save will influence the real-time performences **/
-    if (pcd_save_en)
+    if (mapping_mode)
     {
 #ifdef LIGO_WITH_NMEA
         if (NMEA_ENABLE && p_nmea)
@@ -1470,7 +1470,7 @@ int main(int argc, char** argv)
     rclcpp::init(argc, argv);
     auto node = std::make_shared<rclcpp::Node>("laserMapping");
     readParameters(node.get());
-    if (pcd_save_en)
+    if (mapping_mode)
     {
         const int max_saved_idx = ligo_find_max_saved_scan_index();
         if (max_saved_idx > pcd_index)
@@ -2978,7 +2978,7 @@ int main(int argc, char** argv)
 #endif
                 publish_init_pairs_marker_from_gps_move(pubInitPairsFromGpsMove);
                 if (path_en)                         publish_path(pubPath);
-                if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFullRes);
+                if (scan_pub_en || mapping_mode)      publish_frame_world(pubLaserCloudFullRes);
                 if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFullRes_body);
             }
             
@@ -3041,7 +3041,7 @@ int main(int argc, char** argv)
     //--------------------------save map-----------------------------------
     /* 1. make sure you have enough memories
     /* 2. noted that pcd save will influence the real-time performences **/
-    if (pcl_wait_save->size() > 0 && pcd_save_en)
+    if (pcl_wait_save->size() > 0 && mapping_mode)
     {
         pcd_index++;
         string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));

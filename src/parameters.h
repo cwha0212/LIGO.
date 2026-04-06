@@ -99,7 +99,7 @@ extern std::vector<double> gravity_init, gravity;
 extern std::vector<double> extrinT, extrinT_gnss;
 extern std::vector<double> extrinR, extrinR_gnss;
 extern std::vector<double> ppp_anc;
-extern bool   runtime_pos_log, log_lidar_frame_time_ms, pcd_save_en, path_en;
+extern bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 extern bool   scan_pub_en, scan_body_pub_en;
 /** ENU 2D occupancy grid (PGM) cell size (m) when exporting *_grid2d alongside PCD; independent of ivox voxel size. */
 extern double pcd_save_grid2d_resolution_m;
@@ -164,6 +164,8 @@ extern double indoor_gicp_scan_voxel_m;
 extern int    indoor_gicp_max_iterations_reg;
 /** If true: defer first /indoor/map_cloud until one GICP result, then shift PCD by T_map_lidar^{-1} so it matches raw LIO in map (same frame as pre-indoor map). */
 extern bool indoor_gicp_align_reference_map_to_lio;
+/** IndoorLocalizationFactor `relative_sqrt_info` (values[16]). >1.0 pulls pose harder toward GICP vs IMU/LIO. */
+extern double indoor_gicp_factor_sqrt_info_scale;
 extern MeasureGroup Measures;
 
 extern std::vector<Eigen::Vector3d> est_poses;

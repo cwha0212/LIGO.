@@ -92,7 +92,7 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 
 ## `odometry.*`, `publish.*`, `pcd_save.*`
 
-다운샘플 없이 odometry 발행, path/scan 발행, PCD 저장 간격 등.
+다운샘플 없이 odometry 발행, path/scan 발행 등. **PCD 누적·저장**은 `mapping.mapping_mode`가 `true`일 때만 수행되며, `pcd_save.interval`·`pcd_save.grid2d_resolution`은 그때만 의미가 있다.
 
 ## `indoor.*`
 

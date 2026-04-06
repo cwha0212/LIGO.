@@ -95,14 +95,14 @@
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
       # LIO–NMEA init rotation: yaw_only (2D, default) | weighted_3d (Z-downweighted Kabsch; see z_weight / max_tilt_deg)
-      lio_align_rotation_mode: "yaw_only"
-      lio_align_z_weight: 0.5
+      lio_align_rotation_mode: "weighted_3d"
+      lio_align_z_weight: 0.8
       lio_align_max_tilt_deg: 10.0
-      pos_noise: 1.0
-      pos_noise_z: 1.0
-      rot_noise: 5.0
-      vel_noise: 5.0
-      nmea_weight: 2500.0 
+      pos_noise: 0.1
+      pos_noise_z: 0.1
+      rot_noise: 1.0
+      vel_noise: 1.0
+      nmea_weight: 20000.0 
       nmea_local_time_diff: 0.0
       nmea_gps_latency: 0.0
       ppp_file_name: "deg2.pos"
@@ -124,7 +124,7 @@
       scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
 
     pcd_save:
-      pcd_save_en: true
+      # PCD 누적/저장은 mapping.mapping_mode 가 true 일 때만 수행됨
       interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
       # 2D PGM 그리드 셀 크기 (m). 생략 시 mapping.ivox_grid_resolution 과 동일
@@ -146,6 +146,8 @@
       gicp_map_voxel_m: 0.5
       gicp_scan_voxel_m: 0.5
       gicp_max_iterations: 50
+      # GTSAM IndoorLocalizationFactor 잔차 스케일(values[16] relative_sqrt_info). 1.0=기본, 크게 할수록 GICP 측위를 그래프에서 더 강하게 반영(비용은 대략 스케일²).
+      gicp_factor_sqrt_info_scale: 3.0
       # true: 첫 GICP 후 참조 PCD/2D맵을 T^{-1}로 밀어 raw LIO(map)와 겹침; GICP 전에는 /indoor/map_cloud 미발행(icp 준비 시).
       gicp_align_reference_map_to_lio: true
       # Noise models for IndoorLocalizationFactor in the GTSAM graph.

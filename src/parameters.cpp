@@ -115,7 +115,7 @@ std::vector<double> gravity_init, gravity;
 std::vector<double> extrinT(3, 0.0), extrinT_gnss(3, 0.0);
 std::vector<double> extrinR(9, 0.0), extrinR_gnss(9, 0.0);
 std::vector<double> ppp_anc(3, 0.0);
-bool   runtime_pos_log, log_lidar_frame_time_ms, pcd_save_en, path_en;
+bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 bool   scan_pub_en, scan_body_pub_en;
 double pcd_save_grid2d_resolution_m = 0.2;
 shared_ptr<Preprocess> p_pre;
@@ -171,6 +171,7 @@ double indoor_gicp_map_voxel_m = 0.5;
 double indoor_gicp_scan_voxel_m = 0.5;
 int    indoor_gicp_max_iterations_reg = 50;
 bool indoor_gicp_align_reference_map_to_lio = true;
+double indoor_gicp_factor_sqrt_info_scale = 1.0;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
 std::vector<Eigen::Matrix3d> local_rots;
@@ -244,7 +245,6 @@ void readParameters(rclcpp::Node * node)
   scan_body_pub_en = get_param("publish.scan_bodyframe_pub_en", true);
   runtime_pos_log = get_param("runtime_pos_log_enable", false);
   log_lidar_frame_time_ms = get_param("mapping.log_lidar_frame_time_ms", false);
-  pcd_save_en = get_param("pcd_save.pcd_save_en", false);
   pcd_save_interval = get_param("pcd_save.interval", -1);
   lidar_time_inte = get_param("mapping.lidar_time_inte", 0.1);
   dyn_filter = get_param("mapping.dyn_filter", true);
@@ -364,6 +364,9 @@ void readParameters(rclcpp::Node * node)
     indoor_gicp_max_iterations_reg = get_param("indoor.gicp_max_iterations", 50);
     indoor_gicp_align_reference_map_to_lio =
         get_param("indoor.gicp_align_reference_map_to_lio", true);
+    indoor_gicp_factor_sqrt_info_scale = get_param("indoor.gicp_factor_sqrt_info_scale", 1.0);
+    if (indoor_gicp_factor_sqrt_info_scale < 1e-9) indoor_gicp_factor_sqrt_info_scale = 1e-9;
+    cout << "indoor.gicp_factor_sqrt_info_scale: " << indoor_gicp_factor_sqrt_info_scale << endl;
   }
 #endif
 }

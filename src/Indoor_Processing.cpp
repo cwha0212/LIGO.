@@ -578,7 +578,7 @@ void addIndoorFactorToGraph(int frame_num) {
   values[13] = indoor_rot_enu_meas.x();
   values[14] = indoor_rot_enu_meas.y();
   values[15] = indoor_rot_enu_meas.z();
-  values[16] = 1.0;  // relative_sqrt_info weight
+  values[16] = indoor_gicp_factor_sqrt_info_scale;  // relative_sqrt_info (see indoor_localization_factor.hpp)
 
   const bool init_phase = (frame_num < p_nmea->delete_thred);
   const auto& noise = init_phase ? indoorPoseNoiseInit : indoorPoseNoise;
