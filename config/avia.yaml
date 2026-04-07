@@ -147,7 +147,7 @@
       gicp_scan_voxel_m: 0.5
       gicp_max_iterations: 50
       # GTSAM IndoorLocalizationFactor 잔차 스케일(values[16] relative_sqrt_info). 1.0=기본, 크게 할수록 GICP 측위를 그래프에서 더 강하게 반영(비용은 대략 스케일²).
-      gicp_factor_sqrt_info_scale: 3.0
+      gicp_factor_sqrt_info_scale: 5.0
       # true: 첫 GICP 후 참조 PCD/2D맵을 T^{-1}로 밀어 raw LIO(map)와 겹침; GICP 전에는 /indoor/map_cloud 미발행(icp 준비 시).
       gicp_align_reference_map_to_lio: true
       # Noise models for IndoorLocalizationFactor in the GTSAM graph.
