@@ -96,13 +96,13 @@
       init_icp_max_fitness: 50.0
       # LIO–NMEA init rotation: yaw_only (2D, default) | weighted_3d (Z-downweighted Kabsch; see z_weight / max_tilt_deg)
       lio_align_rotation_mode: "weighted_3d"
-      lio_align_z_weight: 0.8
+      lio_align_z_weight: 1.0
       lio_align_max_tilt_deg: 10.0
       pos_noise: 0.1
       pos_noise_z: 0.1
       rot_noise: 1.0
       vel_noise: 1.0
-      nmea_weight: 20000.0 
+      nmea_weight: 2000.0 
       nmea_local_time_diff: 0.0
       nmea_gps_latency: 0.0
       ppp_file_name: "deg2.pos"
