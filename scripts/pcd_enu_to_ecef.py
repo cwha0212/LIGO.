@@ -18,8 +18,10 @@ Open3D 바이너리 PCD 저장은 좌표가 float32 에 가깝게 양자화된�
 의존성: pip install numpy open3d pyyaml
 
 사용 예:
-  python3 scripts/pcd_enu_to_ecef.py PCD/scans_3.pcd PCD/scans_3_grid2d.yaml --voxel 0.5 \\
-      -o PCD/scans_3_ecef.pcd --txt-output PCD/scans_3_ecef_xyz.txt
+python3 scripts/pcd_enu_to_ecef.py PCD/scans_3.pcd PCD/scans_3_grid2d.yaml --voxel 0.01 \
+-o PCD/scans_3_test.pcd --txt-output PCD/scans_3_test_xyz.txt --enu-z-max 2.5
+  # ENU에서 z≥30m 천장 제거 후 변환:
+  #   ... --enu-z-max 30
 """
 
 from __future__ import annotations
@@ -265,6 +267,13 @@ def main() -> None:
         help="R 계산 방식: gnss_comm(기본)=ecef2rotation(앵커ECEF), yaml=YAML행렬, lla=geo2rotation(LLA)",
     )
     ap.add_argument(
+        "--enu-z-max",
+        type=float,
+        default=None,
+        metavar="M",
+        help="최초 ENU 좌표계에서 z≥M (m) 인 포인트를 제거한 뒤 다운샘플·ECEF (미지정 시 필터 없음)",
+    )
+    ap.add_argument(
         "--voxel",
         type=float,
         default=0.5,
@@ -304,10 +313,36 @@ def main() -> None:
     pc = _read_point_cloud(pcd_path)
     pts = np.asarray(pc.points, dtype=np.float64)
     n0 = pts.shape[0]
+
+    if args.enu_z_max is not None:
+        z_th = float(args.enu_z_max)
+        mask = pts[:, 2] < z_th
+        n_kept = int(mask.sum())
+        if n_kept == 0:
+            raise ValueError(
+                f"ENU z<{z_th} m 조건으로 포인트가 모두 제거되었습니다. (--enu-z-max 조정)"
+            )
+        pts = pts[mask]
+        cols = np.asarray(pc.colors) if pc.has_colors() else None
+        if cols is not None and len(cols) == n0:
+            cols = cols[mask]
+        pc = o3d.geometry.PointCloud()
+        pc.points = o3d.utility.Vector3dVector(pts)
+        if cols is not None:
+            pc.colors = o3d.utility.Vector3dVector(cols)
+        print(
+            f"[0] ENU z 필터: z≥{z_th:g} m 제거 → {n0} → {n_kept} 포인트 "
+            f"(남은 z∈[{pts[:, 2].min():.12g}, {pts[:, 2].max():.12g}] m)"
+        )
+        n0 = n_kept
+
+    pts = np.asarray(pc.points, dtype=np.float64)
     xy_min, xy_max = _xy_range(pts)
+    z_lo, z_hi = pts[:, 2].min(), pts[:, 2].max()
     print(f"[1] 입력 PCD: {pcd_path.name}  포인트 수 = {n0}")
     print(f"    x 범위: [{xy_min[0]:.12g}, {xy_max[0]:.12g}]")
     print(f"    y 범위: [{xy_min[1]:.12g}, {xy_max[1]:.12g}]")
+    print(f"    z 범위 (ENU): [{z_lo:.12g}, {z_hi:.12g}]")
 
     if args.voxel > 0.0:
         pc = pc.voxel_down_sample(voxel_size=float(args.voxel))
