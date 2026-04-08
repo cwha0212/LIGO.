@@ -1,9 +1,6 @@
-import os
-
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.actions import ExecuteProcess
 from launch.actions import SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
@@ -42,13 +39,10 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    share_dir = get_package_share_directory("ligo")
-    # install/.../share/ligo 기준으로 워크스페이스 src/LIGO./scripts 경로를 역추적.
-    mqtt_script = os.path.normpath(
-        os.path.join(share_dir, "..", "..", "..", "..", "src", "LIGO.", "scripts", "ligo_topic_to_mqtt.py")
-    )
-    mqtt_bridge = ExecuteProcess(
-        cmd=["python3", mqtt_script],
+    mqtt_bridge = Node(
+        package="ligo",
+        executable="ligo_topic_to_mqtt.py",
+        name="ligo_topic_to_mqtt",
         output="screen",
     )
 

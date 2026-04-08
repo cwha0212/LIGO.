@@ -219,6 +219,10 @@ target_include_directories(ligo_mapping PRIVATE
 install(TARGETS ligo_mapping
   DESTINATION lib/${PROJECT_NAME}
 )
+install(PROGRAMS
+  scripts/ligo_topic_to_mqtt.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 install(DIRECTORY config rviz_cfg launch
   DESTINATION share/${PROJECT_NAME}
 )
