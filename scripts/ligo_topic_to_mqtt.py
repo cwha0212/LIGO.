@@ -2,11 +2,11 @@
 """
 LIGO ROS2 topic -> MQTT bridge.
 
-Publishes a compact JSON payload containing:
-1) current position (lat/lon)
-2) current heading direction
-3) current GPS connection status (/receiver_pvt based)
-4) initial heading ICP success (/ligo/nmea_heading_align_status based)
+MQTT topic별로 JSON을 분리 발행한다 (기본 prefix: navi1):
+  - navi1/position   : lat, lon
+  - navi1/heading    : deg_from_north_cw, cardinal
+  - navi1/gps        : status, ntrip_connected (/receiver_pvt 기반)
+  - navi1/init_heading_icp : success (/ligo/nmea_heading_align_status 기반)
 
 Run:
   python3 scripts/ligo_topic_to_mqtt.py
@@ -65,7 +65,7 @@ class LigoMqttBridge(Node):
         # MQTT params
         self.declare_parameter("mqtt.host", "rms.bottle-tak.com")
         self.declare_parameter("mqtt.port", 80)
-        self.declare_parameter("mqtt.topic", "ligo/status")
+        self.declare_parameter("mqtt.topic_prefix", "navi1")
         self.declare_parameter("mqtt.use_websocket", True)
         self.declare_parameter("mqtt.ws_path", "/mqtt")
         self.declare_parameter("mqtt.username", "")
@@ -80,7 +80,11 @@ class LigoMqttBridge(Node):
 
         self.mqtt_host = str(self.get_parameter("mqtt.host").value)
         self.mqtt_port = int(self.get_parameter("mqtt.port").value)
-        self.mqtt_topic = str(self.get_parameter("mqtt.topic").value)
+        prefix = str(self.get_parameter("mqtt.topic_prefix").value).strip().strip("/")
+        self.mqtt_topic_position = f"{prefix}/position"
+        self.mqtt_topic_heading = f"{prefix}/heading"
+        self.mqtt_topic_gps = f"{prefix}/gps"
+        self.mqtt_topic_icp = f"{prefix}/init_heading_icp"
         self.mqtt_use_websocket = bool(self.get_parameter("mqtt.use_websocket").value)
         self.mqtt_ws_path = str(self.get_parameter("mqtt.ws_path").value)
         self.mqtt_username = str(self.get_parameter("mqtt.username").value)
@@ -118,7 +122,9 @@ class LigoMqttBridge(Node):
 
         self.create_timer(period, self.publish_mqtt)
         self.get_logger().info(
-            f"ROS->MQTT bridge started. mqtt={self.mqtt_host}:{self.mqtt_port} topic={self.mqtt_topic}"
+            f"ROS->MQTT bridge started. mqtt={self.mqtt_host}:{self.mqtt_port} "
+            f"topics={self.mqtt_topic_position}, {self.mqtt_topic_heading}, "
+            f"{self.mqtt_topic_gps}, {self.mqtt_topic_icp}"
         )
 
     def _create_mqtt_client(self) -> mqtt.Client:
@@ -201,28 +207,51 @@ class LigoMqttBridge(Node):
             self._connect_mqtt()
             return
 
-        payload = {
-            "timestamp_unix": time.time(),
-            "position": {
+        ts = time.time()
+        try:
+            pos_payload = {
+                "timestamp_unix": ts,
                 "lat": self.lat,
                 "lon": self.lon,
-            },
-            "heading": {
+            }
+            heading_payload = {
+                "timestamp_unix": ts,
                 "deg_from_north_cw": self.heading_deg,
                 "cardinal": self.heading_dir,
-            },
-            "gps": {
-                # 1) 신호없음 2) 신호미약 3) 신호정상(GPS_fixed)
+            }
+            gps_payload = {
+                "timestamp_unix": ts,
                 "status": self.gps_signal_status,
                 "ntrip_connected": self.ntrip_connected,
-            },
-            "init_heading_icp": {
+            }
+            icp_payload = {
+                "timestamp_unix": ts,
                 "success": self.icp_heading_aligned,
-            },
-        }
-
-        try:
-            self._mqtt.publish(self.mqtt_topic, json.dumps(payload, ensure_ascii=False), qos=0, retain=False)
+            }
+            self._mqtt.publish(
+                self.mqtt_topic_position,
+                json.dumps(pos_payload, ensure_ascii=False),
+                qos=0,
+                retain=False,
+            )
+            self._mqtt.publish(
+                self.mqtt_topic_heading,
+                json.dumps(heading_payload, ensure_ascii=False),
+                qos=0,
+                retain=False,
+            )
+            self._mqtt.publish(
+                self.mqtt_topic_gps,
+                json.dumps(gps_payload, ensure_ascii=False),
+                qos=0,
+                retain=False,
+            )
+            self._mqtt.publish(
+                self.mqtt_topic_icp,
+                json.dumps(icp_payload, ensure_ascii=False),
+                qos=0,
+                retain=False,
+            )
         except Exception as exc:
             self._mqtt_connected = False
             self.get_logger().warn(f"MQTT publish 실패: {exc}")
