@@ -35,6 +35,7 @@
  */
 
 #pragma once
+#include <limits>
 // #include <mavros_msgs/GPSRAW.h>
 #include <nav_msgs/msg/odometry.hpp>
 #include "NMEA_Assignment.h"
@@ -118,7 +119,12 @@ class NMEAProcess
   std::vector<Eigen::Vector3d> icp_pairs_nmea_local;
   // Eigen::Matrix3d R_ecef_enu;
   double yaw_enu_local = 0.0;
-  
+
+  /** 0=none, 1=TIME-PAIR (NMEALIAlign), 2=indoor reloc — set when icp_tf_ready becomes true. */
+  uint8_t heading_align_source = 0;
+  /** Accepted TIME-PAIR alignment RMSE (m); NaN if not from that path. */
+  double heading_align_post_rmse_m = std::numeric_limits<double>::quiet_NaN();
+
   void runISAM2opt(void);
   // void GnssPsrDoppMeas(const ObsPtr &obs_, const EphemBasePtr &ephem_);
   // void SvPosCals(const ObsPtr &obs_, const EphemBasePtr &ephem_);

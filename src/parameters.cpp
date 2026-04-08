@@ -136,6 +136,8 @@ std::string ecef_position_frame_id = "ecef";
 bool nmea_global_anchor_ready = false;
 Eigen::Vector3d nmea_global_anchor_lla = Eigen::Vector3d::Zero();
 #ifdef LIGO_WITH_NMEA
+bool nmea_last_raw_lla_valid = false;
+Eigen::Vector3d nmea_last_raw_lla = Eigen::Vector3d::Zero();
 bool nmea_use_fixed_anchor = false;
 std::vector<double> nmea_fixed_anchor_lla_deg;
 bool nmea_force_indoor_on_high_cov = true;
@@ -515,6 +517,83 @@ bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef)
     return false;
 #endif
 }
+
+#ifdef LIGO_WITH_NMEA
+namespace {
+/** Raw GNSS ENU (not fused LIO): NavSatFix→ENU if anchor ready, else last Odometry ENU sample. */
+static bool compute_prealign_gnss_enu(Eigen::Vector3d &pos_enu)
+{
+    if (nmea_last_raw_lla_valid && nmea_global_anchor_ready)
+    {
+        const Eigen::Vector3d p_ecef = gnss_comm::geo2ecef(nmea_last_raw_lla);
+        const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+        const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+        pos_enu = R_ecef_enu.transpose() * (p_ecef - anchor_ecef);
+        return true;
+    }
+    if (nmea_cur)
+    {
+        pos_enu << nmea_cur->pose.pose.position.x, nmea_cur->pose.pose.position.y, nmea_cur->pose.pose.position.z;
+        return true;
+    }
+    return false;
+}
+}  // namespace
+
+bool compute_ligo_global_topic_enu(Eigen::Vector3d &pos_enu)
+{
+    if (!NMEA_ENABLE || !p_nmea)
+        return false;
+    if (compute_fused_imu_position_enu(pos_enu))
+        return true;
+    return compute_prealign_gnss_enu(pos_enu);
+}
+
+bool compute_ligo_global_topic_geo(Eigen::Vector3d &out_lla)
+{
+    if (!NMEA_ENABLE || !p_nmea)
+        return false;
+    if (compute_fused_imu_position_geo(out_lla))
+        return true;
+    if (nmea_last_raw_lla_valid)
+    {
+        out_lla = nmea_last_raw_lla;
+        return true;
+    }
+    Eigen::Vector3d p_enu;
+    if (!compute_prealign_gnss_enu(p_enu))
+        return false;
+    if (!nmea_global_anchor_ready)
+        return false;
+    const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+    const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+    const Eigen::Vector3d p_ecef = anchor_ecef + R_ecef_enu * p_enu;
+    out_lla = gnss_comm::ecef2geo(p_ecef);
+    return true;
+}
+
+bool compute_ligo_global_topic_ecef(Eigen::Vector3d &out_ecef)
+{
+    if (!NMEA_ENABLE || !p_nmea)
+        return false;
+    if (compute_fused_imu_position_ecef(out_ecef))
+        return true;
+    if (nmea_last_raw_lla_valid)
+    {
+        out_ecef = gnss_comm::geo2ecef(nmea_last_raw_lla);
+        return true;
+    }
+    Eigen::Vector3d p_enu;
+    if (!compute_prealign_gnss_enu(p_enu))
+        return false;
+    if (!nmea_global_anchor_ready)
+        return false;
+    const Eigen::Vector3d anchor_ecef = gnss_comm::geo2ecef(nmea_global_anchor_lla);
+    const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
+    out_ecef = anchor_ecef + R_ecef_enu * p_enu;
+    return true;
+}
+#endif
 
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output)
 {

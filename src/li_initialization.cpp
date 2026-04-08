@@ -156,6 +156,9 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         return;
     }
 
+    nmea_last_raw_lla << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
+    nmea_last_raw_lla_valid = true;
+
     // Align NavSatFix timestamp base to LiDAR/IMU ROS(bag) time if needed.
     // Some datasets publish GNSS with Unix epoch stamps while LiDAR uses bag time.
     static bool nmea_stamp_offset_inited = false;

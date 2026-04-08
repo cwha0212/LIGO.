@@ -49,6 +49,7 @@ find_package(builtin_interfaces REQUIRED)
 # Custom messages
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/LocalSensorExternalTrigger.msg"
+  "msg/NmeaHeadingAlignStatus.msg"
   DEPENDENCIES std_msgs builtin_interfaces
 )
 ament_export_dependencies(rosidl_default_runtime)

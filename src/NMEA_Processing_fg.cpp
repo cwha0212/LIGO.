@@ -37,6 +37,7 @@
 #include "NMEA_Processing_fg.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
@@ -91,6 +92,8 @@ void NMEAProcess::Reset()
   diag_03m_valid = false;
   icp_pairs_lio.clear();
   icp_pairs_nmea_local.clear();
+  heading_align_source = 0;
+  heading_align_post_rmse_m = std::numeric_limits<double>::quiet_NaN();
   init_start_set = false;
   init_start_lio.setZero();
   init_start_nmea.setZero();
@@ -581,6 +584,8 @@ bool NMEAProcess::NMEALIAlign()
         align_ok ? 1 : 0, post_rmse, init_icp_max_fitness, pre_rmse, lio_total_move, nmea_total_move);
     return false;
   }
+  heading_align_source = 1;  // SOURCE_TIME_PAIR_ALIGN
+  heading_align_post_rmse_m = post_rmse;
   RCLCPP_INFO(
       logger,
       "[nmea/init] TIME-PAIR ALIGN accepted: n=%d pre_rmse=%.3f post_rmse=%.3f improve=%.2fx yaw=%.2fdeg t=(%.3f,%.3f,%.3f) lio_total=%.3f nmea_total=%.3f latency_corrected=%s",
@@ -1024,6 +1029,8 @@ void NMEAProcess::SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
   icp_R_local_to_enu = r_enu_local;
   icp_t_local_to_enu = anc_enu - r_enu_local * anc_local;
   icp_tf_ready = true;
+  heading_align_source = 2;  // SOURCE_INDOOR_RELOC
+  heading_align_post_rmse_m = std::numeric_limits<double>::quiet_NaN();
   RCLCPP_INFO(rclcpp::get_logger("ligo"),
               "[nmea/init] ICP tf set from indoor reloc: "
               "t_enu=(%.2f, %.2f, %.2f)",
