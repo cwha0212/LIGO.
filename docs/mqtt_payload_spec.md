@@ -4,7 +4,9 @@
 
 ## 발행 동작
 
-- **주기**: 타이머 기준 기본 `0.5s`마다 아래 **4개 MQTT 토픽**에 각각 한 번씩 `publish` (총 4회/주기).
+- **상시 주기 발행 아님**. ROS 입력 이벤트가 생길 때만 해당 MQTT 토픽을 발행한다.
+- **재연결 타이머**(`reconnect_period_sec`, 기본 `1.0s`)는 MQTT 재접속 용도이며 데이터 주기 발행용이 아니다.
+- MQTT 재연결 직후에는 캐시 상태로 4개 토픽을 각각 1회 발행한다.
 - **MQTT QoS**: `0`, **retain**: `false` (코드 고정).
 - **전송**: 기본 WebSocket (`mqtt.use_websocket=true`, `mqtt.ws_path=/mqtt`).
 - **페이로드**: UTF-8 JSON 문자열 (`ensure_ascii=False`).
@@ -39,7 +41,7 @@
 | `mqtt.ws_path` | `/mqtt` | WebSocket path |
 | `mqtt.username` | `""` | (선택) 사용자명 |
 | `mqtt.password` | `""` | (선택) 비밀번호 |
-| `publish_period_sec` | `0.5` | 발행 주기(초) |
+| `reconnect_period_sec` | `1.0` | MQTT 재연결 시도 주기(초) |
 
 ### 구독할 ROS 토픽
 
@@ -47,7 +49,7 @@
 |----------|--------|-------------|
 | `topic.global_position` | `/ligo/global_position` | `sensor_msgs/NavSatFix` |
 | `topic.odom` | `/aft_mapped_to_init` | `nav_msgs/Odometry` |
-| `topic.receiver_pvt` | `/receiver_pvt` | `gnss_comm/msg/GnssPVTSolnMsg` |
+| `topic.receiver_pvt` | `/ublox_driver/receiver_pvt` | `gnss_comm/msg/GnssPVTSolnMsg` |
 | `topic.heading_align_status` | `/ligo/nmea_heading_align_status` | `ligo/msg/NmeaHeadingAlignStatus` |
 
 `gnss_comm.msg.GnssPVTSolnMsg` import에 실패하면 `/receiver_pvt` 구독을 생략하고 경고 로그만 남긴다. 이 경우 `gps.status`·`ntrip_connected`는 갱신되지 않을 수 있다.
@@ -81,6 +83,7 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 ```
 
 - ROS 입력: `topic.global_position` (`NavSatFix`의 `latitude`, `longitude`).
+- 발행 시점: `lat`/`lon`이 이전 값과 달라졌을 때만.
 
 ### `{prefix}/heading`
 
@@ -95,6 +98,7 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 - `deg_from_north_cw`: 북을 0°로 한 시계방향 방위각 (0~360°, 도).
 - `cardinal`: 16방위 문자열.
 - ROS 입력: `topic.odom` 오도메트리 자세 쿼터니언 → yaw 변환 후 위 각도로 환산.
+- 발행 시점: **`init_heading_icp.success == true`(LOCKED) 이후** odom 수신마다.
 
 ### `{prefix}/gps`
 
@@ -108,6 +112,7 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 
 - `status`: `신호없음` | `신호미약` | `신호정상` (문자열).
 - ROS 입력: `topic.receiver_pvt` (`GnssPVTSolnMsg`).
+- 발행 시점: `receiver_pvt` 수신마다(상시).
 
 #### `status` 판정 (`receiver_pvt`만 사용)
 
@@ -126,12 +131,15 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 ```json
 {
   "timestamp_unix": 1712551234.123,
-  "success": true
+  "success": true,
+  "status": "LOCKED"
 }
 ```
 
 - `success`: `icp_tf_ready == true` 이고 `status == STATUS_LOCKED`일 때 `true`.
+- `status`: `UNALIGNED` | `COLLECTING` | `LOCKED`.
 - ROS 입력: `topic.heading_align_status` (`ligo/NmeaHeadingAlignStatus`).
+- 발행 시점: `success` 또는 `status`가 **변경될 때만**.
 
 ---
 

@@ -70,12 +70,12 @@ class LigoMqttBridge(Node):
         self.declare_parameter("mqtt.ws_path", "/mqtt")
         self.declare_parameter("mqtt.username", "")
         self.declare_parameter("mqtt.password", "")
-        self.declare_parameter("publish_period_sec", 0.5)
+        self.declare_parameter("reconnect_period_sec", 1.0)
 
         # ROS topic params
         self.declare_parameter("topic.global_position", "/ligo/global_position")
         self.declare_parameter("topic.odom", "/aft_mapped_to_init")
-        self.declare_parameter("topic.receiver_pvt", "/receiver_pvt")
+        self.declare_parameter("topic.receiver_pvt", "/ublox_driver/receiver_pvt")
         self.declare_parameter("topic.heading_align_status", "/ligo/nmea_heading_align_status")
 
         self.mqtt_host = str(self.get_parameter("mqtt.host").value)
@@ -95,7 +95,7 @@ class LigoMqttBridge(Node):
         receiver_pvt_topic = str(self.get_parameter("topic.receiver_pvt").value)
         align_status_topic = str(self.get_parameter("topic.heading_align_status").value)
 
-        period = float(self.get_parameter("publish_period_sec").value)
+        reconnect_period = float(self.get_parameter("reconnect_period_sec").value)
 
         # State cache
         self.lat: Optional[float] = None
@@ -105,8 +105,10 @@ class LigoMqttBridge(Node):
         self.gps_signal_status: Optional[str] = None  # "신호없음" | "신호미약" | "신호정상"
         self.ntrip_connected: Optional[bool] = None
         self.icp_heading_aligned: bool = False
+        self.icp_status_text: Optional[str] = None  # "UNALIGNED" | "COLLECTING" | "LOCKED"
         self._pvt_is_gps_fixed: Optional[bool] = None
         self._pvt_is_no_fix: Optional[bool] = None
+        self._has_heading_sample: bool = False
 
         self.create_subscription(NavSatFix, global_topic, self.on_global_position, 10)
         self.create_subscription(Odometry, odom_topic, self.on_odom, 10)
@@ -120,7 +122,8 @@ class LigoMqttBridge(Node):
         self._mqtt = self._create_mqtt_client()
         self._connect_mqtt()
 
-        self.create_timer(period, self.publish_mqtt)
+        # 연결이 끊겼을 때만 주기적으로 재연결 시도.
+        self.create_timer(reconnect_period, self._reconnect_tick)
         self.get_logger().info(
             f"ROS->MQTT bridge started. mqtt={self.mqtt_host}:{self.mqtt_port} "
             f"topics={self.mqtt_topic_position}, {self.mqtt_topic_heading}, "
@@ -153,6 +156,11 @@ class LigoMqttBridge(Node):
         self._mqtt_connected = (rc == 0)
         if self._mqtt_connected:
             self.get_logger().info("MQTT connected")
+            # 재연결 직후 현재 캐시 상태 1회 재발행.
+            self._publish_position()
+            self._publish_heading()
+            self._publish_gps()
+            self._publish_icp()
         else:
             self.get_logger().warn(f"MQTT connect failed, rc={rc}")
 
@@ -161,16 +169,26 @@ class LigoMqttBridge(Node):
         self.get_logger().warn(f"MQTT disconnected, rc={rc}")
 
     def on_global_position(self, msg: NavSatFix) -> None:
-        self.lat = float(msg.latitude)
-        self.lon = float(msg.longitude)
+        lat = float(msg.latitude)
+        lon = float(msg.longitude)
+        if self.lat == lat and self.lon == lon:
+            return
+        self.lat = lat
+        self.lon = lon
+        self._publish_position()
 
     def on_odom(self, msg: Odometry) -> None:
         q = msg.pose.pose.orientation
         yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
         # yaw(rad): ENU 기준 (x=East, y=North). North 기준 heading으로 변환.
         heading_deg_from_north = (90.0 - math.degrees(yaw)) % 360.0
+        heading_dir = heading_cardinal(heading_deg_from_north)
+        self._has_heading_sample = True
         self.heading_deg = heading_deg_from_north
-        self.heading_dir = heading_cardinal(heading_deg_from_north)
+        self.heading_dir = heading_dir
+        # heading은 ICP lock 이후에만 publish
+        if self.icp_heading_aligned:
+            self._publish_heading()
 
     def on_receiver_pvt(self, msg) -> None:
         # wtrtk_driver fix_state_label:
@@ -179,82 +197,88 @@ class LigoMqttBridge(Node):
         self._pvt_is_no_fix = (not bool(msg.valid_fix)) or int(msg.fix_type) == 0
         self._pvt_is_gps_fixed = (not self._pvt_is_no_fix) and int(msg.carr_soln) == 2
         # NTRIP 연결(실사용) 여부 근사: diff solution 또는 carrier solution 존재
-        self.ntrip_connected = bool(msg.diff_soln) or int(msg.carr_soln) in (1, 2)
+        ntrip_connected = bool(msg.diff_soln) or int(msg.carr_soln) in (1, 2)
+        self.ntrip_connected = ntrip_connected
         self._refresh_gps_signal_status()
+        # gps는 PVT 메시지 수신 시마다 publish
+        self._publish_gps()
 
-    def _refresh_gps_signal_status(self) -> None:
+    def _refresh_gps_signal_status(self) -> bool:
+        prev = self.gps_signal_status
         # PVT 기반 3단계 판정
         if self._pvt_is_no_fix is True:
             self.gps_signal_status = "신호없음"
-            return
-        if self._pvt_is_gps_fixed is True:
+        elif self._pvt_is_gps_fixed is True:
             self.gps_signal_status = "신호정상"
-            return
         # no_fix가 아니면서 GPS_fixed가 아니면 모두 미약 (2D_fix/GPS_single/GPS_float 포함)
-        if self._pvt_is_no_fix is False:
+        elif self._pvt_is_no_fix is False:
             self.gps_signal_status = "신호미약"
         else:
             self.gps_signal_status = None
+        return prev != self.gps_signal_status
 
     def on_heading_align_status(self, msg: NmeaHeadingAlignStatus) -> None:
-        self.icp_heading_aligned = bool(
+        aligned = bool(
             msg.icp_tf_ready and msg.status == NmeaHeadingAlignStatus.STATUS_LOCKED
         )
+        if msg.status == NmeaHeadingAlignStatus.STATUS_LOCKED:
+            status_text = "LOCKED"
+        elif msg.status == NmeaHeadingAlignStatus.STATUS_COLLECTING:
+            status_text = "COLLECTING"
+        else:
+            status_text = "UNALIGNED"
 
-    def publish_mqtt(self) -> None:
-        if not self._mqtt_connected:
-            # 짧게 재시도
-            self._connect_mqtt()
+        was_aligned = self.icp_heading_aligned
+        was_status = self.icp_status_text
+        if was_aligned == aligned and was_status == status_text:
             return
+        self.icp_heading_aligned = aligned
+        self.icp_status_text = status_text
+        self._publish_icp()
+        # lock 전환 시점에 heading 샘플이 이미 있으면 즉시 1회 publish
+        if (not was_aligned) and aligned and self._has_heading_sample:
+            self._publish_heading()
 
-        ts = time.time()
+    def _reconnect_tick(self) -> None:
+        if not self._mqtt_connected:
+            self._connect_mqtt()
+
+    def _publish_json(self, topic: str, body: dict) -> None:
+        if not self._mqtt_connected:
+            return
+        payload = {"timestamp_unix": time.time(), **body}
         try:
-            pos_payload = {
-                "timestamp_unix": ts,
-                "lat": self.lat,
-                "lon": self.lon,
-            }
-            heading_payload = {
-                "timestamp_unix": ts,
-                "deg_from_north_cw": self.heading_deg,
-                "cardinal": self.heading_dir,
-            }
-            gps_payload = {
-                "timestamp_unix": ts,
-                "status": self.gps_signal_status,
-                "ntrip_connected": self.ntrip_connected,
-            }
-            icp_payload = {
-                "timestamp_unix": ts,
-                "success": self.icp_heading_aligned,
-            }
-            self._mqtt.publish(
-                self.mqtt_topic_position,
-                json.dumps(pos_payload, ensure_ascii=False),
-                qos=0,
-                retain=False,
-            )
-            self._mqtt.publish(
-                self.mqtt_topic_heading,
-                json.dumps(heading_payload, ensure_ascii=False),
-                qos=0,
-                retain=False,
-            )
-            self._mqtt.publish(
-                self.mqtt_topic_gps,
-                json.dumps(gps_payload, ensure_ascii=False),
-                qos=0,
-                retain=False,
-            )
-            self._mqtt.publish(
-                self.mqtt_topic_icp,
-                json.dumps(icp_payload, ensure_ascii=False),
-                qos=0,
-                retain=False,
-            )
+            self._mqtt.publish(topic, json.dumps(payload, ensure_ascii=False), qos=0, retain=False)
         except Exception as exc:
             self._mqtt_connected = False
             self.get_logger().warn(f"MQTT publish 실패: {exc}")
+
+    def _publish_position(self) -> None:
+        self._publish_json(
+            self.mqtt_topic_position,
+            {"lat": self.lat, "lon": self.lon},
+        )
+
+    def _publish_heading(self) -> None:
+        self._publish_json(
+            self.mqtt_topic_heading,
+            {"deg_from_north_cw": self.heading_deg, "cardinal": self.heading_dir},
+        )
+
+    def _publish_gps(self) -> None:
+        self._publish_json(
+            self.mqtt_topic_gps,
+            {"status": self.gps_signal_status, "ntrip_connected": self.ntrip_connected},
+        )
+
+    def _publish_icp(self) -> None:
+        self._publish_json(
+            self.mqtt_topic_icp,
+            {
+                "success": self.icp_heading_aligned,
+                "status": self.icp_status_text,
+            },
+        )
 
 
 def main() -> None:
