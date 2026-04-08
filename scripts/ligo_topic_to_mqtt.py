@@ -89,10 +89,10 @@ class LigoMqttBridge(Node):
         super().__init__("ligo_topic_to_mqtt")
 
         # MQTT params
-        self.declare_parameter("mqtt.host", "rms.bottle-tak.com")
-        self.declare_parameter("mqtt.port", 80)
+        self.declare_parameter("mqtt.host", "127.0.0.1")
+        self.declare_parameter("mqtt.port", 1883)
         self.declare_parameter("mqtt.topic_prefix", "navi1")
-        self.declare_parameter("mqtt.use_websocket", True)
+        self.declare_parameter("mqtt.use_websocket", False)
         self.declare_parameter("mqtt.ws_path", "/mqtt")
         self.declare_parameter("mqtt.username", "")
         self.declare_parameter("mqtt.password", "")
@@ -139,6 +139,7 @@ class LigoMqttBridge(Node):
         self._pvt_is_no_fix: Optional[bool] = None
         self._has_heading_sample: bool = False
         self._last_ligo_mode_payload: Optional[dict] = None
+        self._ligo_mode_bootstrap_done: bool = False
 
         self.create_subscription(NavSatFix, global_topic, self.on_global_position, 10)
         self.create_subscription(Odometry, odom_topic, self.on_odom, 10)
@@ -339,8 +340,14 @@ class LigoMqttBridge(Node):
         )
 
     def _publish_ligo_mode(self) -> None:
-        # 연결 직후 토픽 존재 확인을 위해 1회 발행.
-        # /ligo/mode를 아직 못 받았으면 mode=null 상태를 보낸다.
+        # 최초 연결에서 /ligo/mode 미수신 상태면 null -> outdoor 순서로 부트스트랩.
+        if (not self._ligo_mode_bootstrap_done) and self._last_ligo_mode_payload is None:
+            self._publish_json(self.mqtt_topic_ligo_mode, {"mode": None})
+            self._publish_json(self.mqtt_topic_ligo_mode, {"mode": "outdoor"})
+            self._last_ligo_mode_payload = {"mode": "outdoor"}
+            self._ligo_mode_bootstrap_done = True
+            return
+
         payload = self._last_ligo_mode_payload if self._last_ligo_mode_payload is not None else {"mode": None}
         self._publish_json(self.mqtt_topic_ligo_mode, payload)
 
