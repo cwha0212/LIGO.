@@ -121,8 +121,7 @@
       # true: enable indoor localization mode (GICP against pre-built PCD map).
       # Set false (or mapping_mode: true) to disable.
       indoor_flag: true
-      # Directory with *_grid2d.yaml (+ pgm + source_pcd). Relative paths are resolved against the
-      # installed ligo share directory (colcon install .../share/ligo/<path>). Example: "PCD".
+      # *_grid2d.yaml + pgm + source_pcd. Relative: package source <src>/LIGO./<path> if that dir exists, else share/ligo/<path>.
       # Leave empty to disable grid-based map selection.
       grid_map_dir: "PCD"
       # Absolute path to the reference PCD map file built during the mapping session.
