@@ -89,10 +89,10 @@ class LigoMqttBridge(Node):
         super().__init__("ligo_topic_to_mqtt")
 
         # MQTT params
-        self.declare_parameter("mqtt.host", "127.0.0.1")
-        self.declare_parameter("mqtt.port", 1883)
+        self.declare_parameter("mqtt.host", "rms.bottle-tak.com")
+        self.declare_parameter("mqtt.port", 80)
         self.declare_parameter("mqtt.topic_prefix", "navi1")
-        self.declare_parameter("mqtt.use_websocket", False)
+        self.declare_parameter("mqtt.use_websocket", True)
         self.declare_parameter("mqtt.ws_path", "/mqtt")
         self.declare_parameter("mqtt.username", "")
         self.declare_parameter("mqtt.password", "")
