@@ -6,7 +6,8 @@ MQTT topic별로 JSON을 분리 발행한다 (기본 prefix: navi1):
   - navi1/position   : lat, lon
   - navi1/heading    : deg_from_north_cw, cardinal
   - navi1/gps        : status, ntrip_connected (/receiver_pvt 기반)
-  - navi1/init_heading_icp : success (/ligo/nmea_heading_align_status 기반)
+  - navi1/init_heading_icp : success/status (/ligo/nmea_heading_align_status 기반)
+  - navi1/ligo_mode  : /ligo/mode(String JSON) 미러
 
 Run:
   python3 scripts/ligo_topic_to_mqtt.py
@@ -20,13 +21,16 @@ from __future__ import annotations
 import json
 import math
 import time
+from pathlib import Path
 from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
+from std_msgs.msg import String
 from ligo.msg import NmeaHeadingAlignStatus
 try:
     from gnss_comm.msg import GnssPVTSolnMsg
@@ -58,6 +62,28 @@ def heading_cardinal(deg: float) -> str:
     return dirs[idx]
 
 
+def _indoor_pcd_name(ros_obj: dict) -> str:
+    v = ros_obj.get("pcd_name")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    v = ros_obj.get("map_pcd_basename")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    mp = ros_obj.get("map_pcd")
+    if isinstance(mp, str) and mp.strip():
+        return Path(mp).name
+    return ""
+
+
+def ligo_mode_payload_for_mqtt(ros_obj: dict) -> dict:
+    mode = ros_obj.get("mode")
+    if mode == "indoor":
+        return {"mode": "indoor", "pcd_name": _indoor_pcd_name(ros_obj)}
+    if mode == "outdoor":
+        return {"mode": "outdoor"}
+    return {"mode": str(mode), "raw": ros_obj}
+
+
 class LigoMqttBridge(Node):
     def __init__(self) -> None:
         super().__init__("ligo_topic_to_mqtt")
@@ -77,6 +103,7 @@ class LigoMqttBridge(Node):
         self.declare_parameter("topic.odom", "/aft_mapped_to_init")
         self.declare_parameter("topic.receiver_pvt", "/ublox_driver/receiver_pvt")
         self.declare_parameter("topic.heading_align_status", "/ligo/nmea_heading_align_status")
+        self.declare_parameter("topic.ligo_mode", "/ligo/mode")
 
         self.mqtt_host = str(self.get_parameter("mqtt.host").value)
         self.mqtt_port = int(self.get_parameter("mqtt.port").value)
@@ -85,6 +112,7 @@ class LigoMqttBridge(Node):
         self.mqtt_topic_heading = f"{prefix}/heading"
         self.mqtt_topic_gps = f"{prefix}/gps"
         self.mqtt_topic_icp = f"{prefix}/init_heading_icp"
+        self.mqtt_topic_ligo_mode = f"{prefix}/ligo_mode"
         self.mqtt_use_websocket = bool(self.get_parameter("mqtt.use_websocket").value)
         self.mqtt_ws_path = str(self.get_parameter("mqtt.ws_path").value)
         self.mqtt_username = str(self.get_parameter("mqtt.username").value)
@@ -94,6 +122,7 @@ class LigoMqttBridge(Node):
         odom_topic = str(self.get_parameter("topic.odom").value)
         receiver_pvt_topic = str(self.get_parameter("topic.receiver_pvt").value)
         align_status_topic = str(self.get_parameter("topic.heading_align_status").value)
+        ligo_mode_topic = str(self.get_parameter("topic.ligo_mode").value)
 
         reconnect_period = float(self.get_parameter("reconnect_period_sec").value)
 
@@ -109,6 +138,7 @@ class LigoMqttBridge(Node):
         self._pvt_is_gps_fixed: Optional[bool] = None
         self._pvt_is_no_fix: Optional[bool] = None
         self._has_heading_sample: bool = False
+        self._last_ligo_mode_payload: Optional[dict] = None
 
         self.create_subscription(NavSatFix, global_topic, self.on_global_position, 10)
         self.create_subscription(Odometry, odom_topic, self.on_odom, 10)
@@ -117,6 +147,13 @@ class LigoMqttBridge(Node):
         else:
             self.get_logger().warn("gnss_comm.msg.GnssPVTSolnMsg import 실패: NTRIP/정상 판정 정밀도 제한")
         self.create_subscription(NmeaHeadingAlignStatus, align_status_topic, self.on_heading_align_status, 10)
+        mode_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+        )
+        self.create_subscription(String, ligo_mode_topic, self.on_ligo_mode, mode_qos)
 
         self._mqtt_connected = False
         self._mqtt = self._create_mqtt_client()
@@ -127,7 +164,7 @@ class LigoMqttBridge(Node):
         self.get_logger().info(
             f"ROS->MQTT bridge started. mqtt={self.mqtt_host}:{self.mqtt_port} "
             f"topics={self.mqtt_topic_position}, {self.mqtt_topic_heading}, "
-            f"{self.mqtt_topic_gps}, {self.mqtt_topic_icp}"
+            f"{self.mqtt_topic_gps}, {self.mqtt_topic_icp}, {self.mqtt_topic_ligo_mode}"
         )
 
     def _create_mqtt_client(self) -> mqtt.Client:
@@ -161,6 +198,7 @@ class LigoMqttBridge(Node):
             self._publish_heading()
             self._publish_gps()
             self._publish_icp()
+            self._publish_ligo_mode()
         else:
             self.get_logger().warn(f"MQTT connect failed, rc={rc}")
 
@@ -239,6 +277,17 @@ class LigoMqttBridge(Node):
         if (not was_aligned) and aligned and self._has_heading_sample:
             self._publish_heading()
 
+    def on_ligo_mode(self, msg: String) -> None:
+        if not self.mqtt_topic_ligo_mode:
+            return
+        try:
+            ros_obj = json.loads(msg.data)
+            out = ligo_mode_payload_for_mqtt(ros_obj)
+            self._last_ligo_mode_payload = out
+            self._publish_json(self.mqtt_topic_ligo_mode, out)
+        except json.JSONDecodeError:
+            self._publish_raw(self.mqtt_topic_ligo_mode, msg.data.encode("utf-8"))
+
     def _reconnect_tick(self) -> None:
         if not self._mqtt_connected:
             self._connect_mqtt()
@@ -252,6 +301,15 @@ class LigoMqttBridge(Node):
         except Exception as exc:
             self._mqtt_connected = False
             self.get_logger().warn(f"MQTT publish 실패: {exc}")
+
+    def _publish_raw(self, topic: str, raw_payload: bytes) -> None:
+        if not self._mqtt_connected:
+            return
+        try:
+            self._mqtt.publish(topic, raw_payload, qos=0, retain=False)
+        except Exception as exc:
+            self._mqtt_connected = False
+            self.get_logger().warn(f"MQTT raw publish 실패: {exc}")
 
     def _publish_position(self) -> None:
         self._publish_json(
@@ -279,6 +337,12 @@ class LigoMqttBridge(Node):
                 "status": self.icp_status_text,
             },
         )
+
+    def _publish_ligo_mode(self) -> None:
+        # 연결 직후 토픽 존재 확인을 위해 1회 발행.
+        # /ligo/mode를 아직 못 받았으면 mode=null 상태를 보낸다.
+        payload = self._last_ligo_mode_payload if self._last_ligo_mode_payload is not None else {"mode": None}
+        self._publish_json(self.mqtt_topic_ligo_mode, payload)
 
 
 def main() -> None:
