@@ -9,17 +9,28 @@ MQTT 전송: ``mqtt_publish(TOPIC_LIGO_MODE, {"mode": "indoor", "pcd_name": "...
 
 의존성: pip install paho-mqtt, ROS 2 rclpy
 
-브로커 주소 (기본은 로컬 ``127.0.0.1:1883`` TCP)::
-
-    # 기본값 그대로 = 로컬 mosquitto
-    # 원격 WebSocket 예:
-    export MQTT_BROKER_HOST=rms.bottle-tak.com MQTT_BROKER_PORT=80 MQTT_TRANSPORT=websockets MQTT_WS_PATH=/mqtt
-
 ---------------------------------------------------------------------------
-터미널에서 MQTT 구독해 보기 (로컬)
+터미널에서 MQTT 구독해 보기
 ---------------------------------------------------------------------------
 
-    mosquitto_sub -h 127.0.0.1 -p 1883 -t 'nav1/mode' -v
+1) 브로커가 **일반 TCP**(예: 1883) 인 경우::
+
+    mosquitto_sub -h rms.bottle-tak.com -p 1883 -t 'nav1/mode' -v
+
+2) 이 스크립트와 동일 **WebSocket**(80, ``/mqtt``) 인 경우 (paho-mqtt)::
+
+    python3 -c "
+    import paho.mqtt.client as mqtt
+    def on_connect(c, u, f, rc, p=None):
+        if rc==0: c.subscribe('nav1/mode', qos=1)
+    def on_message(c, u, m):
+        print(m.topic, m.payload.decode('utf-8', errors='replace'), flush=True)
+    cli = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION1, transport='websockets')
+    cli.ws_set_options(path='/mqtt')
+    cli.on_connect, cli.on_message = on_connect, on_message
+    cli.connect('rms.bottle-tak.com', 80)
+    cli.loop_forever()
+    "
 
 토픽 이름은 스크립트 안 ``TOPIC_LIGO_MODE`` 와 맞출 것 (기본 ``nav1/mode``).
 """
@@ -27,7 +38,6 @@ MQTT 전송: ``mqtt_publish(TOPIC_LIGO_MODE, {"mode": "indoor", "pcd_name": "...
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 import threading
@@ -41,14 +51,12 @@ from std_msgs.msg import String
 
 
 # =============================================================================
-# 브로커 (기본: 로컬 mosquitto TCP). 원격은 환경변수로 전환.
-#   export MQTT_BROKER_HOST=rms.bottle-tak.com MQTT_BROKER_PORT=80 MQTT_TRANSPORT=websockets MQTT_WS_PATH=/mqtt
+# 브로커 (WebSocket)
 # =============================================================================
 
-MQTT_HOST = os.environ.get("MQTT_BROKER_HOST", "127.0.0.1")
-MQTT_PORT = int(os.environ.get("MQTT_BROKER_PORT", "1883"))
-MQTT_TRANSPORT = os.environ.get("MQTT_TRANSPORT", "tcp").strip().lower()
-WS_PATH = os.environ.get("MQTT_WS_PATH", "/mqtt")
+MQTT_HOST = "rms.bottle-tak.com"
+MQTT_PORT = 80
+WS_PATH = "/mqtt"
 
 MQTT_RECONNECT_MIN_DELAY = 1
 MQTT_RECONNECT_MAX_DELAY = 60
@@ -129,22 +137,20 @@ def ligo_mode_payload_for_mqtt(ros_obj: dict) -> dict:
 
 
 def _make_mqtt_client() -> mqtt.Client:
-    transport = "websockets" if MQTT_TRANSPORT in ("ws", "websocket", "websockets") else "tcp"
     try:
         return mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
-            transport=transport,
+            transport="websockets",
         )
     except AttributeError:
-        return mqtt.Client(transport=transport)
+        return mqtt.Client(transport="websockets")
 
 
 def mqtt_on_connect(client: mqtt.Client, userdata, flags, rc, properties=None):
     if rc != 0:
         print(f"[MQTT] 연결 실패 rc={rc}", file=sys.stderr, flush=True)
         return
-    kind = "WebSocket" if MQTT_TRANSPORT in ("ws", "websocket", "websockets") else "TCP"
-    print(f"[MQTT] {kind} 연결 ({MQTT_HOST}:{MQTT_PORT})", flush=True)
+    print("[MQTT] WebSocket 연결", flush=True)
     for t in MQTT_SUBSCRIBE_TOPICS:
         client.subscribe(t, qos=1)
 
@@ -161,8 +167,7 @@ def mqtt_on_disconnect(client: mqtt.Client, userdata, *rest):
 def start_mqtt_loop() -> None:
     global mqtt_client
     mqtt_client = _make_mqtt_client()
-    if MQTT_TRANSPORT in ("ws", "websocket", "websockets"):
-        mqtt_client.ws_set_options(path=WS_PATH)
+    mqtt_client.ws_set_options(path=WS_PATH)
     mqtt_client.reconnect_delay_set(MQTT_RECONNECT_MIN_DELAY, MQTT_RECONNECT_MAX_DELAY)
     mqtt_client.on_connect = mqtt_on_connect
     mqtt_client.on_message = mqtt_on_message
@@ -248,11 +253,8 @@ def main() -> int:
 
     rclpy.init()
     print(f"[mqtt_ws_client] 스크립트: {Path(__file__).resolve()}", flush=True)
-    print(
-        f"[mqtt_ws_client] MQTT 브로커 {MQTT_HOST}:{MQTT_PORT} transport={MQTT_TRANSPORT!r}",
-        flush=True,
-    )
-    print(f"[mqtt_ws_client] ROS {ROS_TOPIC_LIGO_MODE}  →  MQTT {TOPIC_LIGO_MODE}", flush=True)
+    print(f"[mqtt_ws_client] MQTT {MQTT_HOST}:{MQTT_PORT} WS{WS_PATH}  →  topic {TOPIC_LIGO_MODE}", flush=True)
+    print(f"[mqtt_ws_client] ROS {ROS_TOPIC_LIGO_MODE}  →  MQTT publish", flush=True)
     node = RosTap()
     try:
         rclpy.spin(node)
