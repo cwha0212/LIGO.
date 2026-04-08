@@ -45,6 +45,7 @@
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <pcl_conversions/pcl_conversions.h>
@@ -77,6 +78,7 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include <limits>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
@@ -142,6 +144,34 @@ static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odom
     return msg->pose.covariance[0] <= threshold &&
            msg->pose.covariance[7] <= threshold &&
            msg->pose.covariance[14] <= threshold;
+}
+
+static std::string ligo_json_escape(const std::string &s)
+{
+    std::string o;
+    o.reserve(s.size() + 8);
+    for (unsigned char uc : s)
+    {
+        const char c = static_cast<char>(uc);
+        switch (c)
+        {
+        case '\\':
+            o += "\\\\";
+            break;
+        case '"':
+            o += "\\\"";
+            break;
+        case '\n':
+            o += "\\n";
+            break;
+        case '\r':
+            o += "\\r";
+            break;
+        default:
+            o += c;
+        }
+    }
+    return o;
 }
 
 static int nmea_outdoor_good_streak = 0;
@@ -1714,6 +1744,9 @@ int main(int argc, char** argv)
 #endif
     auto pubOdomAftMapped = node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_to_init", qos_pub);
     auto pubPath = node->create_publisher<nav_msgs::msg::Path>("/path", qos_pub);
+    // indoor/outdoor 전환 시에만 JSON publish (MQTT 브리지는 /ligo/mode 구독 → MQTT nav1/mode 등으로 별도 토픽)
+    auto pubLigoMode = node->create_publisher<std_msgs::msg::String>(
+        "/ligo/mode", rclcpp::QoS(10).transient_local());
     auto pubNmeaAlignedOdom = node->create_publisher<nav_msgs::msg::Odometry>("/nmea_aligned_to_init", qos_pub);
     auto pubNmeaAlignedPath = node->create_publisher<nav_msgs::msg::Path>("/nmea_aligned_path", qos_pub);
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pubNmeaLioErrorXy;
@@ -2074,7 +2107,7 @@ int main(int argc, char** argv)
                     kf_output.x_.acc = - rot_init.transpose() * kf_output.x_.gravity;
                 }
                 else{
-                continue;}
+                goto after_sync_packages;}
             }
             /*** initialize the map ***/
             if(!init_map && !nolidar && !lose_lid)
@@ -2102,7 +2135,7 @@ int main(int argc, char** argv)
                     init_map = true;
                     if (NMEA_ENABLE) traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
                 }
-                continue;
+                goto after_sync_packages;
             }
 
             /*** ICP and Kalman filter update ***/
@@ -3061,6 +3094,46 @@ int main(int argc, char** argv)
                 }
             }
         }
+after_sync_packages:
+        {
+            const bool cur_dyn = indoor_flag_dynamic;
+            static bool mode_edge_init = false;
+            static bool mode_prev_dyn = false;
+            if (!mode_edge_init)
+            {
+                mode_edge_init = true;
+                mode_prev_dyn = cur_dyn;
+            }
+            else if (cur_dyn != mode_prev_dyn)
+            {
+                std_msgs::msg::String sm;
+                if (cur_dyn)
+                {
+                    // 파일명만 전달. indoor.map_pcd_path 미설정 시 그리드/GICP가 실제 로드한 PCD 경로 사용.
+                    std::string pcd_name;
+                    if (!indoor_map_pcd_path.empty())
+                    {
+                        pcd_name = std::filesystem::path(indoor_map_pcd_path).filename().string();
+                    }
+#if defined(LIGO_WITH_SMALL_GICP)
+                    if (pcd_name.empty())
+                    {
+                        const std::string resolved = ligo::indoor::getIndoorGicpMapPath();
+                        if (!resolved.empty())
+                            pcd_name = std::filesystem::path(resolved).filename().string();
+                    }
+#endif
+                    sm.data = std::string("{\"mode\":\"indoor\",\"pcd_name\":\"") + ligo_json_escape(pcd_name) + "\"}";
+                }
+                else
+                {
+                    sm.data = "{\"mode\":\"outdoor\"}";
+                }
+                pubLigoMode->publish(sm);
+                RCLCPP_WARN(node->get_logger(), "[ligo/mode] %s", cur_dyn ? "indoor" : "outdoor");
+                mode_prev_dyn = cur_dyn;
+            }
+        }
         loop_rate.sleep();
     }
     // Tear down ROS entities before context shutdown to avoid late publish during destruction.
@@ -3075,6 +3148,7 @@ int main(int argc, char** argv)
     pubLaserCloudMap.reset();
     pubOdomAftMapped.reset();
     pubPath.reset();
+    pubLigoMode.reset();
     pubNmeaAlignedOdom.reset();
     pubNmeaAlignedPath.reset();
     pubNmeaLioErrorXy.reset();
