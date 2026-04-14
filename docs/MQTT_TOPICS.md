@@ -9,9 +9,9 @@
 |-----------|-----------------|
 | `{prefix}/position` | 위도·경도 |
 | `{prefix}/heading` | 북 기준 시계방향 방위각(도)·16방위 문자열 |
-| `{prefix}/gps` | GPS 신호 3단계·NTRIP 근사 여부 |
+| `{prefix}/gps` | GPS 신호 3단계·NTRIP(RTK) 접속 여부 |
 | `{prefix}/init_heading_icp` | 초기 heading 정합 성공/상태 |
-| `{prefix}/ligo_mode` (기본 `navi1/ligo_mode`) | `/ligo/mode` JSON 축약 전달 |
+| `{prefix}/ligo_mode` (기본 `navi1/ligo_mode`) | indoor, outdoor 및 지도 이름 |
 
 ---
 
@@ -56,7 +56,7 @@
 |------|------|------|
 | `timestamp_unix` | float | 발행 시각(Unix 초) |
 | `status` | string \| null | `신호없음` \| `신호미약` \| `신호정상` |
-| `ntrip_connected` | bool \| null | 차분/캐리어 솔루션 기반 NTRIP 근사 |
+| `ntrip_connected` | bool \| null |  NTRIP(RTK) 접속 여부 |
 
 상태 판정:
 - `valid_fix == false` 또는 `fix_type == 0` → `신호없음`
@@ -81,8 +81,3 @@
 - JSON 파싱 실패 시 원문 바이트 그대로 publish
 
 ---
-
-## 참고
-
-- 자세한 파라미터/예시는 `docs/mqtt_payload_spec.md`
-- 실제 동작이 문서와 다르면 `scripts/ligo_topic_to_mqtt.py`를 우선 기준으로 본다.

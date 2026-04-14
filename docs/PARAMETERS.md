@@ -76,7 +76,7 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 | `gnss_extrinsic_T`, `gnss_extrinsic_R` | 안테나(GNSS 수신기 기준점)–IMU 외부표정; `NMEA_ENABLE`일 때 `laserMapping.cpp`에서 `p_nmea->Tex_imu_r` / `Rex_imu_r`에 반영 | |
 | `nolidar` | LiDAR 없이 GNSS만 (특수 모드) | ✓ |
 
-## `nmea.*` (`LIGO_WITH_NMEA` 빌드 시)
+## `nmea.*`
 
 | 키 | 설명 |
 |----|------|
@@ -96,7 +96,7 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 
 ## `indoor.*`
 
-실내 플래그, 그리드 맵 경로, GICP 임계·복셀·반복 횟수, GTSAM 실내 포즈 노이즈 등. `indoor.grid_map_dir`은 상대 경로일 때 패키지 소스 또는 `share/ligo`로 해석된다. 실내 scan-to-map GICP는 **`ligo_mapping` + `LIGO_WITH_SMALL_GICP` 빌드**에서 C++로 수행한다 (별도 Python 노드 없음).
+실내 플래그, 그리드 맵 경로, GICP 임계·복셀·반복 횟수, GTSAM 실내 포즈 노이즈 등. `indoor.grid_map_dir`은 상대 경로일 때 패키지 소스 또는 `share/ligo`로 해석된다. 실내 scan-to-map GICP는 **`ligo_mapping`** 바이너리에서 C++로 수행한다 (별도 Python 노드 없음).
 
 ## 루트 파라미터 (YAML에 평탄하게 둘 수 있음)
 

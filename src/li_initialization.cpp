@@ -37,20 +37,15 @@
 #include "li_initialization.h"
 #include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
-#ifdef LIGO_WITH_NMEA
 #include <gnss_comm/gnss_utility.hpp>
-#endif
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <fstream>
-#ifdef LIGO_WITH_SMALL_GICP
 #include "Indoor_Processing.h"
-#endif
 
 static rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr g_nmea_stamp_diag_pub;
 
 void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> node)
 {
-#ifdef LIGO_WITH_NMEA
     if (!node)
         return;
     if (!NMEA_ENABLE || !nmea_publish_stamp_diag || nmea_input_type != std::string("navsatfix"))
@@ -60,7 +55,6 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
     RCLCPP_INFO(node->get_logger(),
                 "NMEA stamp diag: publishing on /ligo/nmea_stamp_diag "
                 "(raw, stamp_in_buf, last_lidar, offset_sec, offset_inited)");
-#endif
 }
 
 void ligo_reset_nmea_stamp_diag_publisher()
@@ -87,9 +81,6 @@ Eigen::Vector3d first_gps_ecef;
 
 void ligo_apply_fixed_nmea_anchor_if_configured()
 {
-#if !defined(LIGO_WITH_NMEA)
-    return;
-#else
     if (!NMEA_ENABLE || !nmea_use_fixed_anchor)
         return;
 
@@ -120,14 +111,11 @@ void ligo_apply_fixed_nmea_anchor_if_configured()
     nmea_global_anchor_lla = first_gps_lla;
     nmea_global_anchor_ready = true;
     first_gps = true;
-#ifdef LIGO_WITH_SMALL_GICP
     ligo::indoor::setSystemEcefAnchor(gnss_comm::geo2ecef(first_gps_lla), gnss_comm::geo2rotation(first_gps_lla));
-#endif
     RCLCPP_INFO(rclcpp::get_logger("ligo"),
                 "[nmea] fixed ENU anchor: LLA=(%.9f, %.9f, %.3f) deg,m  ECEF=(%.3f, %.3f, %.3f) m — NavSatFix will not re-seat anchor",
                 first_gps_lla.x(), first_gps_lla.y(), first_gps_lla.z(), first_gps_ecef.x(), first_gps_ecef.y(),
                 first_gps_ecef.z());
-#endif
 }
 
 condition_variable sig_buffer;
@@ -141,7 +129,6 @@ std::deque<double>               time_buffer;
 std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_deque;
 std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_buf;
 
-#ifdef LIGO_WITH_NMEA
 void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg)
 {
     nav_msgs::msg::Odometry::SharedPtr nmea_meas = std::make_shared<nav_msgs::msg::Odometry>(*meas_msg);
@@ -185,11 +172,9 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         first_gps_ecef = gnss_comm::geo2ecef(geo);
         nmea_global_anchor_lla = first_gps_lla;
         nmea_global_anchor_ready = true;
-#ifdef LIGO_WITH_SMALL_GICP
         ligo::indoor::setSystemEcefAnchor(
             gnss_comm::geo2ecef(first_gps_lla),
             gnss_comm::geo2rotation(first_gps_lla));
-#endif
     }
     Eigen::Vector3d cur_ecef = gnss_comm::geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
     trans_local_ = gnss_comm::ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);
@@ -261,7 +246,6 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
       }
     }
 }
-#endif  // LIGO_WITH_NMEA
 
 void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {

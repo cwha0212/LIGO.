@@ -19,7 +19,7 @@
 | `/nmea_aligned_path` | `nav_msgs/Path` | `NMEA_ENABLE` |
 | `/ligo/nmea_lio_error_xy` | `std_msgs/Float64` | `NMEA_ENABLE`, ICP 후 융합 시 RMSE |
 | `/ligo/nmea_03m_diag` | `std_msgs/Float64MultiArray` | `NMEA_ENABLE`, 0.3m 진단 1회 |
-| `/ligo/nmea_heading_align_status` | `ligo/NmeaHeadingAlignStatus` | `NMEA_ENABLE` + NMEA 빌드(`LIGO_WITH_NMEA`) |
+| `/ligo/nmea_heading_align_status` | `ligo/NmeaHeadingAlignStatus` | `NMEA_ENABLE` |
 | `/ligo/enu_position` | `geometry_msgs/PointStamped` | `NMEA_ENABLE`, 파라미터로 토픽명 변경 가능 |
 | `/ligo/global_position` | `sensor_msgs/NavSatFix` | 동일 |
 | `/ligo/ecef_position` | `geometry_msgs/PointStamped` | 동일 |
@@ -28,7 +28,7 @@
 | `/icp_pairs_marker` | `visualization_msgs/Marker` | `NMEA_ENABLE`, 여러 namespace |
 | `/init_pairs_from_gps_move_marker` | `visualization_msgs/Marker` | 초기화 시각화 |
 | `/planner_normal` | `visualization_msgs/Marker` | 퍼블리셔만 생성, **현재 `publish` 호출 없음** |
-| `/indoor/map_cloud` | `sensor_msgs/PointCloud2` | `LIGO_WITH_SMALL_GICP`, latched QoS |
+| `/indoor/map_cloud` | `sensor_msgs/PointCloud2` | latched QoS |
 | `/indoor/map_2d` | `nav_msgs/OccupancyGrid` | 동일, PGM 그리드 있을 때 |
 | `/indoor/aligned_scan` | `sensor_msgs/PointCloud2` | 실내 GICP 시각화 시 |
 
@@ -97,7 +97,7 @@
 
 ---
 
-## 7. 실내 Small GICP (`LIGO_WITH_SMALL_GICP`)
+## 7. 실내 Small GICP
 
 맵 로드·실내 세션 시 지도/정합 스캔을 내보낸다. 맵 클라우드·2D 그리드는 **latched** QoS.
 
@@ -124,8 +124,6 @@
 
 | 플래그 | 영향 |
 |--------|------|
-| `LIGO_WITH_NMEA` | NMEA 처리·GNSS 토픽·`ligo/NmeaHeadingAlignStatus` 등 |
-| `LIGO_WITH_SMALL_GICP` | `/indoor/*` 맵·스캔 발행 |
 | `NMEA_ENABLE` (런타임 파라미터) | 위 표에서 “`NMEA_ENABLE`”이 붙은 토픽 실제 사용 |
 
 ---

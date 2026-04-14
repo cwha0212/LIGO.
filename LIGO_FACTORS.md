@@ -319,7 +319,7 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 - launch: `[launch/mapping_avia.launch.py](launch/mapping_avia.launch.py)`
 - 설정: `[config/avia.yaml](config/avia.yaml)`
-- 조건: `nmea.nmea_enable=true`(`LIGO_WITH_NMEA` 빌드).
+- 조건: `nmea.nmea_enable=true`.
 
 ### 8.1 실행 경로 요약
 

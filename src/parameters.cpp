@@ -35,9 +35,7 @@
  */
 
 #include "parameters.h"
-#ifdef LIGO_WITH_NMEA
 #include "li_initialization.h"
-#endif
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <fstream>
 #include <filesystem>
@@ -135,14 +133,12 @@ std::string ecef_position_topic = "/ligo/ecef_position";
 std::string ecef_position_frame_id = "ecef";
 bool nmea_global_anchor_ready = false;
 Eigen::Vector3d nmea_global_anchor_lla = Eigen::Vector3d::Zero();
-#ifdef LIGO_WITH_NMEA
 bool nmea_last_raw_lla_valid = false;
 Eigen::Vector3d nmea_last_raw_lla = Eigen::Vector3d::Zero();
 bool nmea_use_fixed_anchor = false;
 std::vector<double> nmea_fixed_anchor_lla_deg;
 bool nmea_force_indoor_on_high_cov = true;
 double nmea_indoor_high_cov_threshold = 50.0;
-#endif
 bool update_nmea = false;
 bool time_diff_valid = false, is_first_nmea;
 double last_nmea_time = -1;
@@ -272,9 +268,6 @@ void readParameters(rclcpp::Node * node)
   if (pcd_save_grid2d_resolution_m <= 0.0)
     pcd_save_grid2d_resolution_m = static_cast<double>(ivox_options_.resolution_);
   p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
-#ifndef LIGO_WITH_NMEA
-  NMEA_ENABLE = false;
-#else
   time_diff_valid = true;
   ppp_fname = get_param("nmea.ppp_file_name", std::string("TST.pos"));
   NMEA_ENABLE = get_param("nmea.nmea_enable", false);
@@ -370,7 +363,6 @@ void readParameters(rclcpp::Node * node)
     if (indoor_gicp_factor_sqrt_info_scale < 1e-9) indoor_gicp_factor_sqrt_info_scale = 1e-9;
     cout << "indoor.gicp_factor_sqrt_info_scale: " << indoor_gicp_factor_sqrt_info_scale << endl;
   }
-#endif
 }
 
 Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &rot) 
@@ -397,7 +389,6 @@ Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &rot)
 void open_file()
 {
     fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),ios::out);
-#ifdef LIGO_WITH_NMEA
     if (NMEA_ENABLE)
     {
         fout_global.open(DEBUG_FILE_DIR("pos_est.txt"), ios::out);
@@ -407,7 +398,6 @@ void open_file()
         fout_ppp.setf(ios::fixed, ios::floatfield);
         fout_ppp.precision(6);
     }
-#endif
     if (fout_out)
         cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
     else
@@ -417,7 +407,6 @@ void open_file()
 
 void cout_state_to_file_nmea()
 {
-#ifdef LIGO_WITH_NMEA
     {
         Eigen::Vector3d pos_enu;
         if (p_nmea->icp_tf_ready)
@@ -442,12 +431,10 @@ void cout_state_to_file_nmea()
         est_poses.push_back(pos_enu);
         time_frame.push_back(time_predict_last_const);
     }
-#endif
 }
 
 bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
 {
-#ifdef LIGO_WITH_NMEA
     if (!NMEA_ENABLE || !p_nmea)
         return false;
     // Same map-ENU as /aft_mapped_to_init during outdoor re-align gap (nmea_ready false, old ICP retained).
@@ -473,15 +460,10 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
         pos_enu = kf_output.x_.rot * p_nmea->Tex_imu_r + kf_output.x_.pos;
     }
     return true;
-#else
-    (void)pos_enu;
-    return false;
-#endif
 }
 
 bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla)
 {
-#ifdef LIGO_WITH_NMEA
     Eigen::Vector3d p_enu;
     if (!compute_fused_imu_position_enu(p_enu))
         return false;
@@ -493,15 +475,10 @@ bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla)
     const Eigen::Vector3d p_ecef = anchor_ecef + R_ecef_enu * p_enu;
     out_lla = gnss_comm::ecef2geo(p_ecef);
     return true;
-#else
-    (void)out_lla;
-    return false;
-#endif
 }
 
 bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef)
 {
-#ifdef LIGO_WITH_NMEA
     Eigen::Vector3d p_enu;
     if (!compute_fused_imu_position_enu(p_enu))
         return false;
@@ -512,13 +489,8 @@ bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef)
     const Eigen::Matrix3d R_ecef_enu = gnss_comm::geo2rotation(nmea_global_anchor_lla);
     out_ecef = anchor_ecef + R_ecef_enu * p_enu;
     return true;
-#else
-    (void)out_ecef;
-    return false;
-#endif
 }
 
-#ifdef LIGO_WITH_NMEA
 namespace {
 /** Raw GNSS ENU (not fused LIO): NavSatFix→ENU if anchor ready, else last Odometry ENU sample. */
 static bool compute_prealign_gnss_enu(Eigen::Vector3d &pos_enu)
@@ -593,7 +565,6 @@ bool compute_ligo_global_topic_ecef(Eigen::Vector3d &out_ecef)
     out_ecef = anchor_ecef + R_ecef_enu * p_enu;
     return true;
 }
-#endif
 
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output)
 {

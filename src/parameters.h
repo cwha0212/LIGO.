@@ -40,16 +40,10 @@
 #include <Eigen/Core>
 #include <cstring>
 #include "preprocess.h"
-#ifdef LIGO_WITH_NMEA
 #include "NMEA_Processing_fg.h"
-#else
-#include "ligo_gnss_nmea_stub.h"
-#endif
 #include "IMU_Processing.h"
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
-#ifdef LIGO_WITH_NMEA
 #include <nav_msgs/msg/odometry.hpp>
-#endif
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <mutex>
@@ -125,7 +119,6 @@ extern std::string ecef_position_topic;
 extern std::string ecef_position_frame_id;
 extern bool nmea_global_anchor_ready;
 extern Eigen::Vector3d nmea_global_anchor_lla;
-#ifdef LIGO_WITH_NMEA
 /** Latest GNSS odometry sample (front of fusion queue); used for pre-ICP position topics. */
 extern nav_msgs::msg::Odometry::SharedPtr nmea_cur;
 /** Set in gpsHandler from NavSatFix lat/lon/alt (deg, deg, m). */
@@ -137,7 +130,6 @@ extern std::vector<double> nmea_fixed_anchor_lla_deg;
 /** If true, high NMEA covariance can trigger indoor reloc path (see nmea.indoor_high_cov_threshold). */
 extern bool nmea_force_indoor_on_high_cov;
 extern double nmea_indoor_high_cov_threshold;
-#endif
 extern double gnss_ekf_noise;
 extern bool update_nmea;
 extern bool time_diff_valid, is_first_nmea;
@@ -192,7 +184,6 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu);
 bool compute_fused_imu_position_geo(Eigen::Vector3d &out_lla);
 /** WGS84 ECEF (m) from fused ENU + anchor. False if no anchor data. */
 bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef);
-#ifdef LIGO_WITH_NMEA
 /**
  * ENU position for /ligo/enu_position: fused LIO when ready, else raw GNSS (NavSatFix→ENU or Odometry ENU)
  * before initial heading ICP.
@@ -200,5 +191,4 @@ bool compute_fused_imu_position_ecef(Eigen::Vector3d &out_ecef);
 bool compute_ligo_global_topic_enu(Eigen::Vector3d &pos_enu);
 bool compute_ligo_global_topic_geo(Eigen::Vector3d &out_lla);
 bool compute_ligo_global_topic_ecef(Eigen::Vector3d &out_ecef);
-#endif
 void reset_cov_output(Eigen::Matrix<double, 24, 24> & P_init_output);

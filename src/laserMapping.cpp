@@ -56,21 +56,15 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#ifdef LIGO_WITH_SMALL_GICP
 #include <atomic>
-#endif
 #include "li_initialization.h"
-#ifdef LIGO_WITH_NMEA
 #include <ligo/msg/nmea_heading_align_status.hpp>
-#endif
 
 /** Implemented in li_initialization.cpp (not declared in li_initialization.h to avoid include-order / GTSAM issues). */
 void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> node);
 
 #include "Indoor_Processing.h"
-#ifdef LIGO_WITH_SMALL_GICP
 #include "Indoor_GridMapRegistry.h"
-#endif
 #include <malloc.h>
 #include <fstream>
 #include <cmath>
@@ -82,7 +76,6 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
-#include <atomic>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
 #define PUBFRAME_PERIOD     (20)
@@ -107,10 +100,8 @@ double indoor_reloc_pose_time = 0.0;
 Eigen::Vector3d last_good_gnss_ecef       = Eigen::Vector3d::Zero();
 bool            last_good_gnss_ecef_valid = false;
 
-#ifdef LIGO_WITH_SMALL_GICP
 /** Set by /ligo/indoor_mode true; main loop snaps LIO→ENU anchor then clears. */
 static std::atomic<bool> g_pending_indoor_topic_snap{false};
-#endif
 
 //surf feature in map
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
@@ -136,7 +127,6 @@ static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr
            msg->pose.covariance[14] >= threshold;
 }
 
-#ifdef LIGO_WITH_NMEA
 // Matches NMEAProcess::processNMEA gate for collecting alignment window (reject if any diagonal > thr).
 static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
                                                         double threshold)
@@ -199,9 +189,7 @@ static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odome
                     nmea_outdoor_good_streak);
         p_nmea->ResetGraphClearingInitRetainIcp();
         indoor_flag_dynamic = false;
-#ifdef LIGO_WITH_SMALL_GICP
         ligo::indoor::resetIndoorGICP();
-#endif
         nmea_cycle_reopen_pending = true;
         nmea_outdoor_good_streak = 0;
     }
@@ -215,14 +203,11 @@ static void nmeaClearCycleIfRealignComplete()
     nmea_cycle_reopen_pending = false;
     nmea_outdoor_good_streak = 0;
     indoor_flag_dynamic = false;
-#ifdef LIGO_WITH_SMALL_GICP
     ligo::indoor::resetIndoorGICP();
-#endif
     pending_outdoor_realign_ivox_reset.store(true, std::memory_order_release);
     RCLCPP_INFO(rclcpp::get_logger("ligo"),
                 "Outdoor re-align complete: scheduling deferred IVox/traj reset; indoor GICP cleared");
 }
-#endif
 
 void pointBodyLidarToIMU(PointType const * const pi, PointType * const po)
 {
@@ -652,7 +637,6 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
 
         PointCloudXYZI::Ptr   laserCloudWorld(new PointCloudXYZI(size, 1));
         bool use_enu_for_pub = false;
-#ifdef LIGO_WITH_NMEA
         use_enu_for_pub = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
         Eigen::Matrix3d R_local_to_enu = Eigen::Matrix3d::Identity();
         Eigen::Vector3d t_local_to_enu = Eigen::Vector3d::Zero();
@@ -661,7 +645,6 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
             R_local_to_enu = p_nmea->icp_R_local_to_enu;
             t_local_to_enu = p_nmea->icp_t_local_to_enu;
         }
-#endif
         
         for (int i = 0; i < size; i++)
         {
@@ -669,11 +652,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 feats_down_world->points[i].x,
                 feats_down_world->points[i].y,
                 feats_down_world->points[i].z);
-#ifdef LIGO_WITH_NMEA
             const Eigen::Vector3d p_pub = use_enu_for_pub ? (R_local_to_enu * p_local + t_local_to_enu) : p_local;
-#else
-            const Eigen::Vector3d p_pub = p_local;
-#endif
             laserCloudWorld->points[i].x = p_pub.x();
             laserCloudWorld->points[i].y = p_pub.y();
             laserCloudWorld->points[i].z = p_pub.z();
@@ -694,7 +673,6 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
     /* 2. noted that pcd save will influence the real-time performences **/
     if (mapping_mode)
     {
-#ifdef LIGO_WITH_NMEA
         if (NMEA_ENABLE && p_nmea)
         {
             static int scan_wait_num = 0;
@@ -758,7 +736,6 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
             }
         }
         else
-#endif
         {
             int size = points_num;
             PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
@@ -829,7 +806,6 @@ void set_posestamp(T & out)
 template<typename T>
 void set_posestamp_enu(T & out)
 {
-#ifdef LIGO_WITH_NMEA
     if (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready)
     {
         const Eigen::Vector3d p_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
@@ -844,11 +820,9 @@ void set_posestamp_enu(T & out)
         out.orientation.w = q.coeffs()[3];
         return;
     }
-#endif
     set_posestamp(out);
 }
 
-#ifdef LIGO_WITH_NMEA
 /** Same ENU pose as /aft_mapped_to_init when NMEA_ENABLE and icp_tf_ready (see set_posestamp_enu). */
 static bool ligo_fused_lio_pose_enu(Eigen::Vector3d &p_enu, Eigen::Matrix3d &R_enu)
 {
@@ -858,7 +832,6 @@ static bool ligo_fused_lio_pose_enu(Eigen::Vector3d &p_enu, Eigen::Matrix3d &R_e
     R_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.rot;
     return true;
 }
-#endif
 
 void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr & pubOdomAftMapped, tf2_ros::TransformBroadcaster & br)
 {
@@ -866,11 +839,7 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     {
         return;
     }
-#ifdef LIGO_WITH_NMEA
     const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
-#else
-    const bool use_enu = false;
-#endif
     odomAftMapped.header.frame_id = use_enu ? "map" : "camera_init";
     odomAftMapped.child_frame_id = "aft_mapped";
     if (publish_odometry_without_downsample)
@@ -895,7 +864,6 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     transform.transform.translation.z = odomAftMapped.pose.pose.position.z;
     transform.transform.rotation = odomAftMapped.pose.pose.orientation;
     br.sendTransform(transform);
-#ifdef LIGO_WITH_NMEA
     if (use_enu)
     {
         geometry_msgs::msg::TransformStamped tf_enu_cam;
@@ -914,13 +882,11 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
         tf_enu_cam.transform.rotation.w = q.coeffs()[3];
         br.sendTransform(tf_enu_cam);
     }
-#endif
 }
 
 static void try_publish_fused_enu_position(
     const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr &pubEnuPosition)
 {
-#ifdef LIGO_WITH_NMEA
     if (flg_exit || !rclcpp::ok())
         return;
     if (!pubEnuPosition)
@@ -938,15 +904,11 @@ static void try_publish_fused_enu_position(
     msg.point.y = p_enu(1);
     msg.point.z = p_enu(2);
     pubEnuPosition->publish(msg);
-#else
-    (void)pubEnuPosition;
-#endif
 }
 
 static void try_publish_fused_global_nav_sat(
     const rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr &pubGlobalFix)
 {
-#ifdef LIGO_WITH_NMEA
     if (flg_exit || !rclcpp::ok())
         return;
     if (!pubGlobalFix)
@@ -967,15 +929,11 @@ static void try_publish_fused_global_nav_sat(
     msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
     msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
     pubGlobalFix->publish(msg);
-#else
-    (void)pubGlobalFix;
-#endif
 }
 
 static void try_publish_fused_ecef_position(
     const rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr &pubEcefPosition)
 {
-#ifdef LIGO_WITH_NMEA
     if (flg_exit || !rclcpp::ok())
         return;
     if (!pubEcefPosition)
@@ -993,15 +951,11 @@ static void try_publish_fused_ecef_position(
     msg.point.y = p_ecef(1);
     msg.point.z = p_ecef(2);
     pubEcefPosition->publish(msg);
-#else
-    (void)pubEcefPosition;
-#endif
 }
 
 static void try_publish_nmea_graph_anchor_marker(
     const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub)
 {
-#ifdef LIGO_WITH_NMEA
     if (flg_exit || !rclcpp::ok() || !pub || !NMEA_ENABLE || !p_nmea)
         return;
     const double ts = publish_odometry_without_downsample ? time_current : lidar_end_time;
@@ -1042,9 +996,6 @@ static void try_publish_nmea_graph_anchor_marker(
     m.color.b = 1.0f;
     m.color.a = 0.82f;
     pub->publish(m);
-#else
-    (void)pub;
-#endif
 }
 
 void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
@@ -1053,11 +1004,7 @@ void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPat
     {
         return;
     }
-#ifdef LIGO_WITH_NMEA
     const bool use_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
-#else
-    const bool use_enu = false;
-#endif
     static bool was_enu = false;
     if (use_enu && !was_enu)
     {
@@ -1078,7 +1025,6 @@ void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPat
     }
 }
 
-#ifdef LIGO_WITH_NMEA
 /** Publishes LIO↔ENU initial heading / local→ENU alignment status (TIME-PAIR or indoor reloc). */
 static void publish_heading_align_status(
     const rclcpp::Publisher<ligo::msg::NmeaHeadingAlignStatus>::SharedPtr &pub,
@@ -1117,13 +1063,11 @@ static void publish_heading_align_status(
     msg.post_rmse_m = p_nmea->heading_align_post_rmse_m;
     pub->publish(msg);
 }
-#endif
 
 void publish_nmea_aligned(
     const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubNmeaAlignedOdom,
     const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubNmeaAlignedPath)
 {
-#ifdef LIGO_WITH_NMEA
     if (flg_exit || !rclcpp::ok())
     {
         return;
@@ -1195,7 +1139,6 @@ void publish_nmea_aligned(
         }
     }
     pubNmeaAlignedPath->publish(nmea_aligned_path);
-#endif
 }
 
 void publish_icp_pairs_marker(
@@ -1203,7 +1146,6 @@ void publish_icp_pairs_marker(
     const rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr &pubNmeaLioErrorXy,
     const rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr &pubNmea03mDiag)
 {
-#ifdef LIGO_WITH_NMEA
     if (flg_exit || !rclcpp::ok())
     {
         return;
@@ -1344,13 +1286,11 @@ void publish_icp_pairs_marker(
     }
     if (!gps_path_marker.points.empty())
         pubIcpPairs->publish(gps_path_marker);
-#endif
 }
 
 void publish_init_pairs_marker_from_gps_move(
     const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub)
 {
-#ifdef LIGO_WITH_NMEA
   if (flg_exit || !rclcpp::ok()) return;
   if (!NMEA_ENABLE || !p_nmea) return;
   if (!p_nmea->init_start_set || p_nmea->init_pos_buf.size() < 2 ||
@@ -1536,7 +1476,6 @@ void publish_init_pairs_marker_from_gps_move(
     gps_marker.points.push_back(pt);
   }
   pub->publish(gps_marker);
-#endif
 }
 
 int main(int argc, char** argv)
@@ -1575,7 +1514,6 @@ int main(int argc, char** argv)
 
     p_imu->lidar_type = p_pre->lidar_type = lidar_type;
     p_imu->imu_en = imu_en;
-#ifdef LIGO_WITH_NMEA
     if (NMEA_ENABLE)
     {
         p_nmea->Tex_imu_r << VEC_FROM_ARRAY(extrinT_gnss);
@@ -1584,8 +1522,6 @@ int main(int argc, char** argv)
         p_nmea->nolidar = nolidar;
         p_nmea->pre_integration->setnoise();
     }
-#endif
-#ifdef LIGO_WITH_SMALL_GICP
     // Load grid registry / reference PCD whenever paths are set (also mapping_mode: indoor_flag may be false).
     if (!indoor_grid_map_dir.empty() || !indoor_map_pcd_path.empty())
     {
@@ -1619,8 +1555,7 @@ int main(int argc, char** argv)
             ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
         }
     }
-#endif
-    // IMU uses h_dyn_share_modified_2; esekfom 2h does not assign slot 2 — always 3h (NMEA slot unused when !LIGO_WITH_NMEA / no NMEA updates).
+    // IMU uses h_dyn_share_modified_2; esekfom 2h does not assign slot 2 — always 3h (NMEA slot unused when NMEA_ENABLE is false / no NMEA updates).
     kf_output.init_dyn_share_modified_3h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output, h_model_NMEA_output);
     Eigen::Matrix<double, 24, 24> P_init_output; // = MD(24, 24)::Identity() * 0.01;
     reset_cov_output(P_init_output);
@@ -1637,9 +1572,7 @@ int main(int argc, char** argv)
         sub_pcl = node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, qos_lidar, standard_pcl_cbk);
     auto sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, qos_lidar, imu_cbk);
 
-#ifdef LIGO_WITH_NMEA
     rclcpp::SubscriptionBase::SharedPtr sub_nmea_meas;
-#endif
     #ifdef process_ppp
     PPPfromTXT(LOCAL_FILE_DIR(ppp_fname), ppp_sol, ppp_ecef);
     if (NMEA_ENABLE)
@@ -1652,11 +1585,9 @@ int main(int argc, char** argv)
             {
                 nmea_global_anchor_lla = first_lla_used;
                 nmea_global_anchor_ready = true;
-#ifdef LIGO_WITH_SMALL_GICP
                 ligo::indoor::setSystemEcefAnchor(
                     gnss_comm::geo2ecef(nmea_global_anchor_lla),
                     gnss_comm::geo2rotation(nmea_global_anchor_lla));
-#endif
             }
             for (int i = 0; i < ppp_sol.size(); i++)
             {
@@ -1679,7 +1610,6 @@ int main(int argc, char** argv)
         }
     }
     #endif
-#ifdef LIGO_WITH_NMEA
     if (NMEA_ENABLE)
     {
         rclcpp::QoS qos_nmea(10000);
@@ -1697,14 +1627,12 @@ int main(int argc, char** argv)
         }
         ligo_try_create_nmea_stamp_diag_publisher(node);
     }
-#endif
 
     rclcpp::QoS qos_pub(1000);
     auto pubLaserCloudFullRes = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", qos_pub);
     auto pubLaserCloudFullRes_body = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", qos_pub);
     auto pubLaserCloudEffect = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", qos_pub);
     auto pubLaserCloudMap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/Laser_map", qos_pub);
-#ifdef LIGO_WITH_SMALL_GICP
     rclcpp::QoS qos_latched = rclcpp::QoS(1).transient_local();
     auto pubIndoorMapCloud  = node->create_publisher<sensor_msgs::msg::PointCloud2>("/indoor/map_cloud", qos_latched);
     auto pubIndoorMap2d =
@@ -1722,26 +1650,18 @@ int main(int argc, char** argv)
                 if (was_indoor)
                 {
                     RCLCPP_INFO(rclcpp::get_logger("ligo"), "[indoor] dynamic indoor mode OFF");
-#ifdef LIGO_WITH_SMALL_GICP
                     ligo::indoor::resetIndoorGICP();
-#endif
                 }
                 return;
             }
             // Enter: do not set indoor_flag_dynamic here — reloc reset applies anchor then sets it true.
             if (!was_indoor)
             {
-#ifdef LIGO_WITH_NMEA
                 RCLCPP_INFO(rclcpp::get_logger("ligo"),
                             "[indoor] dynamic indoor mode ON (pending fused LIO→ENU snap on next lidar frame)");
                 g_pending_indoor_topic_snap = true;
-#else
-                RCLCPP_ERROR(rclcpp::get_logger("ligo"),
-                             "[indoor] /ligo/indoor_mode ignored: build without gnss_comm/NMEA cannot snap ENU anchor");
-#endif
             }
         });
-#endif
     auto pubOdomAftMapped = node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_to_init", qos_pub);
     auto pubPath = node->create_publisher<nav_msgs::msg::Path>("/path", qos_pub);
     // indoor/outdoor 전환 시에만 JSON publish (MQTT 브리지는 /ligo/mode 구독 → MQTT nav1/mode 등으로 별도 토픽)
@@ -1751,26 +1671,21 @@ int main(int argc, char** argv)
     auto pubNmeaAlignedPath = node->create_publisher<nav_msgs::msg::Path>("/nmea_aligned_path", qos_pub);
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pubNmeaLioErrorXy;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pubNmea03mDiag;
-#ifdef LIGO_WITH_NMEA
     rclcpp::Publisher<ligo::msg::NmeaHeadingAlignStatus>::SharedPtr pubHeadingAlignStatus;
-#endif
     if (NMEA_ENABLE)
     {
         pubNmeaLioErrorXy = node->create_publisher<std_msgs::msg::Float64>("/ligo/nmea_lio_error_xy", qos_pub);
         pubNmea03mDiag = node->create_publisher<std_msgs::msg::Float64MultiArray>("/ligo/nmea_03m_diag", qos_pub);
-#ifdef LIGO_WITH_NMEA
         pubHeadingAlignStatus =
             node->create_publisher<ligo::msg::NmeaHeadingAlignStatus>("/ligo/nmea_heading_align_status", qos_pub);
         RCLCPP_INFO(node->get_logger(),
                     "NMEA heading align status: topic=/ligo/nmea_heading_align_status "
                     "(STATUS: 0=UNALIGNED 1=COLLECTING 2=LOCKED; SOURCE: 0=NONE 1=TIME_PAIR 2=INDOOR_RELOC)");
-#endif
     }
     auto pubIcpPairs = node->create_publisher<visualization_msgs::msg::Marker>("/icp_pairs_marker", qos_pub);
     auto pubInitPairsFromGpsMove = node->create_publisher<visualization_msgs::msg::Marker>(
         "/init_pairs_from_gps_move_marker", qos_pub);
     auto plane_pub = node->create_publisher<visualization_msgs::msg::Marker>("/planner_normal", qos_pub);
-#ifdef LIGO_WITH_NMEA
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEcefPosition;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
@@ -1795,12 +1710,6 @@ int main(int argc, char** argv)
                     "NMEA graph anchor E(0) RViz: topic=/ligo/nmea_graph_anchor_marker frame_id=map "
                     "(Fixed Frame=map, magenta sphere ~4m)");
     }
-#else
-    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
-    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEcefPosition;
-    rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pubNmeaGraphAnchorMarker;
-#endif
 
     rclcpp::on_shutdown([]() {
         flg_exit = true;
@@ -1813,7 +1722,6 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
-#ifdef LIGO_WITH_NMEA
             if (pending_outdoor_realign_ivox_reset.exchange(false, std::memory_order_acq_rel))
             {
                 RCLCPP_WARN(rclcpp::get_logger("ligo"),
@@ -1825,8 +1733,6 @@ int main(int argc, char** argv)
                 traj_manager.reset(new curvefitter::TrajectoryManager<4>());
                 init_map = false;
             }
-#endif
-#if defined(LIGO_WITH_SMALL_GICP) && defined(LIGO_WITH_NMEA)
             if (g_pending_indoor_topic_snap.load(std::memory_order_acquire) && !flg_reset && !mapping_mode)
             {
                 if (ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
@@ -1849,7 +1755,6 @@ int main(int argc, char** argv)
                                          "(cannot snap to /aft_mapped_to_init ENU yet)");
                 }
             }
-#endif
             if (flg_reset)
             {
                 if (flg_reset_indoor_reloc)
@@ -1876,15 +1781,11 @@ int main(int argc, char** argv)
                         kf_output.x_ = state_out;
                         p_imu->imu_need_init_ = false;
                         p_imu->after_imu_init_ = true;
-#ifdef LIGO_WITH_NMEA
                         p_nmea->SetInitFromLocalization(indoor_reloc_pos_enu, indoor_reloc_rot_enu, kf_output.x_, indoor_reloc_pose_time);
-#endif
                         indoor_flag_dynamic = true;
-#ifdef LIGO_WITH_SMALL_GICP
                         // ECEF for grid→PCD: last good fix, else anchor + indoor ENU (same as before).
                         Eigen::Vector3d reloc_ecef = Eigen::Vector3d::Zero();
                         bool reloc_ecef_ok = false;
-#ifdef LIGO_WITH_NMEA
                         if (last_good_gnss_ecef_valid)
                         {
                             reloc_ecef = last_good_gnss_ecef;
@@ -1897,7 +1798,6 @@ int main(int argc, char** argv)
                             reloc_ecef = anc_ecef + R_ecef_enu * indoor_reloc_pos_enu;
                             reloc_ecef_ok = true;
                         }
-#endif
                         ligo::indoor::SmallGICPConfig session_gicp_cfg;
                         session_gicp_cfg.num_threads                  = 4;
                         session_gicp_cfg.map_downsampling_resolution  = indoor_gicp_map_voxel_m;
@@ -1971,7 +1871,6 @@ int main(int argc, char** argv)
                                     indoor_gicp_T_map_lidar.translation().z(),
                                     seed_src,
                                     ligo::indoor::getIndoorGicpMapPath().c_str());
-#if defined(LIGO_WITH_NMEA)
                         if (nmea_global_anchor_ready && ligo::indoor::indoorGridMapsLoaded())
                         {
                             if (auto gtf = ligo::indoor::getFirstGridMapTransform())
@@ -1999,8 +1898,6 @@ int main(int argc, char** argv)
                                 }
                             }
                         }
-#endif
-#endif
                     }
                     kf_output.change_P(P_init_output);
                 }
@@ -2170,13 +2067,11 @@ int main(int argc, char** argv)
                 /**** point by point update ****/
                 if (time_seq.size() > 0)
                 {
-#ifdef LIGO_WITH_NMEA
                     if (NMEA_ENABLE)
                     {
                         p_nmea->p_assign->process_feat_num += time_seq.size();
                         p_nmea->nolidar_cur = false;
                     }
-#endif
                 double pcl_beg_time = Measures.lidar_beg_time;
                 idx = -1;
                 for (k = 0; k < time_seq.size(); k++)
@@ -2206,10 +2101,8 @@ int main(int argc, char** argv)
                         }
                         if (NMEA_ENABLE)
                         {
-#ifdef LIGO_WITH_NMEA
                             p_nmea->p_assign->process_feat_num = 0;
                             p_nmea->norm_vec_num = 0;
-#endif
                         }
                         is_first_frame = false;
                         time_update_last = time_current;
@@ -2238,7 +2131,6 @@ int main(int argc, char** argv)
                         bool imu_comes = time_current >= rclcpp::Time(imu_next.header.stamp).seconds();
                         while (imu_comes) 
                         {
-#ifdef LIGO_WITH_NMEA
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {
                                 nmea_cur = p_nmea->nmea_msg.front();
@@ -2402,7 +2294,6 @@ int main(int argc, char** argv)
                                     }
                                 }
                             }
-#endif
                             if (flg_reset)
                             {
                                 break;
@@ -2434,7 +2325,6 @@ int main(int argc, char** argv)
                     {
                         break;
                     }
-#ifdef LIGO_WITH_NMEA
                     if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                     {
                         nmea_cur = p_nmea->nmea_msg.front();
@@ -2596,7 +2486,6 @@ int main(int argc, char** argv)
                             }
                         }
                     }
-#endif
                     if (flg_reset)
                     {
                         break;
@@ -2675,9 +2564,7 @@ int main(int argc, char** argv)
                 }
                 else
                 {
-#ifdef LIGO_WITH_NMEA
                     if (NMEA_ENABLE)  p_nmea->nolidar_cur = true;
-#endif
                     if (!imu_deque.empty())
                     { 
                         imu_last = imu_next;
@@ -2687,11 +2574,9 @@ int main(int argc, char** argv)
                     { // >= ?
                         if (is_first_frame)
                         {
-#ifdef LIGO_WITH_NMEA
                             if (!nolidar && NMEA_ENABLE)
                             {p_nmea->p_assign->process_feat_num = 0;
                             p_nmea->norm_vec_num = 0;}
-#endif
 
                             if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                             {
@@ -2745,13 +2630,11 @@ int main(int argc, char** argv)
                             time_update_last = time_current;
                             time_predict_last_const = time_current;
                             acc_avr_norm = acc_avr * G_m_s2 / acc_norm;
-#ifdef LIGO_WITH_NMEA
                             if (NMEA_ENABLE)
                             {
                             p_nmea->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
                             p_nmea->pre_integration->setacc0gyr0(acc_avr_norm, angvel_avr); 
                             }
-#endif
                             {
                                 is_first_frame = false;
                             }
@@ -2760,7 +2643,6 @@ int main(int argc, char** argv)
 
                         if (!is_first_frame)
                         {
-#ifdef LIGO_WITH_NMEA
                         if (!p_nmea->nmea_msg.empty() && NMEA_ENABLE)
                         {
                             nmea_cur = p_nmea->nmea_msg.front();
@@ -2945,7 +2827,6 @@ int main(int argc, char** argv)
                             }
                         }
                         }
-#endif
                         if (flg_reset)
                         {
                             break;
@@ -2959,9 +2840,7 @@ int main(int argc, char** argv)
                                 time_update_last = time_current;
                             }
                             // kf_output.predict(dt, Q_output, input_in, true, false);
-#ifdef LIGO_WITH_NMEA
                             if (NMEA_ENABLE)   p_nmea->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); // acc_avr_norm, angvel_avr); // 
-#endif
                         }
 
                         time_predict_last_const = time_current;
@@ -3003,7 +2882,6 @@ int main(int argc, char** argv)
                 MapIncremental();
             }
 
-#ifdef LIGO_WITH_SMALL_GICP
             // Grid-based map selection: only in an active indoor session (indoor_flag_dynamic)
             if (!mapping_mode && indoor_flag_dynamic && ligo::indoor::indoorGridMapsLoaded() &&
                 NMEA_ENABLE)
@@ -3015,7 +2893,6 @@ int main(int argc, char** argv)
                 }
             }
             // Indoor GICP first when possible so reference map can latch T^{-1} before first /indoor/map_cloud.
-#ifdef LIGO_WITH_NMEA
             if (!mapping_mode && indoor_flag_dynamic &&
                 indoor_gicp_map_loaded && p_nmea && p_nmea->icp_tf_ready &&
                 feats_down_world && !feats_down_world->empty())
@@ -3038,7 +2915,6 @@ int main(int argc, char** argv)
 
             }
             else
-#endif
             if (!mapping_mode && indoor_flag_dynamic && indoor_gicp_map_loaded)
             {
                 // No GICP this frame (no icp_tf / no feats): publish map without align deferral
@@ -3046,7 +2922,6 @@ int main(int argc, char** argv)
                 ligo::indoor::publishIndoorMapCloudOnly(pubIndoorMapCloud, lidar_end_time, pubIndoorMap2d,
                                                         defer_align);
             }
-#endif
 
             t5 = omp_get_wtime();
             if (log_lidar_frame_time_ms) {
@@ -3060,10 +2935,8 @@ int main(int argc, char** argv)
             {
                 publish_nmea_aligned(pubNmeaAlignedOdom, pubNmeaAlignedPath);
                 publish_icp_pairs_marker(pubIcpPairs, pubNmeaLioErrorXy, pubNmea03mDiag);
-#ifdef LIGO_WITH_NMEA
                 publish_heading_align_status(pubHeadingAlignStatus, lidar_end_time);
                 try_publish_nmea_graph_anchor_marker(pubNmeaGraphAnchorMarker);
-#endif
                 publish_init_pairs_marker_from_gps_move(pubInitPairsFromGpsMove);
                 if (path_en)                         publish_path(pubPath);
                 if (scan_pub_en || mapping_mode)      publish_frame_world(pubLaserCloudFullRes);
@@ -3079,11 +2952,7 @@ int main(int argc, char** argv)
                 {
                     {
                         {
-#ifdef LIGO_WITH_NMEA
                             Eigen::Vector3d pos_r = kf_output.x_.rot * p_nmea->Tex_imu_r + kf_output.x_.pos;
-#else
-                            Eigen::Vector3d pos_r = kf_output.x_.pos;
-#endif
                             time_frame.push_back(lidar_end_time); //(time_predict_last_const);
                             est_poses.push_back(pos_r);
                         }
@@ -3115,14 +2984,12 @@ after_sync_packages:
                     {
                         pcd_name = std::filesystem::path(indoor_map_pcd_path).filename().string();
                     }
-#if defined(LIGO_WITH_SMALL_GICP)
                     if (pcd_name.empty())
                     {
                         const std::string resolved = ligo::indoor::getIndoorGicpMapPath();
                         if (!resolved.empty())
                             pcd_name = std::filesystem::path(resolved).filename().string();
                     }
-#endif
                     sm.data = std::string("{\"mode\":\"indoor\",\"pcd_name\":\"") + ligo_json_escape(pcd_name) + "\"}";
                 }
                 else
@@ -3139,9 +3006,7 @@ after_sync_packages:
     // Tear down ROS entities before context shutdown to avoid late publish during destruction.
     sub_pcl.reset();
     sub_imu.reset();
-#ifdef LIGO_WITH_NMEA
     sub_nmea_meas.reset();
-#endif
     pubLaserCloudFullRes.reset();
     pubLaserCloudFullRes_body.reset();
     pubLaserCloudEffect.reset();
@@ -3153,20 +3018,16 @@ after_sync_packages:
     pubNmeaAlignedPath.reset();
     pubNmeaLioErrorXy.reset();
     pubNmea03mDiag.reset();
-#ifdef LIGO_WITH_NMEA
     pubHeadingAlignStatus.reset();
-#endif
     pubIcpPairs.reset();
     pubInitPairsFromGpsMove.reset();
     plane_pub.reset();
     pubEnuPosition.reset();
     pubEcefPosition.reset();
     pubGlobalNavSat.reset();
-#ifdef LIGO_WITH_SMALL_GICP
     pubIndoorMapCloud.reset();
     pubIndoorMap2d.reset();
     pubIndoorAlignedScan.reset();
-#endif
     ligo_reset_nmea_stamp_diag_publisher();
 
     fout_out.close();
@@ -3177,17 +3038,10 @@ after_sync_packages:
     {
         pcd_index++;
         string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
-#ifdef LIGO_WITH_NMEA
         const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
         const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? gnss_comm::ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
         const Eigen::Vector3d anchor_lla_deg_m = saved_in_enu ? first_gps_lla : Eigen::Vector3d::Zero();
-#else
-        const bool saved_in_enu = false;
-        const Eigen::Matrix3d R_ecef_enu = Eigen::Matrix3d::Identity();
-        const Eigen::Vector3d anchor_ecef_m = Eigen::Vector3d::Zero();
-        const Eigen::Vector3d anchor_lla_deg_m = Eigen::Vector3d::Zero();
-#endif
         cout << "current scan saved to " << all_points_dir << (saved_in_enu ? " (ENU)" : "") << endl;
         if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save) && saved_in_enu)
         {
@@ -3197,7 +3051,6 @@ after_sync_packages:
         }
     }
     {
-#ifdef LIGO_WITH_NMEA
         Eigen::Vector3d ref_ecef = first_pvt_used;
         Eigen::Vector3d ref_lla = first_lla_used;
         if (NMEA_ENABLE && nmea_global_anchor_ready)
@@ -3238,13 +3091,8 @@ after_sync_packages:
                 fout_global << setw(20) << time_frame[i] - time_frame[0] << " " << est_poses[i].transpose() << endl;
             }
         }
-#else
-        // Without LIGO_WITH_NMEA, fout_global is not opened in open_file(); skip
-#endif
-#ifdef LIGO_WITH_NMEA
     if (fout_global.is_open())
         fout_global.close();
-#endif
     }
 
     #ifdef process_ppp

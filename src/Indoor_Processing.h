@@ -10,9 +10,7 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/publisher.hpp>
 
-#ifdef LIGO_WITH_SMALL_GICP
 #include "Indoor_SmallGICP_Localizer.h"
-#endif
 
 namespace ligo {
 namespace indoor {
@@ -28,7 +26,6 @@ void updateIndoorLocalizationPlaceholder(const Eigen::Vector3d& pos_enu,
 /** Stub kept for reference; actual insertion is via addIndoorFactorToGraph(). */
 void addIndoorFactorToGraphStubCommented();
 
-#ifdef LIGO_WITH_SMALL_GICP
 /** Config used when loading PCD chosen by indoor grid membership (see ensureIndoorGICPMapFromGridEcef). */
 void setIndoorGICPConfigForGridSelection(const SmallGICPConfig& cfg);
 
@@ -86,7 +83,6 @@ void publishIndoorViz(
     const Eigen::Isometry3d& T_map_lidar,
     double timestamp_sec,
     const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid = nullptr);
-#endif  // LIGO_WITH_SMALL_GICP
 
 /** Add IndoorLocalizationFactor(P,E,A,R) — same variable layout as outdoor NMEAFactor; used when indoor (NMEAFactor off). */
 void addIndoorFactorToGraph(int frame_num);

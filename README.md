@@ -74,13 +74,16 @@ The codes of this repo are contributed by [Dongjiao He (贺东娇)](https://gith
 - `builtin_interfaces`, `ament_index_cpp`, `ament_index_python`
 - `rosidl_default_generators` / `rosidl_default_runtime` (커스텀 메시지)
 - **`livox_ros_driver2`** — 동일 워크스페이스에 소스로 두고 함께 빌드하거나, 이미 설치된 환경에서 `find_package` 가능해야 함.
+- **`gnss_comm`** — **필수.** CMake에서 `find_package(gnss_comm REQUIRED)`이며, NMEA/PPP 등 **GNSS 파이프라인** 소스가 항상 빌드된다. 워크스페이스에 소스로 포함해 `colcon`으로 함께 빌드하거나, 별도 워크스페이스를 먼저 빌드한 뒤 그 `install/setup.bash`를 source 한 상태에서 `ligo`를 빌드한다.
 
-### 2.5 선택 의존성
+### 2.5 small_gicp (필수, C++)
 
-| 항목 | 역할 |
-|------|------|
-| **gnss_comm** | `find_package(gnss_comm)` 성공 시 NMEA/PPP 등 **GNSS 파이프라인** 빌드. 없으면 **LiDAR+IMU 스텁**만 사용. |
-| **small_gicp (C++)** | `thirdparty/small_gicp`에 **[koide3/small_gicp](https://github.com/koide3/small_gicp)** 서브모듈이 있으면 `colcon` 빌드 시 **같이 빌드**되어 `ligo_mapping`에 정적 링크되고, 실내 GICP/그리드는 **동일 바이너리**에서 처리한다. Python 바인딩 예제가 필요하면 upstream 저장소를 참고한다. |
+CMake에서 **small_gicp를 찾지 못하면 설정 단계에서 실패**한다(`message(FATAL_ERROR)`). 일반적인 방법은 아래와 같다.
+
+- **`thirdparty/small_gicp`** — 저장소에 **[koide3/small_gicp](https://github.com/koide3/small_gicp)** 가 있으면(서브모듈) `colcon` 빌드 시 **서브프로젝트로 함께 빌드**되어 `ligo_mapping`에 정적 링크되고, 실내 GICP/그리드는 **동일 바이너리**에서 처리한다.
+- 그 외: CMake 캐시 **`SMALL_GICP_INCLUDE_DIR`** 로 헤더 경로를 주거나, 시스템에 **`small_gicp` CMake 패키지**가 설치되어 있어야 한다.
+
+Python 바인딩·예제는 upstream 저장소를 참고한다.
 
 ---
 
@@ -93,7 +96,7 @@ cd /path/to/LIGO   # 본 패키지 루트
 git submodule update --init --recursive
 ```
 
-`thirdparty/small_gicp`가 비어 있거나 없으면 indoor small_gicp C++ 모듈이 비활성화될 수 있다.
+`thirdparty/small_gicp`가 비어 있거나 CMake가 small_gicp를 전혀 찾지 못하면 **`ligo` 설정이 실패**한다. 서브모듈을 반드시 받는다.
 
 ---
 
@@ -106,12 +109,13 @@ source /opt/ros/<distro>/setup.bash
 # Ceres/GTSAM/Sophus 등을 소스 설치한 경우 예:
 # export CMAKE_PREFIX_PATH="/opt/ceres_install:/opt/gtsam_install:${CMAKE_PREFIX_PATH}"
 
-# gnss_comm을 쓰는 경우: 해당 install을 먼저 source
+# gnss_comm 필수: 같은 워크스페이스에 소스가 있으면 함께 빌드하거나,
+# 별도 ws를 먼저 빌드했다면 그 install을 source
 # source /path/to/gnss_comm_ws/install/setup.bash
 
-colcon build --symlink-install --packages-select ligo
+colcon build --symlink-install --packages-select gnss_comm ligo
 # livox_ros_driver2가 같은 ws에 있으면 함께 선택:
-# colcon build --symlink-install --packages-select livox_ros_driver2 ligo
+# colcon build --symlink-install --packages-select livox_ros_driver2 gnss_comm ligo
 
 source install/setup.bash
 ```
@@ -235,6 +239,7 @@ Please follow the *Differential GNSS* section shown in [ublox driver](https://gi
 
 # 달라진 점
 
+- 빌드: **`gnss_comm` 필수** (`find_package` REQUIRED). NMEA/PPP 경로는 스텁 없이 항상 포함된다. **`small_gicp` 미탐지 시 CMake 실패** (번들 서브모듈 또는 외부 경로/패키지 필요). 소스에서는 `LIGO_WITH_NMEA` / `LIGO_WITH_SMALL_GICP` 전처리 분기를 제거하고 항상 해당 코드 경로를 컴파일한다.
 - v1.1: NMEA 입력을 NavSatMsg로 받아서 처리하는 부분을 다시 활성화함.
 - v1.2: Z축에 대한 noise param 추가.
 - v2: `indoor_localization_factor` 추가, NMEA에서 pose only 추가, `ring` 오류 처리, markdown 파일 추가.

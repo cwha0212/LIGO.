@@ -2,11 +2,8 @@
 #include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
 #include <pcl_conversions/pcl_conversions.h>
-#ifdef LIGO_WITH_NMEA
 #include "indoor_localization_factor.hpp"
-#endif
 
-#ifdef LIGO_WITH_SMALL_GICP
 #include "Indoor_SmallGICP_Localizer.h"
 #include "Indoor_GridMapRegistry.h"
 #include "common_lib.h"
@@ -130,13 +127,12 @@ namespace {
                 grid.info.width, grid.info.height, grid.info.resolution);
   }
 }
-#endif  // LIGO_WITH_SMALL_GICP
 
 namespace ligo {
 namespace indoor {
 
 // ---------------------------------------------------------------------------
-// Original placeholder (kept functional for non-GICP builds)
+// Original placeholder: superseded by runIndoorGICPUpdate() when GICP runs.
 // ---------------------------------------------------------------------------
 void updateIndoorLocalizationPlaceholder(const Eigen::Vector3d& pos_enu,
                                          const Eigen::Matrix3d& rot_enu,
@@ -144,16 +140,7 @@ void updateIndoorLocalizationPlaceholder(const Eigen::Vector3d& pos_enu,
   if (!indoor_flag) {
     return;
   }
-  // When GICP is available this is superseded by runIndoorGICPUpdate().
-  // In non-GICP builds it still provides the LIO-derived fallback.
-#ifndef LIGO_WITH_SMALL_GICP
-  indoor_pos_enu_meas = pos_enu;
-  indoor_rot_enu_meas = Eigen::Quaterniond(rot_enu).normalized();
-  indoor_pose_time = ts_sec;
-  indoor_pose_valid = true;
-#else
   (void)pos_enu; (void)rot_enu; (void)ts_sec;
-#endif
 }
 
 void addIndoorFactorToGraphStubCommented() {
@@ -161,9 +148,8 @@ void addIndoorFactorToGraphStubCommented() {
 }
 
 // ---------------------------------------------------------------------------
-// GICP-backed localization (compiled only when LIGO_WITH_SMALL_GICP is ON)
+// GICP-backed localization
 // ---------------------------------------------------------------------------
-#ifdef LIGO_WITH_SMALL_GICP
 
 void setIndoorGICPConfigForGridSelection(const SmallGICPConfig& cfg) {
   s_gicp_cfg_grid = cfg;
@@ -552,13 +538,10 @@ void publishIndoorViz(
   }
 }
 
-#endif  // LIGO_WITH_SMALL_GICP
-
 // ---------------------------------------------------------------------------
-// GTSAM factor insertion (compiled only with NMEA)
+// GTSAM factor insertion (indoor pose vs NMEA graph anchor)
 // ---------------------------------------------------------------------------
 void addIndoorFactorToGraph(int frame_num) {
-#ifdef LIGO_WITH_NMEA
   if (!(indoor_flag || indoor_flag_dynamic) || !indoor_pose_valid) return;
   if (!p_nmea) return;
   if (!indoorPoseNoise || !indoorPoseNoiseInit) return;
@@ -598,9 +581,6 @@ void addIndoorFactorToGraph(int frame_num) {
                 indoor_rot_enu_meas.y(), indoor_rot_enu_meas.z(),
                 init_phase ? "init" : "normal");
   }
-#else
-  (void)frame_num;
-#endif
 }
 
 }  // namespace indoor

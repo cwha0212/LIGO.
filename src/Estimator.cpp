@@ -259,7 +259,6 @@ void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ek
 
 void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data)
 {
-#ifdef LIGO_WITH_NMEA
 	Eigen::Matrix3d res_R = s.rot.transpose() * p_nmea->state_const_.rot;
 	Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
 	ekfom_data.h_NMEA.setIdentity();
@@ -305,12 +304,6 @@ void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d
 	// ekfom_data.z_NMEA.block<3, 1>(0, 0) = p_nmea->state_const_.pos - s.pos - s.vel * s.time_diff - 0.5 * s.acc * s.time_diff * s.time_diff; // 
 	// ekfom_data.z_NMEA.block<3, 1>(6, 0) = p_nmea->state_const_.vel - s.vel - s.acc * s.time_diff; // 
 	// ekfom_data.z_NMEA.block<3, 1>(3, 0) = res_r; // s.rot.transpose() * p_gnss->state_.rot; //  
-#else
-	(void)s;
-	(void)cov_p;
-	(void)cov_R;
-	ekfom_data.valid = false;
-#endif
 }
 
 void pointBodyToWorld(PointType const * const pi, PointType * const po)

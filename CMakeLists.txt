@@ -54,8 +54,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 ament_export_dependencies(rosidl_default_runtime)
 
-# gnss_comm: optional. Required for NMEA factor pipeline; if not found, LiDAR+IMU stub only.
-find_package(gnss_comm QUIET)
+# gnss_comm: required for NMEA factor pipeline (always built).
+find_package(gnss_comm REQUIRED)
 
 # Third-party
 find_package(Eigen3 REQUIRED)
@@ -127,7 +127,9 @@ endif()
 if(LIGO_WITH_SMALL_GICP)
   message(STATUS "ligo: small_gicp enabled (${LIGO_SMALL_GICP_MODE})")
 else()
-  message(STATUS "ligo: small_gicp not found (indoor small_gicp localizer module disabled)")
+  message(FATAL_ERROR
+    "ligo requires small_gicp: provide thirdparty/small_gicp (bundled), set SMALL_GICP_INCLUDE_DIR to headers, "
+    "or install a CMake package named small_gicp.")
 endif()
 
 include_directories(
@@ -142,7 +144,7 @@ if(SMALL_GICP_INCLUDE_DIR AND NOT LIGO_SMALL_GICP_TARGET)
   include_directories(${SMALL_GICP_INCLUDE_DIR})
 endif()
 
-# Source list: NMEA (PPP) when gnss_comm is available; otherwise stub GNSSProcess/NMEAProcess.
+# Source list: NMEA (PPP) + indoor small_gicp (always when CMake resolves dependencies).
 set(ligo_sources
   src/laserMapping.cpp
   src/li_initialization.cpp
@@ -153,24 +155,15 @@ set(ligo_sources
   src/Estimator.cpp
   src/IMU_Processing.cpp
 )
-if(gnss_comm_FOUND)
-  add_compile_definitions(LIGO_WITH_NMEA)
-  list(APPEND ligo_sources
-    src/NMEA_Assignment.cpp
-    src/NMEA_Processing_fg.cpp
-  )
-  message(STATUS "ligo: building with NMEA (gnss_comm)")
-else()
-  list(APPEND ligo_sources src/ligo_gnss_nmea_stub.cpp)
-  message(STATUS "ligo: gnss_comm not found - LiDAR+IMU only (NMEA stub)")
-endif()
-if(LIGO_WITH_SMALL_GICP)
-  list(APPEND ligo_sources
-    src/Indoor_SmallGICP_Localizer.cpp
-    src/Indoor_GridMapRegistry.cpp
-  )
-  add_compile_definitions(LIGO_WITH_SMALL_GICP)
-endif()
+list(APPEND ligo_sources
+  src/NMEA_Assignment.cpp
+  src/NMEA_Processing_fg.cpp
+)
+message(STATUS "ligo: building with NMEA (gnss_comm)")
+list(APPEND ligo_sources
+  src/Indoor_SmallGICP_Localizer.cpp
+  src/Indoor_GridMapRegistry.cpp
+)
 
 add_executable(ligo_mapping ${ligo_sources})
 
@@ -206,10 +199,8 @@ target_link_libraries(ligo_mapping
 if(LIGO_SMALL_GICP_TARGET)
   target_link_libraries(ligo_mapping ${LIGO_SMALL_GICP_TARGET})
 endif()
-if(gnss_comm_FOUND)
-  target_link_libraries(ligo_mapping ${gnss_comm_LIBRARIES})
-  target_include_directories(ligo_mapping PRIVATE ${gnss_comm_INCLUDE_DIRS})
-endif()
+target_link_libraries(ligo_mapping ${gnss_comm_LIBRARIES})
+target_include_directories(ligo_mapping PRIVATE ${gnss_comm_INCLUDE_DIRS})
 
 target_include_directories(ligo_mapping PRIVATE
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
