@@ -128,6 +128,7 @@ std::string nmea_input_type;
 bool nmea_publish_stamp_diag = false;
 std::string enu_position_topic = "/ligo/enu_position";
 std::string enu_position_frame_id = "enu";
+std::string enu_heading_topic = "/ligo/enu_heading_deg";
 std::string global_position_topic = "/ligo/global_position";
 std::string ecef_position_topic = "/ligo/ecef_position";
 std::string ecef_position_frame_id = "ecef";
@@ -326,6 +327,7 @@ void readParameters(rclcpp::Node * node)
     p_nmea->p_assign->initNoises();
     enu_position_topic = get_param("ligo.enu_position_topic", enu_position_topic);
     enu_position_frame_id = get_param("ligo.enu_position_frame_id", enu_position_frame_id);
+    enu_heading_topic = get_param("ligo.enu_heading_topic", enu_heading_topic);
     global_position_topic = get_param("ligo.global_position_topic", global_position_topic);
     ecef_position_topic = get_param("ligo.ecef_position_topic", ecef_position_topic);
     ecef_position_frame_id = get_param("ligo.ecef_position_frame_id", ecef_position_frame_id);

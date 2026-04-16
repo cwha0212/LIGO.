@@ -32,8 +32,14 @@ def generate_launch_description():
         arguments=['-d', rviz_config, '--ros-args', '--log-level', 'warn'],
         output='screen',
     )
-
+    mqtt_bridge = Node(
+        package="ligo",
+        executable="ligo_topic_to_mqtt.py",
+        name="ligo_topic_to_mqtt",
+        output="screen",
+    )
     ld = LaunchDescription()
+    ld.add_action(mqtt_bridge)
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(stdout_colorized_envvar)
     ld.add_action(ligo_node)

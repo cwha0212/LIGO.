@@ -114,6 +114,7 @@ extern std::string nmea_input_type;
 extern bool nmea_publish_stamp_diag;
 extern std::string enu_position_topic;
 extern std::string enu_position_frame_id;
+extern std::string enu_heading_topic;
 extern std::string global_position_topic;
 extern std::string ecef_position_topic;
 extern std::string ecef_position_frame_id;

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
@@ -82,6 +83,23 @@ def ligo_mode_payload_for_mqtt(ros_obj: dict) -> dict:
     if mode == "outdoor":
         return {"mode": "outdoor"}
     return {"mode": str(mode), "raw": ros_obj}
+
+
+def _mqtt_reason_failed(reason_code: object) -> bool:
+    if reason_code is None:
+        return False
+    if hasattr(reason_code, "is_failure") and callable(reason_code.is_failure):
+        try:
+            return bool(reason_code.is_failure)
+        except Exception:
+            pass
+    if isinstance(reason_code, int):
+        return reason_code != 0
+    try:
+        return int(reason_code) != 0
+    except (TypeError, ValueError):
+        pass
+    return str(reason_code).strip().lower() not in ("success", "0", "no error", "no_error")
 
 
 class LigoMqttBridge(Node):
@@ -169,11 +187,14 @@ class LigoMqttBridge(Node):
         )
 
     def _create_mqtt_client(self) -> mqtt.Client:
+        kwargs = {"transport": "websockets" if self.mqtt_use_websocket else "tcp"}
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            kwargs["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION2
         if self.mqtt_use_websocket:
-            client = mqtt.Client(transport="websockets")
+            client = mqtt.Client(**kwargs)
             client.ws_set_options(path=self.mqtt_ws_path)
         else:
-            client = mqtt.Client()
+            client = mqtt.Client(**kwargs)
 
         if self.mqtt_username:
             client.username_pw_set(self.mqtt_username, self.mqtt_password)
@@ -190,8 +211,8 @@ class LigoMqttBridge(Node):
             self._mqtt_connected = False
             self.get_logger().warn(f"MQTT 연결 실패: {exc}")
 
-    def _on_mqtt_connect(self, client, userdata, flags, rc):
-        self._mqtt_connected = (rc == 0)
+    def _on_mqtt_connect(self, client, userdata, flags, reason_code, properties=None):
+        self._mqtt_connected = not _mqtt_reason_failed(reason_code)
         if self._mqtt_connected:
             self.get_logger().info("MQTT connected")
             # 재연결 직후 현재 캐시 상태 1회 재발행.
@@ -201,11 +222,11 @@ class LigoMqttBridge(Node):
             self._publish_icp()
             self._publish_ligo_mode()
         else:
-            self.get_logger().warn(f"MQTT connect failed, rc={rc}")
+            self.get_logger().warn(f"MQTT connect failed, reason={reason_code!r}")
 
-    def _on_mqtt_disconnect(self, client, userdata, rc):
+    def _on_mqtt_disconnect(self, client, userdata, disconnect_flags, reason_code, properties=None):
         self._mqtt_connected = False
-        self.get_logger().warn(f"MQTT disconnected, rc={rc}")
+        self.get_logger().warn(f"MQTT disconnected, reason={reason_code!r}")
 
     def on_global_position(self, msg: NavSatFix) -> None:
         lat = float(msg.latitude)
@@ -357,6 +378,8 @@ def main() -> None:
     node = LigoMqttBridge()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         try:
             node._mqtt.loop_stop()
@@ -364,7 +387,8 @@ def main() -> None:
         except Exception:
             pass
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

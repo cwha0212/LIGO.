@@ -906,6 +906,30 @@ static void try_publish_fused_enu_position(
     pubEnuPosition->publish(msg);
 }
 
+static void try_publish_fused_enu_heading_deg(
+    const rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr &pubEnuHeadingDeg)
+{
+    if (flg_exit || !rclcpp::ok())
+        return;
+    if (!pubEnuHeadingDeg)
+        return;
+
+    Eigen::Vector3d p_enu;
+    Eigen::Matrix3d R_enu;
+    if (!ligo_fused_lio_pose_enu(p_enu, R_enu))
+        return;
+
+    const double yaw_rad = std::atan2(R_enu(1, 0), R_enu(0, 0));
+    const double yaw_deg = yaw_rad * 180.0 / std::acos(-1.0);
+    double heading_deg = std::fmod(90.0 - yaw_deg, 360.0);
+    if (heading_deg < 0.0)
+        heading_deg += 360.0;
+
+    std_msgs::msg::Float64 msg;
+    msg.data = heading_deg;
+    pubEnuHeadingDeg->publish(msg);
+}
+
 static void try_publish_fused_global_nav_sat(
     const rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr &pubGlobalFix)
 {
@@ -1687,6 +1711,7 @@ int main(int argc, char** argv)
         "/init_pairs_from_gps_move_marker", qos_pub);
     auto plane_pub = node->create_publisher<visualization_msgs::msg::Marker>("/planner_normal", qos_pub);
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEnuPosition;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pubEnuHeadingDeg;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pubEcefPosition;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pubGlobalNavSat;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pubNmeaGraphAnchorMarker;
@@ -1696,6 +1721,10 @@ int main(int argc, char** argv)
             node->create_publisher<geometry_msgs::msg::PointStamped>(enu_position_topic, qos_pub);
         RCLCPP_INFO(node->get_logger(), "ENU position: topic=%s frame_id=%s", enu_position_topic.c_str(),
                     enu_position_frame_id.c_str());
+        pubEnuHeadingDeg =
+            node->create_publisher<std_msgs::msg::Float64>(enu_heading_topic, qos_pub);
+        RCLCPP_INFO(node->get_logger(),
+                    "ENU heading: topic=%s (deg, clockwise from north in ENU)", enu_heading_topic.c_str());
         pubGlobalNavSat =
             node->create_publisher<sensor_msgs::msg::NavSatFix>(global_position_topic, qos_pub);
         RCLCPP_INFO(node->get_logger(), "Global WGS84 position (NavSatFix): topic=%s (anchor auto-detected at NMEA init)",
@@ -2531,6 +2560,7 @@ int main(int argc, char** argv)
 
                         publish_odometry(pubOdomAftMapped, tf_br);
                         try_publish_fused_enu_position(pubEnuPosition);
+                        try_publish_fused_enu_heading_deg(pubEnuHeadingDeg);
                         try_publish_fused_global_nav_sat(pubGlobalNavSat);
                         try_publish_fused_ecef_position(pubEcefPosition);
                         if (runtime_pos_log)
@@ -2872,6 +2902,7 @@ int main(int argc, char** argv)
             {
                 publish_odometry(pubOdomAftMapped, tf_br);
                 try_publish_fused_enu_position(pubEnuPosition);
+                try_publish_fused_enu_heading_deg(pubEnuHeadingDeg);
                 try_publish_fused_global_nav_sat(pubGlobalNavSat);
                 try_publish_fused_ecef_position(pubEcefPosition);
             }
@@ -3023,6 +3054,7 @@ after_sync_packages:
     pubInitPairsFromGpsMove.reset();
     plane_pub.reset();
     pubEnuPosition.reset();
+    pubEnuHeadingDeg.reset();
     pubEcefPosition.reset();
     pubGlobalNavSat.reset();
     pubIndoorMapCloud.reset();

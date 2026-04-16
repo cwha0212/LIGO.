@@ -210,10 +210,26 @@ target_include_directories(ligo_mapping PRIVATE
 install(TARGETS ligo_mapping
   DESTINATION lib/${PROJECT_NAME}
 )
-install(PROGRAMS
+set(ligo_python_scripts
   scripts/ligo_topic_to_mqtt.py
-  DESTINATION lib/${PROJECT_NAME}
+  scripts/mqtt_nav_pub.py
+  scripts/mqtt_nav2_straight_follower.py
+  scripts/virtual_ligo_gps_simulator.py
 )
+set(ligo_existing_python_scripts "")
+foreach(script_path IN LISTS ligo_python_scripts)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${script_path}")
+    list(APPEND ligo_existing_python_scripts "${script_path}")
+  else()
+    message(WARNING "ligo: skip missing script install target: ${script_path}")
+  endif()
+endforeach()
+if(ligo_existing_python_scripts)
+  install(PROGRAMS
+    ${ligo_existing_python_scripts}
+    DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
 install(DIRECTORY config rviz_cfg launch
   DESTINATION share/${PROJECT_NAME}
 )
