@@ -175,11 +175,18 @@ class LigoMqttBridge(Node):
         self.create_subscription(String, ligo_mode_topic, self.on_ligo_mode, mode_qos)
 
         self._mqtt_connected = False
+        self._mqtt_loop_started = False
+        self._reconnect_backoff_sec = 1.0
+        self._reconnect_backoff_max_sec = 30.0
+        self._next_reconnect_not_before = 0.0
+        self._mqtt_publish_fail_count = 0
+        self._last_publish_ok_unix = 0.0
         self._mqtt = self._create_mqtt_client()
         self._connect_mqtt()
 
         # 연결이 끊겼을 때만 주기적으로 재연결 시도.
         self.create_timer(reconnect_period, self._reconnect_tick)
+        self.create_timer(10.0, self._log_mqtt_health)
         self.get_logger().info(
             f"ROS->MQTT bridge started. mqtt={self.mqtt_host}:{self.mqtt_port} "
             f"topics={self.mqtt_topic_position}, {self.mqtt_topic_heading}, "
@@ -204,16 +211,32 @@ class LigoMqttBridge(Node):
         return client
 
     def _connect_mqtt(self) -> None:
+        now = time.time()
+        if now < self._next_reconnect_not_before:
+            return
         try:
-            self._mqtt.connect(self.mqtt_host, self.mqtt_port)
-            self._mqtt.loop_start()
+            self._mqtt.connect(self.mqtt_host, self.mqtt_port, keepalive=30)
+            if not self._mqtt_loop_started:
+                self._mqtt.loop_start()
+                self._mqtt_loop_started = True
         except Exception as exc:
             self._mqtt_connected = False
             self.get_logger().warn(f"MQTT 연결 실패: {exc}")
+            self._schedule_next_reconnect()
+
+    def _schedule_next_reconnect(self) -> None:
+        self._next_reconnect_not_before = time.time() + self._reconnect_backoff_sec
+        self._reconnect_backoff_sec = min(
+            self._reconnect_backoff_sec * 2.0,
+            self._reconnect_backoff_max_sec,
+        )
 
     def _on_mqtt_connect(self, client, userdata, flags, reason_code, properties=None):
         self._mqtt_connected = not _mqtt_reason_failed(reason_code)
         if self._mqtt_connected:
+            self._reconnect_backoff_sec = 1.0
+            self._next_reconnect_not_before = 0.0
+            self._mqtt_publish_fail_count = 0
             self.get_logger().info("MQTT connected")
             # 재연결 직후 현재 캐시 상태 1회 재발행.
             self._publish_position()
@@ -223,10 +246,12 @@ class LigoMqttBridge(Node):
             self._publish_ligo_mode()
         else:
             self.get_logger().warn(f"MQTT connect failed, reason={reason_code!r}")
+            self._schedule_next_reconnect()
 
     def _on_mqtt_disconnect(self, client, userdata, disconnect_flags, reason_code, properties=None):
         self._mqtt_connected = False
         self.get_logger().warn(f"MQTT disconnected, reason={reason_code!r}")
+        self._schedule_next_reconnect()
 
     def on_global_position(self, msg: NavSatFix) -> None:
         lat = float(msg.latitude)
@@ -311,27 +336,70 @@ class LigoMqttBridge(Node):
             self._publish_raw(self.mqtt_topic_ligo_mode, msg.data.encode("utf-8"))
 
     def _reconnect_tick(self) -> None:
-        if not self._mqtt_connected:
-            self._connect_mqtt()
+        if self._mqtt_connected:
+            return
+        self._connect_mqtt()
+
+    def _log_mqtt_health(self) -> None:
+        age_sec = None
+        if self._last_publish_ok_unix > 0.0:
+            age_sec = time.time() - self._last_publish_ok_unix
+        self.get_logger().info(
+            "MQTT health: "
+            f"connected={self._mqtt_connected}, "
+            f"publish_fail_count={self._mqtt_publish_fail_count}, "
+            f"last_publish_ok_age_sec={age_sec if age_sec is not None else 'n/a'}"
+        )
 
     def _publish_json(self, topic: str, body: dict) -> None:
         if not self._mqtt_connected:
             return
         payload = {"timestamp_unix": time.time(), **body}
         try:
-            self._mqtt.publish(topic, json.dumps(payload, ensure_ascii=False), qos=0, retain=False)
+            info = self._mqtt.publish(
+                topic,
+                json.dumps(payload, ensure_ascii=False),
+                qos=0,
+                retain=False,
+            )
+            if int(getattr(info, "rc", mqtt.MQTT_ERR_UNKNOWN)) != mqtt.MQTT_ERR_SUCCESS:
+                self._mqtt_connected = False
+                self._mqtt_publish_fail_count += 1
+                self.get_logger().warn(
+                    f"MQTT publish rc 실패: topic={topic}, rc={getattr(info, 'rc', None)}, "
+                    f"fail_count={self._mqtt_publish_fail_count}"
+                )
+                self._schedule_next_reconnect()
+                return
+            self._mqtt_publish_fail_count = 0
+            self._last_publish_ok_unix = time.time()
         except Exception as exc:
             self._mqtt_connected = False
+            self._mqtt_publish_fail_count += 1
             self.get_logger().warn(f"MQTT publish 실패: {exc}")
+            self._schedule_next_reconnect()
 
     def _publish_raw(self, topic: str, raw_payload: bytes) -> None:
         if not self._mqtt_connected:
             return
         try:
-            self._mqtt.publish(topic, raw_payload, qos=0, retain=False)
+            info = self._mqtt.publish(topic, raw_payload, qos=0, retain=False)
+            if int(getattr(info, "rc", mqtt.MQTT_ERR_UNKNOWN)) != mqtt.MQTT_ERR_SUCCESS:
+                self._mqtt_connected = False
+                self._mqtt_publish_fail_count += 1
+                self.get_logger().warn(
+                    f"MQTT raw publish rc 실패: topic={topic}, rc={getattr(info, 'rc', None)}, "
+                    f"fail_count={self._mqtt_publish_fail_count}"
+                )
+                self._schedule_next_reconnect()
+                return
+            self._mqtt_publish_fail_count = 0
+            self._last_publish_ok_unix = time.time()
         except Exception as exc:
             self._mqtt_connected = False
+            self._mqtt_publish_fail_count += 1
             self.get_logger().warn(f"MQTT raw publish 실패: {exc}")
+            self._schedule_next_reconnect()
 
     def _publish_position(self) -> None:
         self._publish_json(
@@ -382,7 +450,8 @@ def main() -> None:
         pass
     finally:
         try:
-            node._mqtt.loop_stop()
+            if getattr(node, "_mqtt_loop_started", False):
+                node._mqtt.loop_stop()
             node._mqtt.disconnect()
         except Exception:
             pass
