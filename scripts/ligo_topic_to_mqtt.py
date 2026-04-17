@@ -248,7 +248,15 @@ class LigoMqttBridge(Node):
             self.get_logger().warn(f"MQTT connect failed, reason={reason_code!r}")
             self._schedule_next_reconnect()
 
-    def _on_mqtt_disconnect(self, client, userdata, disconnect_flags, reason_code, properties=None):
+    def _on_mqtt_disconnect(self, client, userdata, *args):
+        # paho-mqtt Callback API v1/v2 시그니처 호환:
+        # v1: (client, userdata, rc)
+        # v2: (client, userdata, disconnect_flags, reason_code, properties)
+        reason_code = None
+        if len(args) >= 2:
+            reason_code = args[1]
+        elif len(args) == 1:
+            reason_code = args[0]
         self._mqtt_connected = False
         self.get_logger().warn(f"MQTT disconnected, reason={reason_code!r}")
         self._schedule_next_reconnect()
