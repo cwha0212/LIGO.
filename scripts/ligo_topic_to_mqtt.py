@@ -215,7 +215,7 @@ class LigoMqttBridge(Node):
         if now < self._next_reconnect_not_before:
             return
         try:
-            self._mqtt.connect(self.mqtt_host, self.mqtt_port, keepalive=2)
+            self._mqtt.connect(self.mqtt_host, self.mqtt_port, keepalive=1.0)
             if not self._mqtt_loop_started:
                 self._mqtt.loop_start()
                 self._mqtt_loop_started = True
