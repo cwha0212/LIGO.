@@ -1,0 +1,6 @@
+# nx_odometry.launch.py 용 오버레이 — 베이스는 config/avia.yaml
+# mapping_mode: false → PCD 누적/저장 비활성 (odometry·주행 전용)
+/**:
+  ros__parameters:
+    mapping:
+      mapping_mode: false

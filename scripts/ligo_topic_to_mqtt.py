@@ -114,6 +114,8 @@ class LigoMqttBridge(Node):
         self.declare_parameter("mqtt.ws_path", "/mqtt")
         self.declare_parameter("mqtt.username", "")
         self.declare_parameter("mqtt.password", "")
+        # paho-mqtt connect()의 keepalive는 정수(초)만 허용 — float 전달 시 "required argument is not an integer"
+        self.declare_parameter("mqtt.keepalive_sec", 1)
         self.declare_parameter("reconnect_period_sec", 1.0)
 
         # ROS topic params
@@ -135,6 +137,8 @@ class LigoMqttBridge(Node):
         self.mqtt_ws_path = str(self.get_parameter("mqtt.ws_path").value)
         self.mqtt_username = str(self.get_parameter("mqtt.username").value)
         self.mqtt_password = str(self.get_parameter("mqtt.password").value)
+        ka = int(self.get_parameter("mqtt.keepalive_sec").value)
+        self._mqtt_keepalive_sec = ka if ka >= 1 else 60
 
         global_topic = str(self.get_parameter("topic.global_position").value)
         odom_topic = str(self.get_parameter("topic.odom").value)
@@ -215,7 +219,9 @@ class LigoMqttBridge(Node):
         if now < self._next_reconnect_not_before:
             return
         try:
-            self._mqtt.connect(self.mqtt_host, self.mqtt_port, keepalive=1.0)
+            self._mqtt.connect(
+                self.mqtt_host, self.mqtt_port, keepalive=self._mqtt_keepalive_sec
+            )
             if not self._mqtt_loop_started:
                 self._mqtt.loop_start()
                 self._mqtt_loop_started = True

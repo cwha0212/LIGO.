@@ -123,12 +123,7 @@
       scan_publish_en: true         # false: close all the point cloud output
       scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
 
-    pcd_save:
-      # PCD 누적/저장은 mapping.mapping_mode 가 true 일 때만 수행됨
-      interval: -1                 # how many LiDAR frames saved in each pcd file; 
-                                 # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
-      # 2D PGM 그리드 셀 크기 (m). 생략 시 mapping.ivox_grid_resolution 과 동일
-      grid2d_resolution: 0.2
+    # pcd_save.* 는 매핑 전용 오버레이 config/nx_mode_mapping.yaml 에서 설정 (nx_mapping.launch.py)
 
     indoor:
       # true: GTSAM indoor factor + continuous indoor. mapping_mode:true forces this false but
@@ -137,7 +132,7 @@
       # *_grid2d.yaml + pgm + source_pcd. Relative: package source <src>/LIGO./<path> if that dir exists, else share/ligo/<path>.
       grid_map_dir: "PCD"
       # Absolute path to the reference PCD map file built during the mapping session.
-      # Typically: <workspace>/src/LIGO./PCD/scans_3.pcd
+      # Typically: <workspace>/src/LIGO./PCD/<map_name>_vN.pcd
       map_pcd_path: ""
       # 실내 GICP → GTSAM factor 허용 조건. small_gicp result.error 스케일은 보통 수십~수백(레거시 기본 5면 100% REJECT).
       gicp_max_factor_error: 400.0

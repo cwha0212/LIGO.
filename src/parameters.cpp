@@ -116,6 +116,7 @@ std::vector<double> ppp_anc(3, 0.0);
 bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 bool   scan_pub_en, scan_body_pub_en;
 double pcd_save_grid2d_resolution_m = 0.2;
+std::string pcd_save_map_name = "map";
 shared_ptr<Preprocess> p_pre;
 // shared_ptr<LI_Init> Init_LI;
 shared_ptr<ImuProcess> p_imu;
@@ -245,6 +246,24 @@ void readParameters(rclcpp::Node * node)
   runtime_pos_log = get_param("runtime_pos_log_enable", false);
   log_lidar_frame_time_ms = get_param("mapping.log_lidar_frame_time_ms", false);
   pcd_save_interval = get_param("pcd_save.interval", -1);
+  {
+    std::string raw = get_param("pcd_save.map_name", std::string("map"));
+    auto trim = [](std::string &s) {
+      while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n'))
+        s.erase(0, 1);
+      while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n'))
+        s.pop_back();
+    };
+    trim(raw);
+    if (raw.empty())
+      raw = "map";
+    for (char &ch : raw)
+    {
+      if (ch == '/' || ch == '\\')
+        ch = '_';
+    }
+    pcd_save_map_name = raw;
+  }
   lidar_time_inte = get_param("mapping.lidar_time_inte", 0.1);
   dyn_filter = get_param("mapping.dyn_filter", true);
   dyn_filter_resolution = get_param("mapping.dyn_filter_resolution", 0.1);

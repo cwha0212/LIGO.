@@ -100,6 +100,8 @@ extern bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 extern bool   scan_pub_en, scan_body_pub_en;
 /** ENU 2D occupancy grid (PGM) cell size (m) when exporting *_grid2d alongside PCD; independent of ivox voxel size. */
 extern double pcd_save_grid2d_resolution_m;
+/** Basename for mapping PCD files: `{ROOT_DIR}/PCD/{pcd_save_map_name}_v{N}.pcd`. Set via `pcd_save.map_name` or launch. */
+extern std::string pcd_save_map_name;
 extern shared_ptr<Preprocess> p_pre;
 extern shared_ptr<ImuProcess> p_imu;
 extern shared_ptr<NMEAProcess> p_nmea;

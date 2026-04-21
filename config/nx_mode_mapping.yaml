@@ -1,0 +1,16 @@
+# nx_mapping.launch.py 용 오버레이 — 베이스는 config/avia.yaml
+# mapping_mode: true → PCD 누적/저장 활성 (지도 저장 세션)
+# 실내 그리드/참조 PCD 경로 비움 → 기동 시 loadIndoorGridMaps/initIndoorGICP 분기 미실행
+/**:
+  ros__parameters:
+    mapping:
+      mapping_mode: true
+    indoor:
+      grid_map_dir: ""
+      map_pcd_path: ""
+    # 매핑 세션 PCD 저장 이름·간격·그리드 (경로는 코드상 ROOT_DIR/PCD/ 고정)
+    pcd_save:
+      # 파일명: <ROOT_DIR>/PCD/{map_name}_v1.pcd, _v2.pcd, … (기존 최대 vN 다음 번호)
+      map_name: "map"
+      interval: -1
+      grid2d_resolution: 0.2

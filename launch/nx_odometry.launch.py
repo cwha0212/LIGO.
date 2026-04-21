@@ -21,7 +21,7 @@ def generate_launch_description():
 
     pkg = get_package_share_directory("ligo")
     base_config = PathJoinSubstitution([pkg, "config", "avia.yaml"])
-    mode_config = PathJoinSubstitution([pkg, "config", "nx_mode_mapping.yaml"])
+    mode_config = PathJoinSubstitution([pkg, "config", "nx_mode_odometry.yaml"])
     rviz_config = PathJoinSubstitution([pkg, "rviz_cfg", "loam_livox.rviz"])
 
     ligo_node = Node(

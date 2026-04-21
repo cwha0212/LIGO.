@@ -273,9 +273,10 @@ PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI(500000, 1));
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
 static std::vector<Eigen::Vector3d> pcl_wait_ray_origins;
 
-static int ligo_find_max_saved_scan_index()
+/** Max version N among `{basename}_v{N}.pcd` in ROOT_DIR/PCD (missing versions OK: v2 without v1 → max=2). */
+static int ligo_find_max_saved_version_for_basename(const std::string &basename)
 {
-    int max_index = 0;
+    int max_ver = 0;
     try
     {
         const std::filesystem::path pcd_dir = std::filesystem::path(ROOT_DIR) / "PCD";
@@ -283,8 +284,8 @@ static int ligo_find_max_saved_scan_index()
         {
             return 0;
         }
-        constexpr const char *kPrefix = "scans_";
-        constexpr const char *kSuffix = ".pcd";
+        const std::string suffix = ".pcd";
+        const std::string prefix = basename + "_v";
         for (const auto &entry : std::filesystem::directory_iterator(pcd_dir))
         {
             if (!entry.is_regular_file())
@@ -292,22 +293,22 @@ static int ligo_find_max_saved_scan_index()
                 continue;
             }
             const std::string name = entry.path().filename().string();
-            if (name.rfind(kPrefix, 0) != 0)
+            if (name.rfind(prefix, 0) != 0)
             {
                 continue;
             }
-            if (name.size() <= std::strlen(kPrefix) + std::strlen(kSuffix))
+            if (name.size() <= prefix.size() + suffix.size())
             {
                 continue;
             }
-            if (name.compare(name.size() - std::strlen(kSuffix), std::strlen(kSuffix), kSuffix) != 0)
+            if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
             {
                 continue;
             }
-            const std::string idx_str =
-                name.substr(std::strlen(kPrefix), name.size() - std::strlen(kPrefix) - std::strlen(kSuffix));
-            bool all_digit = !idx_str.empty();
-            for (char c : idx_str)
+            const std::string ver_str =
+                name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+            bool all_digit = !ver_str.empty();
+            for (char c : ver_str)
             {
                 if (c < '0' || c > '9')
                 {
@@ -319,15 +320,20 @@ static int ligo_find_max_saved_scan_index()
             {
                 continue;
             }
-            const int idx = std::stoi(idx_str);
-            max_index = std::max(max_index, idx);
+            const int v = std::stoi(ver_str);
+            max_ver = std::max(max_ver, v);
         }
     }
     catch (const std::exception &e)
     {
-        RCLCPP_WARN(rclcpp::get_logger("ligo"), "[pcd] failed to scan existing PCD files: %s", e.what());
+        RCLCPP_WARN(rclcpp::get_logger("ligo"), "[pcd] failed to scan existing map PCD files: %s", e.what());
     }
-    return max_index;
+    return max_ver;
+}
+
+static std::string ligo_make_pcd_save_path(int version_number)
+{
+    return std::string(ROOT_DIR) + "PCD/" + pcd_save_map_name + "_v" + std::to_string(version_number) + ".pcd";
 }
 
 static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix)
@@ -721,7 +727,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
                 {
                     pcd_index++;
-                    string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+                    string all_points_dir = ligo_make_pcd_save_path(pcd_index);
                     cout << "current scan saved to " << all_points_dir << " (ENU)" << endl;
                     if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
                     {
@@ -757,7 +763,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
             if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
             {
                 pcd_index++;
-                string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+                string all_points_dir = ligo_make_pcd_save_path(pcd_index);
                 cout << "current scan saved to " << all_points_dir << endl;
                 ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save);
                 pcl_wait_save->clear();
@@ -1509,12 +1515,16 @@ int main(int argc, char** argv)
     readParameters(node.get());
     if (mapping_mode)
     {
-        const int max_saved_idx = ligo_find_max_saved_scan_index();
-        if (max_saved_idx > pcd_index)
+        const int max_saved_ver = ligo_find_max_saved_version_for_basename(pcd_save_map_name);
+        if (max_saved_ver > pcd_index)
         {
-            pcd_index = max_saved_idx;
+            pcd_index = max_saved_ver;
         }
-        RCLCPP_INFO(node->get_logger(), "[pcd] next scan index starts from %d", pcd_index + 1);
+        RCLCPP_INFO(node->get_logger(),
+                    "[pcd] map_name=%s next file will be %s_v%d.pcd",
+                    pcd_save_map_name.c_str(),
+                    pcd_save_map_name.c_str(),
+                    pcd_index + 1);
     }
     RCLCPP_INFO(node->get_logger(), "lidar_type: %d", lidar_type);
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
@@ -3069,7 +3079,7 @@ after_sync_packages:
     if (pcl_wait_save->size() > 0 && mapping_mode)
     {
         pcd_index++;
-        string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+        string all_points_dir = ligo_make_pcd_save_path(pcd_index);
         const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
         const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? gnss_comm::ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
