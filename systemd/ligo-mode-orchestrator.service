@@ -1,0 +1,19 @@
+[Unit]
+Description=LIGO MQTT Mode Orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chang
+WorkingDirectory=/home/chang/projects/NAVICOM/GPS_LIO_ws
+ExecStart=/bin/bash -lc "source /opt/ros/humble/setup.bash && source /home/chang/projects/NAVICOM/GPS_LIO_ws/install/setup.bash && ros2 run ligo mqtt_mode_orchestrator.py"
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

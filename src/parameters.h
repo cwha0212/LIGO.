@@ -102,6 +102,10 @@ extern bool   scan_pub_en, scan_body_pub_en;
 extern double pcd_save_grid2d_resolution_m;
 /** Basename for mapping PCD files: `{ROOT_DIR}/PCD/{pcd_save_map_name}_v{N}.pcd`. Set via `pcd_save.map_name` or launch. */
 extern std::string pcd_save_map_name;
+/** Enable time-bucket split PCD export to `{ROOT_DIR}/tmp_map`. */
+extern bool pcd_tmp_map_enable;
+/** Split export interval (sec) for tmp_map files. */
+extern double pcd_tmp_map_interval_sec;
 extern shared_ptr<Preprocess> p_pre;
 extern shared_ptr<ImuProcess> p_imu;
 extern shared_ptr<NMEAProcess> p_nmea;

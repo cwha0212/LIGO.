@@ -212,6 +212,7 @@ install(TARGETS ligo_mapping
 )
 set(ligo_python_scripts
   scripts/ligo_topic_to_mqtt.py
+  scripts/mqtt_mode_orchestrator.py
   scripts/mqtt_nav_pub.py
   scripts/mqtt_nav2_straight_follower.py
   scripts/virtual_ligo_gps_simulator.py

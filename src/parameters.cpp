@@ -117,6 +117,8 @@ bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 bool   scan_pub_en, scan_body_pub_en;
 double pcd_save_grid2d_resolution_m = 0.2;
 std::string pcd_save_map_name = "map";
+bool pcd_tmp_map_enable = false;
+double pcd_tmp_map_interval_sec = 1.0;
 shared_ptr<Preprocess> p_pre;
 // shared_ptr<LI_Init> Init_LI;
 shared_ptr<ImuProcess> p_imu;
@@ -246,6 +248,16 @@ void readParameters(rclcpp::Node * node)
   runtime_pos_log = get_param("runtime_pos_log_enable", false);
   log_lidar_frame_time_ms = get_param("mapping.log_lidar_frame_time_ms", false);
   pcd_save_interval = get_param("pcd_save.interval", -1);
+  pcd_tmp_map_enable = get_param("pcd_save.tmp_map.enable", false);
+  pcd_tmp_map_interval_sec = get_param("pcd_save.tmp_map.interval_sec", 1.0);
+  if (pcd_tmp_map_interval_sec <= 0.0)
+  {
+    RCLCPP_WARN(
+        rclcpp::get_logger("ligo"),
+        "[tmp_map] invalid pcd_save.tmp_map.interval_sec=%.6f, fallback to 1.0",
+        pcd_tmp_map_interval_sec);
+    pcd_tmp_map_interval_sec = 1.0;
+  }
   {
     std::string raw = get_param("pcd_save.map_name", std::string("map"));
     auto trim = [](std::string &s) {

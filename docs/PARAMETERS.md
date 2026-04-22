@@ -92,7 +92,14 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 
 ## `odometry.*`, `publish.*`, `pcd_save.*`
 
-다운샘플 없이 odometry 발행, path/scan 발행 등. **PCD 누적·저장**은 `mapping.mapping_mode`가 `true`일 때만 수행되며, `pcd_save.interval`·`pcd_save.grid2d_resolution`은 그때만 의미가 있다.
+다운샘플 없이 odometry 발행, path/scan 발행 등. **PCD 저장 기능은 `mapping.mapping_mode=true`에서만 동작**한다.
+
+- 기존 전체 맵 저장: `pcd_save.map_name`, `pcd_save.interval`, `pcd_save.grid2d_resolution`
+  - 출력: `<ROOT_DIR>/PCD/{map_name}_vN.pcd`
+- 실시간 분할 저장(기존 저장과 병행): `pcd_save.tmp_map.enable`, `pcd_save.tmp_map.interval_sec`
+  - 출력: `<ROOT_DIR>/tmp_map/{start}_{end}.pcd`
+  - 파일명 예시 (`interval_sec=1.0`): `000000_000001.pcd`, `000001_000002.pcd`
+  - 파일명 예시 (`interval_sec=2.0`): `000000_000002.pcd`, `000002_000004.pcd`
 
 ## `indoor.*`
 

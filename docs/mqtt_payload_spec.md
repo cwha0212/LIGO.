@@ -1,7 +1,9 @@
 # LIGO MQTT Payload 스펙
 
-`scripts/ligo_topic_to_mqtt.py` 하나로 ROS→MQTT 브리지를 수행한다.
-(기존 `scripts/mqtt_ws_client.py` 기능은 이 파일로 통합됨)
+이 문서는 현재 저장소의 MQTT payload를 아래 두 범주로 정리한다.
+
+- ROS -> MQTT 브리지: `scripts/ligo_topic_to_mqtt.py`
+- 모드 제어/상태: `scripts/mqtt_mode_orchestrator.py`
 
 ## 발행 동작
 
@@ -153,3 +155,69 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 ```
 
 의존성: `pip install paho-mqtt`
+
+---
+
+## 모드 제어 토픽 payload (`mqtt_mode_orchestrator.py`)
+
+기본 토픽:
+
+- 제어 입력: `navi1/control/mode`
+- 상태 출력: `navi1/control/mode_status`
+
+### 제어 입력 (`navi1/control/mode`)
+
+#### 1) Mapping 시작 (`map_name` 필수)
+
+```json
+{
+  "command": "start",
+  "mapping_mode": true,
+  "map_name": "site_a_20260422"
+}
+```
+
+규칙:
+
+- `mapping_mode=true`일 때 `map_name`은 필수.
+- `map_name` 허용 문자: 영문/숫자/`_`/`-`.
+- 누락/공백/형식 오류 시 실행하지 않고 에러 상태를 발행.
+
+#### 2) Odometry 시작
+
+```json
+{
+  "command": "start",
+  "mapping_mode": false
+}
+```
+
+#### 3) 현재 모드 종료
+
+```json
+{
+  "command": "stop"
+}
+```
+
+### 상태 출력 (`navi1/control/mode_status`)
+
+```json
+{
+  "timestamp_unix": 1776800100.123,
+  "event": "start",
+  "status": "ok",
+  "message": "mapping 모드 실행을 시작했습니다.",
+  "mode": "mapping",
+  "map_name": "site_a_20260422",
+  "pid": 12345
+}
+```
+
+`event` 값:
+
+- `ready`: 오케스트레이터 기동 완료
+- `start`: 모드 실행 시작
+- `stop`: stop 요청 또는 서비스 종료에 따른 종료
+- `ended`: 하위 launch 프로세스 자체 종료
+- `control` + `status=error`: 잘못된 제어 메시지

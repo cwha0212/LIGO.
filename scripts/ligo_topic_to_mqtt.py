@@ -115,7 +115,7 @@ class LigoMqttBridge(Node):
         self.declare_parameter("mqtt.username", "")
         self.declare_parameter("mqtt.password", "")
         # paho-mqtt connect()의 keepalive는 정수(초)만 허용 — float 전달 시 "required argument is not an integer"
-        self.declare_parameter("mqtt.keepalive_sec", 1)
+        self.declare_parameter("mqtt.keepalive_sec", 5)
         self.declare_parameter("reconnect_period_sec", 1.0)
 
         # ROS topic params

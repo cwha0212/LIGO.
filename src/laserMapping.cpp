@@ -272,6 +272,13 @@ void publish_init_map(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Sh
 PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI(500000, 1));
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
 static std::vector<Eigen::Vector3d> pcl_wait_ray_origins;
+PointCloudXYZI::Ptr pcl_wait_save_tmp_map(new PointCloudXYZI());
+static std::vector<Eigen::Vector3d> pcl_wait_tmp_map_ray_origins;
+static double g_tmp_map_time_base_sec = std::numeric_limits<double>::quiet_NaN();
+static long long g_tmp_map_bucket_idx = -1;
+
+static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointCloudXYZI::Ptr &cloud);
+static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix);
 
 /** Max version N among `{basename}_v{N}.pcd` in ROOT_DIR/PCD (missing versions OK: v2 without v1 → max=2). */
 static int ligo_find_max_saved_version_for_basename(const std::string &basename)
@@ -334,6 +341,124 @@ static int ligo_find_max_saved_version_for_basename(const std::string &basename)
 static std::string ligo_make_pcd_save_path(int version_number)
 {
     return std::string(ROOT_DIR) + "PCD/" + pcd_save_map_name + "_v" + std::to_string(version_number) + ".pcd";
+}
+
+static std::string ligo_make_tmp_map_save_path(long long bucket_idx, double interval_sec)
+{
+    const long long idx = std::max(0LL, bucket_idx);
+    const long long start_sec = std::max(0LL, static_cast<long long>(std::llround(static_cast<double>(idx) * interval_sec)));
+    const long long end_sec = std::max(start_sec + 1LL, static_cast<long long>(std::llround(static_cast<double>(idx + 1LL) * interval_sec)));
+    char name_buf[128];
+    std::snprintf(name_buf, sizeof(name_buf), "%s_%05lld_%06lld.pcd", pcd_save_map_name.c_str(), start_sec, end_sec);
+    return (std::filesystem::path(ROOT_DIR) / "tmp_map" / name_buf).string();
+}
+
+static PointCloudXYZI::Ptr ligo_convert_enu_cloud_to_ecef(
+    const PointCloudXYZI::Ptr &cloud_enu,
+    const Eigen::Matrix3d &R_ecef_enu,
+    const Eigen::Vector3d &anchor_ecef_m)
+{
+    if (!cloud_enu || cloud_enu->empty())
+    {
+        return PointCloudXYZI::Ptr(new PointCloudXYZI());
+    }
+    PointCloudXYZI::Ptr cloud_ecef(new PointCloudXYZI(static_cast<int>(cloud_enu->size()), 1));
+    for (size_t i = 0; i < cloud_enu->size(); ++i)
+    {
+        const auto &src = cloud_enu->points[i];
+        const Eigen::Vector3d p_enu(src.x, src.y, src.z);
+        const Eigen::Vector3d p_ecef = anchor_ecef_m + R_ecef_enu * p_enu;
+        auto &dst = cloud_ecef->points[i];
+        dst.x = static_cast<float>(p_ecef.x());
+        dst.y = static_cast<float>(p_ecef.y());
+        dst.z = static_cast<float>(p_ecef.z());
+        dst.intensity = src.intensity;
+    }
+    return cloud_ecef;
+}
+
+static bool ligo_save_ecef_companion_pcd(
+    const std::string &enu_pcd_path,
+    const PointCloudXYZI::Ptr &cloud_enu,
+    const Eigen::Matrix3d &R_ecef_enu,
+    const Eigen::Vector3d &anchor_ecef_m)
+{
+    const std::string ecef_path = ligo_replace_pcd_suffix(enu_pcd_path, "_ecef.pcd");
+    const PointCloudXYZI::Ptr cloud_ecef =
+        ligo_convert_enu_cloud_to_ecef(cloud_enu, R_ecef_enu, anchor_ecef_m);
+    if (!ligo_try_write_binary_pcd(ecef_path, cloud_ecef))
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] failed to save ECEF companion: %s", ecef_path.c_str());
+        return false;
+    }
+    return true;
+}
+
+static bool ligo_flush_tmp_map_bucket(const rclcpp::Logger &logger)
+{
+    if (!pcd_tmp_map_enable || !mapping_mode)
+    {
+        return false;
+    }
+    if (!pcl_wait_save_tmp_map || pcl_wait_save_tmp_map->empty() || g_tmp_map_bucket_idx < 0)
+    {
+        return false;
+    }
+    const std::string out_path = ligo_make_tmp_map_save_path(g_tmp_map_bucket_idx, pcd_tmp_map_interval_sec);
+    if (!ligo_try_write_binary_pcd(out_path, pcl_wait_save_tmp_map))
+    {
+        RCLCPP_ERROR(logger, "[tmp_map] failed to save bucket file: %s", out_path.c_str());
+        return false;
+    }
+    RCLCPP_INFO(
+        logger,
+        "[tmp_map] saved split map: bucket=%lld points=%zu path=%s",
+        g_tmp_map_bucket_idx,
+        pcl_wait_save_tmp_map->size(),
+        out_path.c_str());
+    pcl_wait_save_tmp_map->clear();
+    pcl_wait_tmp_map_ray_origins.clear();
+    return true;
+}
+
+static void ligo_tmp_map_on_scan(
+    const PointCloudXYZI::Ptr &cloud,
+    const Eigen::Vector3d &ray_origin,
+    double lidar_stamp_sec,
+    const rclcpp::Logger &logger)
+{
+    if (!pcd_tmp_map_enable || !mapping_mode || !cloud || cloud->empty())
+    {
+        return;
+    }
+    if (pcd_tmp_map_interval_sec <= 0.0)
+    {
+        RCLCPP_WARN(logger, "[tmp_map] invalid interval_sec=%.6f", pcd_tmp_map_interval_sec);
+        return;
+    }
+    if (!std::isfinite(g_tmp_map_time_base_sec))
+    {
+        g_tmp_map_time_base_sec = lidar_stamp_sec;
+    }
+    const double elapsed_sec = std::max(0.0, lidar_stamp_sec - g_tmp_map_time_base_sec);
+    const long long bucket_idx = static_cast<long long>(std::floor(elapsed_sec / pcd_tmp_map_interval_sec));
+    if (g_tmp_map_bucket_idx < 0)
+    {
+        g_tmp_map_bucket_idx = bucket_idx;
+    }
+    else if (bucket_idx != g_tmp_map_bucket_idx)
+    {
+        if (ligo_flush_tmp_map_bucket(logger))
+        {
+            g_tmp_map_bucket_idx = bucket_idx;
+        }
+    }
+
+    *pcl_wait_save_tmp_map += *cloud;
+    pcl_wait_tmp_map_ray_origins.insert(
+        pcl_wait_tmp_map_ray_origins.end(),
+        cloud->size(),
+        ray_origin);
 }
 
 static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix)
@@ -586,7 +711,7 @@ static void save_grid2d_from_cloud_with_rays(
         return;
     }
     // Keep high precision in metadata for large-coordinate frames.
-    f_yaml << std::fixed << std::setprecision(12);
+    f_yaml << std::fixed << std::setprecision(17);
     f_yaml << "image: " << pgm_path << "\n";
     f_yaml << "resolution: " << resolution_m << "\n";
     f_yaml << "origin: ["
@@ -704,6 +829,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 const Eigen::Matrix3d R_ecef_enu = gnss_comm::ecef2rotation(first_gps_ecef);
                 const Eigen::Vector3d origin_local = kf_output.x_.pos;
                 const Eigen::Vector3d origin_enu = R_local_to_enu * origin_local + t_local_to_enu;
+                const Eigen::Vector3d origin_ecef = first_gps_ecef + R_ecef_enu * origin_enu;
 
                 for (int i = 0; i < size; i++)
                 {
@@ -722,6 +848,11 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
 
                 *pcl_wait_save += *laserCloudWorld;
                 pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_enu);
+                {
+                    const PointCloudXYZI::Ptr laserCloudEcef =
+                        ligo_convert_enu_cloud_to_ecef(laserCloudWorld, R_ecef_enu, first_gps_ecef);
+                    ligo_tmp_map_on_scan(laserCloudEcef, origin_ecef, lidar_end_time, rclcpp::get_logger("ligo"));
+                }
 
                 scan_wait_num++;
                 if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
@@ -734,6 +865,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                         save_grid2d_from_cloud_with_rays(
                             pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                             3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla);
+                        ligo_save_ecef_companion_pcd(all_points_dir, pcl_wait_save, R_ecef_enu, first_gps_ecef);
                     }
                     pcl_wait_save->clear();
                     pcl_wait_ray_origins.clear();
@@ -757,6 +889,17 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
 
             *pcl_wait_save += *laserCloudWorld;
             pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_local);
+            if (pcd_tmp_map_enable)
+            {
+                static bool warned_tmp_map_non_enu = false;
+                if (!warned_tmp_map_non_enu)
+                {
+                    warned_tmp_map_non_enu = true;
+                    RCLCPP_WARN(
+                        rclcpp::get_logger("ligo"),
+                        "[tmp_map] skipped: ECEF anchor not ready (NMEA/icp_tf_required).");
+                }
+            }
 
             static int scan_wait_num = 0;
             scan_wait_num++;
@@ -3090,7 +3233,12 @@ after_sync_packages:
             save_grid2d_from_cloud_with_rays(
                 pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                 3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m);
+            ligo_save_ecef_companion_pcd(all_points_dir, pcl_wait_save, R_ecef_enu, anchor_ecef_m);
         }
+    }
+    if (mapping_mode && pcd_tmp_map_enable && pcl_wait_save_tmp_map->size() > 0)
+    {
+        ligo_flush_tmp_map_bucket(node->get_logger());
     }
     {
         Eigen::Vector3d ref_ecef = first_pvt_used;
