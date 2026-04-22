@@ -23,6 +23,9 @@ echo $HOME
 - `User=maum`
 - `WorkingDirectory=/home/maum/last_navi`
 - `ExecStart` 내부의 `source /home/maum/last_navi/install/setup.bash`
+- `.bashrc`에만 있는 라이브러리/경로가 있다면 `Environment=`로 명시:
+  - `Environment=LD_LIBRARY_PATH=/home/maum/local/gtsam-4.1.1/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu`
+  - `Environment=PATH=/usr/local/bin:/usr/bin:/bin`
 
 필요하면 `ExecStart`의 `/bin/bash`를 `/usr/bin/bash`로 변경합니다.
 
