@@ -168,9 +168,7 @@ class ModeOrchestrator:
                 "launch",
                 "ligo",
                 "nx_mapping.launch.py",
-                "--ros-args",
-                "-p",
-                f"pcd_save.map_name:={map_name}",
+                f"map_name:={map_name}",
             ]
         return ["ros2", "launch", "ligo", "nx_odometry.launch.py"]
 

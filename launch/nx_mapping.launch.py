@@ -13,10 +13,16 @@ def generate_launch_description():
     stdout_colorized_envvar = SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1")
 
     use_rviz = LaunchConfiguration("use_rviz")
+    map_name = LaunchConfiguration("map_name")
     use_rviz_arg = DeclareLaunchArgument(
         "use_rviz",
         default_value="false",
         description="Run RViz2 (default: false)",
+    )
+    map_name_arg = DeclareLaunchArgument(
+        "map_name",
+        default_value="map",
+        description="Mapping output map name for pcd_save.map_name",
     )
 
     pkg = get_package_share_directory("ligo")
@@ -29,7 +35,7 @@ def generate_launch_description():
         executable="ligo_mapping",
         name="laserMapping",
         output="screen",
-        parameters=[base_config, mode_config],
+        parameters=[base_config, mode_config, {"pcd_save.map_name": map_name}],
     )
 
     rviz_node = Node(
@@ -52,6 +58,7 @@ def generate_launch_description():
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(stdout_colorized_envvar)
     ld.add_action(use_rviz_arg)
+    ld.add_action(map_name_arg)
     ld.add_action(ligo_node)
     ld.add_action(mqtt_bridge)
     ld.add_action(rviz_node)
