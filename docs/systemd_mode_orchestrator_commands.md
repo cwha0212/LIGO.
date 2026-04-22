@@ -11,6 +11,23 @@ colcon build --symlink-install --packages-select ligo
 
 ## 2) 서비스 파일 설치
 
+먼저 현재 장비 사용자/워크스페이스 경로에 맞게 unit 파일을 수정합니다.
+
+```bash
+id -un
+echo $HOME
+```
+
+`/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./systemd/ligo-mode-orchestrator.service`에서 아래 값을 반드시 환경에 맞게 바꿉니다.
+
+- `User=chang`
+- `WorkingDirectory=/home/chang/projects/NAVICOM/GPS_LIO_ws`
+- `ExecStart` 내부의 `source /home/chang/projects/NAVICOM/GPS_LIO_ws/install/setup.bash`
+
+필요하면 `ExecStart`의 `/bin/bash`를 `/usr/bin/bash`로 변경합니다.
+
+그 다음 설치합니다.
+
 ```bash
 sudo cp /home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./systemd/ligo-mode-orchestrator.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -113,4 +130,32 @@ PY
 ```bash
 sudo systemctl restart ligo-mode-orchestrator.service
 sudo systemctl stop ligo-mode-orchestrator.service
+```
+
+## 8) 자주 발생하는 에러 해결
+
+### 에러
+
+- `Failed to determine user credentials: No such file or directory`
+- `Failed at step USER spawning /bin/bash: No such file or directory`
+
+### 원인
+
+- `User=`에 지정한 계정이 실제 장비에 없음
+- `WorkingDirectory` 또는 `ExecStart`의 홈 경로가 실제 경로와 다름
+- 일부 환경에서 bash 경로가 다름
+
+### 해결
+
+1. `/etc/systemd/system/ligo-mode-orchestrator.service`에서 아래 확인/수정
+   - `User=<실제 계정>`
+   - `WorkingDirectory=<실제 워크스페이스 경로>`
+   - `ExecStart`의 `source <실제 install/setup.bash 경로>`
+   - 필요 시 `/bin/bash` -> `/usr/bin/bash`
+2. 반영
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ligo-mode-orchestrator.service
+sudo systemctl status ligo-mode-orchestrator.service
 ```
