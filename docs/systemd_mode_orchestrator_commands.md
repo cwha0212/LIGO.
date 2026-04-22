@@ -26,6 +26,10 @@ echo $HOME
 - `.bashrc`에만 있는 라이브러리/경로가 있다면 `Environment=`로 명시:
   - `Environment=LD_LIBRARY_PATH=/home/maum/local/gtsam-4.1.1/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu`
   - `Environment=PATH=/usr/local/bin:/usr/bin:/bin`
+- DDS 통신 일관성을 위해 ROS 환경을 고정:
+  - `Environment=ROS_DOMAIN_ID=30`
+  - `Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`
+  - `Environment=ROS_LOCALHOST_ONLY=0`
 
 필요하면 `ExecStart`의 `/bin/bash`를 `/usr/bin/bash`로 변경합니다.
 

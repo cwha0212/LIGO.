@@ -10,6 +10,9 @@ WorkingDirectory=/home/maum/last_navi
 Environment=PYTHONUNBUFFERED=1
 Environment=LD_LIBRARY_PATH=/home/maum/local/gtsam-4.1.1/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=ROS_DOMAIN_ID=30
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+Environment=ROS_LOCALHOST_ONLY=0
 ExecStart=/bin/bash -lc "source /opt/ros/humble/setup.bash && source /home/maum/last_navi/install/setup.bash && python3 -u /home/maum/last_navi/src/LIGO./scripts/mqtt_mode_orchestrator.py"
 Restart=always
 RestartSec=3
