@@ -5,7 +5,7 @@
 ## 1) 빌드
 
 ```bash
-cd /home/chang/projects/NAVICOM/GPS_LIO_ws
+cd /home/maum/last_navi
 colcon build --symlink-install --packages-select ligo
 ```
 
@@ -18,18 +18,18 @@ id -un
 echo $HOME
 ```
 
-`/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./systemd/ligo-mode-orchestrator.service`에서 아래 값을 반드시 환경에 맞게 바꿉니다.
+`/home/maum/last_navi/src/LIGO./systemd/ligo-mode-orchestrator.service`에서 아래 값을 반드시 환경에 맞게 바꿉니다.
 
-- `User=chang`
-- `WorkingDirectory=/home/chang/projects/NAVICOM/GPS_LIO_ws`
-- `ExecStart` 내부의 `source /home/chang/projects/NAVICOM/GPS_LIO_ws/install/setup.bash`
+- `User=maum`
+- `WorkingDirectory=/home/maum/last_navi`
+- `ExecStart` 내부의 `source /home/maum/last_navi/install/setup.bash`
 
 필요하면 `ExecStart`의 `/bin/bash`를 `/usr/bin/bash`로 변경합니다.
 
 그 다음 설치합니다.
 
 ```bash
-sudo cp /home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./systemd/ligo-mode-orchestrator.service /etc/systemd/system/
+sudo cp /home/maum/last_navi/src/LIGO./systemd/ligo-mode-orchestrator.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 

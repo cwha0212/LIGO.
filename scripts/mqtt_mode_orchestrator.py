@@ -71,9 +71,7 @@ class ModeOrchestrator:
         self._lock = threading.Lock()
         self._running = True
         self._mqtt_connected = False
-        self._reconnect_backoff_sec = 1.0
-        self._reconnect_backoff_max_sec = 30.0
-        self._next_reconnect_not_before = 0.0
+        self._mqtt_connect_requested = False
 
         self.state = ModeState()
         self._mqtt = self._create_mqtt_client()
@@ -87,6 +85,8 @@ class ModeOrchestrator:
             client.ws_set_options(path=self.mqtt_ws_path)
         if self.mqtt_username:
             client.username_pw_set(self.mqtt_username, self.mqtt_password)
+        # 라이브 네트워크 환경에서 빠른 재연결을 위해 paho 내장 재연결 딜레이를 사용.
+        client.reconnect_delay_set(min_delay=1, max_delay=5)
 
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
@@ -128,38 +128,44 @@ class ModeOrchestrator:
             self._mqtt_connected = False
             self._schedule_next_reconnect()
 
-    def _schedule_next_reconnect(self) -> None:
-        self._next_reconnect_not_before = time.time() + self._reconnect_backoff_sec
-        self._reconnect_backoff_sec = min(self._reconnect_backoff_sec * 2.0, self._reconnect_backoff_max_sec)
-
     def _connect_mqtt(self) -> None:
-        now = time.time()
-        if now < self._next_reconnect_not_before:
+        if self._mqtt_connect_requested:
             return
         try:
-            self._mqtt.connect(self.mqtt_host, self.mqtt_port, keepalive=self.keepalive_sec)
+            # connect_async: DNS/네트워크 지연으로 인한 메인 루프 블로킹 방지.
+            self._mqtt.connect_async(self.mqtt_host, self.mqtt_port, keepalive=self.keepalive_sec)
+            self._mqtt_connect_requested = True
+            print(f"[INFO] MQTT 연결 시도 중: {self.mqtt_host}:{self.mqtt_port}")
         except Exception as exc:
             print(f"[WARN] MQTT 연결 실패: {exc}")
             self._mqtt_connected = False
-            self._schedule_next_reconnect()
+            self._mqtt_connect_requested = False
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
         self._mqtt_connected = not _mqtt_reason_failed(reason_code)
         if not self._mqtt_connected:
             print(f"[WARN] MQTT connect 실패: reason={reason_code!r}")
-            self._schedule_next_reconnect()
+            self._mqtt_connect_requested = False
             return
-        self._reconnect_backoff_sec = 1.0
-        self._next_reconnect_not_before = 0.0
+        self._mqtt_connect_requested = True
         print(f"[INFO] MQTT 연결됨: {self.mqtt_host}:{self.mqtt_port}")
-        client.subscribe(self.mqtt_control_topic, qos=0)
+        sub_info = client.subscribe(self.mqtt_control_topic, qos=0)
+        if int(getattr(sub_info, "rc", mqtt.MQTT_ERR_UNKNOWN)) != mqtt.MQTT_ERR_SUCCESS:
+            self._publish_status(
+                event="ready",
+                status="error",
+                message=f"제어 토픽 구독 실패: rc={getattr(sub_info, 'rc', None)}",
+            )
+            print(f"[ERROR] MQTT subscribe 실패: topic={self.mqtt_control_topic}, rc={getattr(sub_info, 'rc', None)}")
+            return
+        print(f"[INFO] MQTT 구독 완료: {self.mqtt_control_topic}")
         self._publish_status(event="ready", status="ok", message="모드 제어 대기 중입니다.")
 
     def _on_disconnect(self, client, userdata, *args) -> None:
         reason_code = args[1] if len(args) >= 2 else (args[0] if len(args) == 1 else None)
         print(f"[WARN] MQTT 연결 해제: reason={reason_code!r}")
         self._mqtt_connected = False
-        self._schedule_next_reconnect()
+        self._mqtt_connect_requested = False
 
     def _build_launch_command(self, mode: str, map_name: str) -> list[str]:
         if mode == "mapping":
@@ -208,9 +214,27 @@ class ModeOrchestrator:
             message=f"{mode} 모드 실행을 시작했습니다.",
             mode=mode,
             map_name=map_name,
-            extra={"pid": proc.pid},
+            extra={"pid": proc.pid, "command": " ".join(cmd)},
         )
         print(f"[INFO] started: mode={mode}, map_name={map_name}, pid={proc.pid}")
+        # 즉시 종료되는 경우(잘못된 launch 인자/환경) 사용자에게 빠르게 노출.
+        time.sleep(0.2)
+        early_rc = proc.poll()
+        if early_rc is not None:
+            with self._lock:
+                self._proc = None
+                self._proc_mode = "idle"
+                self._proc_map_name = ""
+                self.state = ModeState()
+            self._publish_status(
+                event="start",
+                status="error",
+                message="모드 프로세스가 시작 직후 종료되었습니다. journalctl 로그를 확인하세요.",
+                mode=mode,
+                map_name=map_name,
+                extra={"exit_code": early_rc, "command": " ".join(cmd)},
+            )
+            print(f"[ERROR] early-exit: mode={mode}, map_name={map_name}, exit_code={early_rc}")
 
     def _stop_mode(self, reason: str) -> None:
         with self._lock:
