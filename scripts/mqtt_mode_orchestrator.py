@@ -65,6 +65,7 @@ class ModeOrchestrator:
 
         # process control
         self.stop_timeout_sec = 10.0
+        self.start_confirm_sec = 1.5
         self._proc: Optional[subprocess.Popen] = None
         self._proc_mode: str = "idle"
         self._proc_map_name: str = ""
@@ -208,17 +209,8 @@ class ModeOrchestrator:
             self.state.map_name = map_name
             self.state.running_pid = proc.pid
 
-        self._publish_status(
-            event="start",
-            status="ok",
-            message=f"{mode} 모드 실행을 시작했습니다.",
-            mode=mode,
-            map_name=map_name,
-            extra={"pid": proc.pid, "command": " ".join(cmd)},
-        )
-        print(f"[INFO] started: mode={mode}, map_name={map_name}, pid={proc.pid}")
-        # 즉시 종료되는 경우(잘못된 launch 인자/환경) 사용자에게 빠르게 노출.
-        time.sleep(0.2)
+        # 시작 직후 즉시 죽는 케이스를 걸러내기 위해 확인 시간을 둔다.
+        time.sleep(self.start_confirm_sec)
         early_rc = proc.poll()
         if early_rc is not None:
             with self._lock:
@@ -235,6 +227,17 @@ class ModeOrchestrator:
                 extra={"exit_code": early_rc, "command": " ".join(cmd)},
             )
             print(f"[ERROR] early-exit: mode={mode}, map_name={map_name}, exit_code={early_rc}")
+            return
+
+        self._publish_status(
+            event="start",
+            status="ok",
+            message=f"{mode} 모드 실행을 시작했습니다.",
+            mode=mode,
+            map_name=map_name,
+            extra={"pid": proc.pid, "command": " ".join(cmd)},
+        )
+        print(f"[INFO] started: mode={mode}, map_name={map_name}, pid={proc.pid}")
 
     def _stop_mode(self, reason: str) -> None:
         with self._lock:
