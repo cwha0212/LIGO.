@@ -3,8 +3,8 @@ import time
 import paho.mqtt.client as mqtt
 
 topic = "navi1/control/mode"
-payload = {"command": "start", "mapping_mode": True, "map_name": "site_a_20260422"}
-
+payload = {"command": "start", "mapping_mode": False, "map_name": "site_a_20260422"}
+# payload = {"command": "stop"}
 state = {"connected": False, "published": False, "failed": False, "mid": None}
 
 

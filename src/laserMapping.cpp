@@ -76,6 +76,9 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
+#include <map>
+#include <regex>
+#include <sstream>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
 #define PUBFRAME_PERIOD     (20)
@@ -280,40 +283,40 @@ static long long g_tmp_map_bucket_idx = -1;
 static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointCloudXYZI::Ptr &cloud);
 static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix);
 
-/** Max version N among `{basename}_v{N}.pcd` in ROOT_DIR/PCD (missing versions OK: v2 without v1 → max=2). */
+static std::filesystem::path ligo_make_map_root_dir()
+{
+    return std::filesystem::path(ROOT_DIR) / "PCD" / pcd_save_map_name;
+}
+
+static std::filesystem::path ligo_make_map_version_info_path()
+{
+    return std::filesystem::path(ROOT_DIR) / "PCD" / "map_version_info.json";
+}
+
+/** Max version N among `PCD/{map_name}/v{N}` directories. */
 static int ligo_find_max_saved_version_for_basename(const std::string &basename)
 {
+    (void)basename;
     int max_ver = 0;
     try
     {
-        const std::filesystem::path pcd_dir = std::filesystem::path(ROOT_DIR) / "PCD";
-        if (!std::filesystem::exists(pcd_dir) || !std::filesystem::is_directory(pcd_dir))
+        const std::filesystem::path map_dir = ligo_make_map_root_dir();
+        if (!std::filesystem::exists(map_dir) || !std::filesystem::is_directory(map_dir))
         {
             return 0;
         }
-        const std::string suffix = ".pcd";
-        const std::string prefix = basename + "_v";
-        for (const auto &entry : std::filesystem::directory_iterator(pcd_dir))
+        for (const auto &entry : std::filesystem::directory_iterator(map_dir))
         {
-            if (!entry.is_regular_file())
+            if (!entry.is_directory())
             {
                 continue;
             }
             const std::string name = entry.path().filename().string();
-            if (name.rfind(prefix, 0) != 0)
+            if (name.rfind("v", 0) != 0 || name.size() <= 1)
             {
                 continue;
             }
-            if (name.size() <= prefix.size() + suffix.size())
-            {
-                continue;
-            }
-            if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
-            {
-                continue;
-            }
-            const std::string ver_str =
-                name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+            const std::string ver_str = name.substr(1);
             bool all_digit = !ver_str.empty();
             for (char c : ver_str)
             {
@@ -340,7 +343,126 @@ static int ligo_find_max_saved_version_for_basename(const std::string &basename)
 
 static std::string ligo_make_pcd_save_path(int version_number)
 {
-    return std::string(ROOT_DIR) + "PCD/" + pcd_save_map_name + "_v" + std::to_string(version_number) + ".pcd";
+    return (ligo_make_map_root_dir() / ("v" + std::to_string(version_number)) / (pcd_save_map_name + ".pcd")).string();
+}
+
+static std::map<std::string, int> ligo_parse_map_version_info(const std::string &text)
+{
+    std::map<std::string, int> out;
+    const std::regex pair_re("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*([0-9]+)");
+    std::smatch m;
+    std::string::const_iterator search_start(text.cbegin());
+    while (std::regex_search(search_start, text.cend(), m, pair_re))
+    {
+        const std::string key = m[1].str();
+        const int ver = std::stoi(m[2].str());
+        out[key] = ver;
+        search_start = m.suffix().first;
+    }
+    return out;
+}
+
+static std::string ligo_serialize_map_version_info(const std::map<std::string, int> &kv)
+{
+    std::ostringstream oss;
+    oss << "{\n";
+    bool first = true;
+    for (const auto &it : kv)
+    {
+        if (!first)
+        {
+            oss << ",\n";
+        }
+        first = false;
+        oss << "  \"" << ligo_json_escape(it.first) << "\": " << it.second;
+    }
+    oss << "\n}\n";
+    return oss.str();
+}
+
+static bool ligo_update_map_version_info(const std::string &map_name, int latest_version)
+{
+    if (map_name.empty() || latest_version <= 0)
+    {
+        return false;
+    }
+    try
+    {
+        const std::filesystem::path info_path = ligo_make_map_version_info_path();
+        const std::filesystem::path info_dir = info_path.parent_path();
+        if (!info_dir.empty())
+        {
+            std::error_code mkdir_ec;
+            std::filesystem::create_directories(info_dir, mkdir_ec);
+            if (mkdir_ec)
+            {
+                RCLCPP_ERROR(
+                    rclcpp::get_logger("ligo"),
+                    "[pcd] failed to create version info dir: %s",
+                    mkdir_ec.message().c_str());
+                return false;
+            }
+        }
+
+        std::map<std::string, int> kv;
+        if (std::filesystem::exists(info_path))
+        {
+            std::ifstream in(info_path);
+            if (!in.good())
+            {
+                RCLCPP_WARN(
+                    rclcpp::get_logger("ligo"),
+                    "[pcd] map version info exists but cannot be read: %s",
+                    info_path.string().c_str());
+            }
+            else
+            {
+                std::ostringstream buf;
+                buf << in.rdbuf();
+                kv = ligo_parse_map_version_info(buf.str());
+            }
+        }
+        kv[map_name] = latest_version;
+
+        const std::filesystem::path tmp_path = info_path.string() + ".tmp";
+        std::ofstream out(tmp_path, std::ios::trunc);
+        if (!out.good())
+        {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("ligo"),
+                "[pcd] failed to open temp version info file: %s",
+                tmp_path.string().c_str());
+            return false;
+        }
+        out << ligo_serialize_map_version_info(kv);
+        out.close();
+
+        std::error_code ec;
+        std::filesystem::rename(tmp_path, info_path, ec);
+        if (ec)
+        {
+            std::filesystem::remove(info_path, ec);
+            ec.clear();
+            std::filesystem::rename(tmp_path, info_path, ec);
+            if (ec)
+            {
+                RCLCPP_ERROR(
+                    rclcpp::get_logger("ligo"),
+                    "[pcd] failed to update map version info json: %s",
+                    ec.message().c_str());
+                return false;
+            }
+        }
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("ligo"),
+            "[pcd] failed to update map version info json: %s",
+            e.what());
+        return false;
+    }
 }
 
 static std::string ligo_make_tmp_map_save_path(long long bucket_idx, double interval_sec)
@@ -419,6 +541,49 @@ static bool ligo_flush_tmp_map_bucket(const rclcpp::Logger &logger)
     pcl_wait_save_tmp_map->clear();
     pcl_wait_tmp_map_ray_origins.clear();
     return true;
+}
+
+static void ligo_cleanup_tmp_map_pcd_files(const rclcpp::Logger &logger)
+{
+    const std::filesystem::path tmp_dir = std::filesystem::path(ROOT_DIR) / "tmp_map";
+    try
+    {
+        if (!std::filesystem::exists(tmp_dir) || !std::filesystem::is_directory(tmp_dir))
+        {
+            return;
+        }
+        size_t removed_count = 0;
+        for (const auto &entry : std::filesystem::directory_iterator(tmp_dir))
+        {
+            if (!entry.is_regular_file())
+            {
+                continue;
+            }
+            const std::filesystem::path p = entry.path();
+            if (p.extension() != ".pcd")
+            {
+                continue;
+            }
+            std::error_code ec;
+            if (std::filesystem::remove(p, ec) && !ec)
+            {
+                ++removed_count;
+            }
+            else if (ec)
+            {
+                RCLCPP_WARN(
+                    logger,
+                    "[tmp_map] failed to remove %s: %s",
+                    p.string().c_str(),
+                    ec.message().c_str());
+            }
+        }
+        RCLCPP_INFO(logger, "[tmp_map] cleanup complete: removed %zu pcd files", removed_count);
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_WARN(logger, "[tmp_map] cleanup skipped due to error: %s", e.what());
+    }
 }
 
 static void ligo_tmp_map_on_scan(
@@ -862,6 +1027,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                     cout << "current scan saved to " << all_points_dir << " (ENU)" << endl;
                     if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
                     {
+                        ligo_update_map_version_info(pcd_save_map_name, pcd_index);
                         save_grid2d_from_cloud_with_rays(
                             pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                             3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla);
@@ -908,7 +1074,10 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 pcd_index++;
                 string all_points_dir = ligo_make_pcd_save_path(pcd_index);
                 cout << "current scan saved to " << all_points_dir << endl;
-                ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save);
+                if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
+                {
+                    ligo_update_map_version_info(pcd_save_map_name, pcd_index);
+                }
                 pcl_wait_save->clear();
                 pcl_wait_ray_origins.clear();
                 scan_wait_num = 0;
@@ -1664,7 +1833,7 @@ int main(int argc, char** argv)
             pcd_index = max_saved_ver;
         }
         RCLCPP_INFO(node->get_logger(),
-                    "[pcd] map_name=%s next file will be %s_v%d.pcd",
+                    "[pcd] map_name=%s next dir will be PCD/%s/v%d/",
                     pcd_save_map_name.c_str(),
                     pcd_save_map_name.c_str(),
                     pcd_index + 1);
@@ -3228,17 +3397,25 @@ after_sync_packages:
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
         const Eigen::Vector3d anchor_lla_deg_m = saved_in_enu ? first_gps_lla : Eigen::Vector3d::Zero();
         cout << "current scan saved to " << all_points_dir << (saved_in_enu ? " (ENU)" : "") << endl;
-        if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save) && saved_in_enu)
+        if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
         {
-            save_grid2d_from_cloud_with_rays(
-                pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
-                3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m);
-            ligo_save_ecef_companion_pcd(all_points_dir, pcl_wait_save, R_ecef_enu, anchor_ecef_m);
+            ligo_update_map_version_info(pcd_save_map_name, pcd_index);
+            if (saved_in_enu)
+            {
+                save_grid2d_from_cloud_with_rays(
+                    pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
+                    3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m);
+                ligo_save_ecef_companion_pcd(all_points_dir, pcl_wait_save, R_ecef_enu, anchor_ecef_m);
+            }
         }
     }
     if (mapping_mode && pcd_tmp_map_enable && pcl_wait_save_tmp_map->size() > 0)
     {
         ligo_flush_tmp_map_bucket(node->get_logger());
+    }
+    if (mapping_mode)
+    {
+        ligo_cleanup_tmp_map_pcd_files(node->get_logger());
     }
     {
         Eigen::Vector3d ref_ecef = first_pvt_used;
