@@ -421,21 +421,7 @@ Eigen::Matrix<double, 3, 1> SO3ToEuler(const SO3 &rot)
 
 void open_file()
 {
-    fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),ios::out);
-    if (NMEA_ENABLE)
-    {
-        fout_global.open(DEBUG_FILE_DIR("pos_est.txt"), ios::out);
-        fout_global.setf(ios::fixed, ios::floatfield);
-        fout_global.precision(6);
-        fout_ppp.open(DEBUG_FILE_DIR("pos_ppp.txt"), ios::out);
-        fout_ppp.setf(ios::fixed, ios::floatfield);
-        fout_ppp.precision(6);
-    }
-    if (fout_out)
-        cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
-    else
-        cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
-
+    cout << "~~~~ debug file logging disabled" << endl;
 }
 
 void cout_state_to_file_nmea()
