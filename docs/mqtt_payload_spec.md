@@ -167,19 +167,20 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 
 ### 제어 입력 (`navi1/control/mode`)
 
-#### 1) Mapping 시작 (`map_name` 필수)
+#### 1) Mapping 시작 (`map_name`, `sub_map_name` 필수)
 
 ```json
 {
   "command": "start",
   "mapping_mode": true,
-  "map_name": "site_a_20260422"
+  "map_name": "site_a",
+  "sub_map_name": "floor_1"
 }
 ```
 
 규칙:
 
-- `mapping_mode=true`일 때 `map_name`은 필수.
+- `mapping_mode=true`일 때 `map_name`, `sub_map_name`은 필수.
 - `map_name` 허용 문자: 영문/숫자/`_`/`-`.
 - 누락/공백/형식 오류 시 실행하지 않고 에러 상태를 발행.
 
@@ -192,31 +193,13 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 }
 ```
 
-참조 지도는 디스크의 **`PCD/<map_id>/<map_id>.pcd`** 를 사용합니다(매핑 시 저장된 경로와 동일). **odometry 시작 시 지도 ID는 `map_names` 배열만 사용합니다** (`map_name` 필드는 거부됨).
-
-선택 우선순위:
-
-1. MQTT `map_names` 배열 **앞에서부터**, 해당 경로에 PCD가 있으면 그 지도 사용
-2. `map_names`가 없거나 비어 있거나 매칭 실패 시, 설정 파일의 `pcd_save.map_name` 으로 `PCD/<그 이름>/<그 이름>.pcd` 시도
-3. 그래도 없으면 실내 참조 PCD를 찾지 못함(경고 로그)
-
-단일 지도 예시:
+odometry는 `map_name`(단일)만 입력받습니다. 이 이름을 기준으로 `PCD/<map_name>/`를 열고, 하위의 sub-map 디렉터리들(`*_grid2d.yaml`)을 전부 로드합니다.
 
 ```json
 {
   "command": "start",
   "mapping_mode": false,
-  "map_names": ["building_a"]
-}
-```
-
-후보가 여러 개일 때:
-
-```json
-{
-  "command": "start",
-  "mapping_mode": false,
-  "map_names": ["building_a", "building_b"]
+  "map_name": "building_a"
 }
 ```
 

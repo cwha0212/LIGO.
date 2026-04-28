@@ -3,17 +3,17 @@ import time
 import paho.mqtt.client as mqtt
 
 topic = "navi1/control/mode"
-# Odometry: PCD/<id>/<id>.pcd 순서로 시도 (없으면 pcd_save.map_name)
+# Odometry: map_name 단일 지정 -> PCD/<map_name>/ 하위 sub-map 전체 로드
 # payload = {
 #     "command": "start",
 #     "mapping_mode": False,
-#     "map_names": ["site_a"],
-# }
+#     # }
 
 # payload = {
 #     "command": "start",
 #     "mapping_mode": True,
 #     "map_name": "site_a",
+#     "sub_map_name": "floor_1",
 # }
 
 payload = {

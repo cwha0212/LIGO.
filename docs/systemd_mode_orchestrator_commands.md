@@ -58,7 +58,7 @@ sudo journalctl -u ligo-mode-orchestrator.service -f
 
 브로커가 WebSocket(`:80`, `/mqtt`)을 사용하므로 아래 Python 예시를 권장합니다.
 
-### 5-1) Mapping 시작 (`map_name` 필수)
+### 5-1) Mapping 시작 (`map_name`, `sub_map_name` 필수)
 
 ```bash
 python3 - <<'PY'
@@ -66,7 +66,7 @@ import json
 import paho.mqtt.client as mqtt
 
 topic = "navi1/control/mode"
-payload = {"command": "start", "mapping_mode": True, "map_name": "site_a_20260422"}
+payload = {"command": "start", "mapping_mode": True, "map_name": "site_a", "sub_map_name": "floor_1"}
 
 c = mqtt.Client(transport="websockets", callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
 c.ws_set_options(path="/mqtt")
@@ -108,7 +108,7 @@ import json
 import paho.mqtt.client as mqtt
 
 topic = "navi1/control/mode"
-payload = {"command": "start", "mapping_mode": False}
+payload = {"command": "start", "mapping_mode": False, "map_name": "site_a"}
 
 c = mqtt.Client(transport="websockets", callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
 c.ws_set_options(path="/mqtt")

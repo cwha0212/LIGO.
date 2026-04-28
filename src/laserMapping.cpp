@@ -282,13 +282,13 @@ static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const st
 
 static std::filesystem::path ligo_make_map_root_dir()
 {
-    return std::filesystem::path(ROOT_DIR) / "PCD" / pcd_save_map_name;
+    return std::filesystem::path(ROOT_DIR) / "PCD" / pcd_save_map_name / pcd_save_sub_map_name;
 }
 
-/** Single map directory: `PCD/{map_name}/{map_name}.pcd` (overwrite on each save). */
+/** Single sub-map directory: `PCD/{map_name}/{sub_map_name}/{sub_map_name}.pcd` (overwrite on each save). */
 static std::string ligo_make_pcd_save_path()
 {
-    return (ligo_make_map_root_dir() / (pcd_save_map_name + ".pcd")).string();
+    return (ligo_make_map_root_dir() / (pcd_save_sub_map_name + ".pcd")).string();
 }
 
 static std::string ligo_make_tmp_map_save_path(long long bucket_idx, double interval_sec)
@@ -1648,9 +1648,10 @@ int main(int argc, char** argv)
     if (mapping_mode)
     {
         RCLCPP_INFO(node->get_logger(),
-                    "[pcd] mapping saves overwrite PCD/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
+                    "[pcd] mapping saves overwrite PCD/%s/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
                     pcd_save_map_name.c_str(),
-                    pcd_save_map_name.c_str());
+                    pcd_save_sub_map_name.c_str(),
+                    pcd_save_sub_map_name.c_str());
     }
     RCLCPP_INFO(node->get_logger(), "lidar_type: %d", lidar_type);
     ivox_ = std::make_shared<IVoxType>(ivox_options_);

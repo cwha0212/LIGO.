@@ -10,7 +10,7 @@
       map_pcd_path: ""
     # 매핑 세션 PCD 저장 이름·간격·그리드 (경로는 코드상 ROOT_DIR/PCD/ 고정)
     pcd_save:
-      # <ROOT_DIR>/PCD/{map_name}/{map_name}.pcd (+ grid yaml/pgm, ecef) — 동일 세션·같은 이름이면 덮어쓰기
+      # <ROOT_DIR>/PCD/{map_name}/{sub_map_name}/{sub_map_name}.pcd (+ grid yaml/pgm, ecef) — 동일 이름이면 덮어쓰기
       map_name: "map"
       interval: -1
       grid2d_resolution: 0.2

@@ -9,18 +9,19 @@
 
 ## 제어 메시지 스키마
 
-### 1) Mapping 시작 (`map_name` 필수)
+### 1) Mapping 시작 (`map_name`, `sub_map_name` 필수)
 
 ```json
 {
   "command": "start",
   "mapping_mode": true,
-  "map_name": "site_a_20260422"
+  "map_name": "site_a",
+  "sub_map_name": "floor_1"
 }
 ```
 
 - `map_name`은 영문/숫자/`_`/`-`만 허용됩니다.
-- `mapping_mode=true`인데 `map_name`이 누락/공백/형식 오류면 실행하지 않고 에러 상태를 발행합니다.
+- `mapping_mode=true`인데 `map_name` 또는 `sub_map_name`이 누락/공백/형식 오류면 실행하지 않고 에러 상태를 발행합니다.
 
 ### 2) Odometry 시작
 
@@ -33,32 +34,20 @@
 }
 ```
 
-**지도 ID를 지정할 때는 `map_names` 배열만 사용합니다.** (1개일 때도 `["map1"]` — `map_name` 필드는 odometry에서 사용하지 않으며, 넣으면 오류)
+**odometry는 `map_name`(단일)만 사용합니다.** 이 이름의 하위 디렉터리 `PCD/<map_name>/` 아래에 있는 모든 sub-map(`*_grid2d.yaml`)을 로드합니다.
 
-- 배열 **앞에서부터** `PCD/<id>/<id>.pcd` 가 있는 첫 ID를 참조합니다.
-- 실제 파일 경로는 매핑 저장과 동일하게 `PCD/<id>/<id>.pcd` 입니다.
+- 실제 매핑 저장 경로는 `PCD/<map_name>/<sub_map_name>/<sub_map_name>.pcd` 입니다.
+- odometry는 `PCD/<map_name>/`를 기준으로 sub-map들을 전부 탐색합니다(재귀).
 
-단일 지도 예시:
-
-```json
-{
-  "command": "start",
-  "mapping_mode": false,
-  "map_names": ["site_a"]
-}
-```
-
-후보가 여러 개일 때(순서대로 시도):
+odometry 예시:
 
 ```json
 {
   "command": "start",
   "mapping_mode": false,
-  "map_names": ["building_a", "building_b"]
+  "map_name": "site_a"
 }
 ```
-
-**odometry 제어 메시지에 `map_name` 필드를 넣으면 오류로 거절됩니다.** (`map_names`만 허용)
 
 ### 3) 현재 모드 종료
 
@@ -92,8 +81,8 @@
 
 ## 실행되는 launch
 
-- mapping: `ros2 launch ligo nx_mapping.launch.py map_name:=<map_name>` → `PCD/<map_name>/` 에 `.pcd`, grid `yaml`/`pgm` 등 저장(동일 이름 시 덮어쓰기)
-- odometry: `ros2 launch ligo nx_odometry.launch.py` — 선택 인자 `indoor_map_names_csv:=a,b` 로 참조 PCD 우선순위 전달
+- mapping: `ros2 launch ligo nx_mapping.launch.py map_name:=<map_name> sub_map_name:=<sub_map_name>` → `PCD/<map_name>/<sub_map_name>/`에 저장(동일 이름 시 덮어쓰기)
+- odometry: `ros2 launch ligo nx_odometry.launch.py` — 선택 인자 `indoor_map_name:=<map_name>`로 map 그룹 지정
 
 ## 설치/운영 명령
 
@@ -106,5 +95,5 @@
 1. Mapping 시작 메시지(`map_name` 포함) 발행
 2. `mode_status`에서 `start` 이벤트 확인
 3. `stop` 메시지 발행 후 `stop` 이벤트 확인
-4. Odometry 시작 메시지 발행(`map_names` 권장, 예: `["map1"]`) 후 `start` 이벤트 확인
+4. Odometry 시작 메시지 발행(`map_name` 단일) 후 `start` 이벤트 확인
 5. 필요 시 반복

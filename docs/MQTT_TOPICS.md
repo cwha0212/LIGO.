@@ -37,11 +37,10 @@
 
 ### 제어 메시지 예시
 
-- Mapping 시작 (`map_name` 필수)
-  - `{"command":"start","mapping_mode":true,"map_name":"site_a_20260422"}`
-- Odometry 시작(선택: `map_names` — `PCD/<id>/<id>.pcd` 우선순위; `map_name` 미사용)
-  - `{"command":"start","mapping_mode":false}`
-  - `{"command":"start","mapping_mode":false,"map_names":["site_a","site_b"]}`
+- Mapping 시작 (`map_name`, `sub_map_name` 필수)
+  - `{"command":"start","mapping_mode":true,"map_name":"site_a","sub_map_name":"floor_1"}`
+- Odometry 시작(`map_name` 단일; `PCD/<map_name>/` 하위 sub-map 전체 로드)
+  - `{"command":"start","mapping_mode":false,"map_name":"site_a"}`
 - 종료
   - `{"command":"stop"}`
 

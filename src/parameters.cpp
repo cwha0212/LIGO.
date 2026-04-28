@@ -77,55 +77,25 @@ static std::string resolve_indoor_grid_map_dir(const std::string& raw) {
   return src_joined.string();
 }
 
-static std::vector<std::string> parse_indoor_preferred_map_names_csv(const std::string& csv) {
-  std::vector<std::string> out;
-  std::string s = trim_ws(csv);
-  if (s.empty()) {
-    return out;
+static std::string sanitize_map_token(std::string raw, const std::string& fallback) {
+  raw = trim_ws(raw);
+  if (raw.empty()) {
+    raw = fallback;
   }
-  size_t start = 0;
-  while (start < s.size()) {
-    size_t comma = s.find(',', start);
-    const size_t end = (comma == std::string::npos) ? s.size() : comma;
-    std::string part = trim_ws(s.substr(start, end - start));
-    if (!part.empty()) {
-      out.push_back(part);
+  for (char &ch : raw) {
+    if (ch == '/' || ch == '\\') {
+      ch = '_';
     }
-    if (comma == std::string::npos) {
-      break;
-    }
-    start = comma + 1;
   }
-  return out;
+  return raw;
 }
 
-/** `PCD/<map_name>/<map_name>.pcd` if the file exists. */
-static std::string resolve_map_pcd_at_map_dir(const std::string& map_name) {
-  if (map_name.empty()) {
-    return "";
-  }
+static std::string resolve_indoor_map_group_dir(const std::string& map_name) {
   namespace fs = std::filesystem;
-  const fs::path pcd_path = fs::path(ROOT_DIR) / "PCD" / map_name / (map_name + ".pcd");
+  const fs::path map_dir = fs::path(ROOT_DIR) / "PCD" / map_name;
   std::error_code ec;
-  if (!fs::exists(pcd_path, ec) || !fs::is_regular_file(pcd_path, ec)) {
-    return "";
-  }
-  const fs::path canon = fs::weakly_canonical(pcd_path, ec);
-  return ec ? pcd_path.string() : canon.string();
-}
-
-/** Try each preferred map id in order; first existing PCD path wins. */
-static std::string resolve_preferred_indoor_map_pcd(const std::vector<std::string>& preferred_order) {
-  for (const std::string& name : preferred_order) {
-    if (name.empty()) {
-      continue;
-    }
-    const std::string resolved = resolve_map_pcd_at_map_dir(name);
-    if (!resolved.empty()) {
-      return resolved;
-    }
-  }
-  return "";
+  const fs::path canon = fs::weakly_canonical(map_dir, ec);
+  return ec ? map_dir.string() : canon.string();
 }
 
 }  // namespace
@@ -169,6 +139,7 @@ bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 bool   scan_pub_en, scan_body_pub_en;
 double pcd_save_grid2d_resolution_m = 0.2;
 std::string pcd_save_map_name = "map";
+std::string pcd_save_sub_map_name = "sub_map";
 bool pcd_tmp_map_enable = false;
 double pcd_tmp_map_interval_sec = 1.0;
 shared_ptr<Preprocess> p_pre;
@@ -311,22 +282,12 @@ void readParameters(rclcpp::Node * node)
     pcd_tmp_map_interval_sec = 1.0;
   }
   {
-    std::string raw = get_param("pcd_save.map_name", std::string("map"));
-    auto trim = [](std::string &s) {
-      while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n'))
-        s.erase(0, 1);
-      while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n'))
-        s.pop_back();
-    };
-    trim(raw);
-    if (raw.empty())
-      raw = "map";
-    for (char &ch : raw)
-    {
-      if (ch == '/' || ch == '\\')
-        ch = '_';
-    }
-    pcd_save_map_name = raw;
+    pcd_save_map_name = sanitize_map_token(
+        get_param("pcd_save.map_name", std::string("map")),
+        "map");
+    pcd_save_sub_map_name = sanitize_map_token(
+        get_param("pcd_save.sub_map_name", std::string("sub_map")),
+        "sub_map");
   }
   lidar_time_inte = get_param("mapping.lidar_time_inte", 0.1);
   dyn_filter = get_param("mapping.dyn_filter", true);
@@ -434,34 +395,21 @@ void readParameters(rclcpp::Node * node)
     indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
     indoor_grid_map_dir = resolve_indoor_grid_map_dir(get_param("indoor.grid_map_dir", std::string("")));
     if (!mapping_mode) {
-      // Odometry: load reference PCD from PCD/<map>/<map>.pcd (MQTT CSV or pcd_save.map_name order).
       if (!indoor_map_pcd_path.empty()) {
         RCLCPP_WARN(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; using PCD/<name>/<name>.pcd lookup.");
+            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; grid maps are loaded from PCD/<map_name>/.");
       }
-      if (!indoor_grid_map_dir.empty()) {
-        RCLCPP_WARN(
-            rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.grid_map_dir is ignored in odometry mode; using PCD/<name>/<name>.pcd lookup.");
-      }
-      indoor_grid_map_dir.clear();
-      std::vector<std::string> preferred_maps =
-          parse_indoor_preferred_map_names_csv(get_param("indoor.preferred_map_names_csv", std::string("")));
-      if (preferred_maps.empty() && !pcd_save_map_name.empty()) {
-        preferred_maps.push_back(pcd_save_map_name);
-      }
-      indoor_map_pcd_path = resolve_preferred_indoor_map_pcd(preferred_maps);
-      if (!indoor_map_pcd_path.empty()) {
-        RCLCPP_INFO(
-            rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor reference PCD: %s",
-            indoor_map_pcd_path.c_str());
-      } else {
-        RCLCPP_WARN(
-            rclcpp::get_logger("ligo"),
-            "[indoor/gicp] no PCD found at PCD/<map>/<map>.pcd for preferred names (odometry mode).");
-      }
+      const std::string odom_map_name = sanitize_map_token(
+          get_param("indoor.map_name_for_odometry", std::string("")),
+          pcd_save_map_name);
+      indoor_grid_map_dir = resolve_indoor_map_group_dir(odom_map_name);
+      indoor_map_pcd_path.clear();
+      RCLCPP_INFO(
+          rclcpp::get_logger("ligo"),
+          "[indoor/gicp] odometry map group: map_name=%s dir=%s",
+          odom_map_name.c_str(),
+          indoor_grid_map_dir.c_str());
     } else if (!indoor_grid_map_dir.empty()) {
       cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;
     }

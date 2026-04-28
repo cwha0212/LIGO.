@@ -19,13 +19,13 @@ def generate_launch_description():
         description="Run RViz2 (default: false)",
     )
 
-    indoor_map_names_csv = LaunchConfiguration("indoor_map_names_csv")
-    indoor_map_names_csv_arg = DeclareLaunchArgument(
-        "indoor_map_names_csv",
+    indoor_map_name = LaunchConfiguration("indoor_map_name")
+    indoor_map_name_arg = DeclareLaunchArgument(
+        "indoor_map_name",
         default_value="",
         description=(
-            "Comma-separated indoor map ids; first existing PCD at PCD/<id>/<id>.pcd wins "
-            "(e.g. site_a,site_b). Empty: try pcd_save.map_name from YAML only."
+            "Odometry map name. Loads all sub-maps under PCD/<map_name>/ recursively. "
+            "Empty: fallback to pcd_save.map_name from YAML."
         ),
     )
 
@@ -42,7 +42,7 @@ def generate_launch_description():
         parameters=[
             base_config,
             mode_config,
-            {"indoor.preferred_map_names_csv": indoor_map_names_csv},
+            {"indoor.map_name_for_odometry": indoor_map_name},
         ],
     )
 
@@ -66,7 +66,7 @@ def generate_launch_description():
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(stdout_colorized_envvar)
     ld.add_action(use_rviz_arg)
-    ld.add_action(indoor_map_names_csv_arg)
+    ld.add_action(indoor_map_name_arg)
     ld.add_action(ligo_node)
     ld.add_action(mqtt_bridge)
     ld.add_action(rviz_node)

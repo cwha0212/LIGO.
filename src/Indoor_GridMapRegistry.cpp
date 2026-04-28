@@ -172,7 +172,7 @@ bool loadIndoorGridMapsFromDirectory(const std::string &dir) {
     return false;
 
   std::vector<std::filesystem::path> yaml_paths;
-  for (const auto &e : std::filesystem::directory_iterator(dir, ec)) {
+  for (const auto &e : std::filesystem::recursive_directory_iterator(dir, ec)) {
     if (!e.is_regular_file())
       continue;
     const auto name = e.path().filename().string();
