@@ -6,8 +6,8 @@ import signal
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 try:
     import paho.mqtt.client as mqtt
@@ -46,6 +46,7 @@ def _is_valid_map_name(raw: object) -> bool:
 class ModeState:
     mode: str = "idle"
     map_name: str = ""
+    indoor_map_names: List[str] = field(default_factory=list)
     running_pid: Optional[int] = None
 
 
@@ -69,6 +70,7 @@ class ModeOrchestrator:
         self._proc: Optional[subprocess.Popen] = None
         self._proc_mode: str = "idle"
         self._proc_map_name: str = ""
+        self._proc_indoor_map_names: List[str] = []
         self._lock = threading.Lock()
         self._running = True
         self._mqtt_connected = False
@@ -168,7 +170,9 @@ class ModeOrchestrator:
         self._mqtt_connected = False
         self._mqtt_connect_requested = False
 
-    def _build_launch_command(self, mode: str, map_name: str) -> list[str]:
+    def _build_launch_command(
+        self, mode: str, map_name: str, indoor_map_names: List[str]
+    ) -> List[str]:
         if mode == "mapping":
             return [
                 "ros2",
@@ -177,9 +181,14 @@ class ModeOrchestrator:
                 "nx_mapping.launch.py",
                 f"map_name:={map_name}",
             ]
-        return ["ros2", "launch", "ligo", "nx_odometry.launch.py"]
+        cmd = ["ros2", "launch", "ligo", "nx_odometry.launch.py"]
+        if indoor_map_names:
+            cmd.append("indoor_map_names_csv:=" + ",".join(indoor_map_names))
+        return cmd
 
-    def _start_mode(self, mode: str, map_name: str = "") -> None:
+    def _start_mode(
+        self, mode: str, map_name: str = "", indoor_map_names: Optional[List[str]] = None
+    ) -> None:
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 self._publish_status(
@@ -189,7 +198,11 @@ class ModeOrchestrator:
                 )
                 return
 
-            cmd = self._build_launch_command(mode=mode, map_name=map_name)
+            if indoor_map_names is None:
+                indoor_map_names = []
+            cmd = self._build_launch_command(
+                mode=mode, map_name=map_name, indoor_map_names=indoor_map_names
+            )
             try:
                 proc = subprocess.Popen(cmd)
             except Exception as exc:
@@ -204,9 +217,19 @@ class ModeOrchestrator:
 
             self._proc = proc
             self._proc_mode = mode
-            self._proc_map_name = map_name
+            self._proc_map_name = (
+                map_name
+                if mode == "mapping"
+                else (",".join(indoor_map_names) if indoor_map_names else "")
+            )
+            self._proc_indoor_map_names = (
+                list(indoor_map_names) if mode == "odometry" else []
+            )
             self.state.mode = mode
-            self.state.map_name = map_name
+            self.state.map_name = map_name if mode == "mapping" else ""
+            self.state.indoor_map_names = (
+                list(indoor_map_names) if mode == "odometry" else []
+            )
             self.state.running_pid = proc.pid
 
         # 시작 직후 즉시 죽는 케이스를 걸러내기 위해 확인 시간을 둔다.
@@ -217,6 +240,7 @@ class ModeOrchestrator:
                 self._proc = None
                 self._proc_mode = "idle"
                 self._proc_map_name = ""
+                self._proc_indoor_map_names = []
                 self.state = ModeState()
             self._publish_status(
                 event="start",
@@ -229,25 +253,33 @@ class ModeOrchestrator:
             print(f"[ERROR] early-exit: mode={mode}, map_name={map_name}, exit_code={early_rc}")
             return
 
+        start_extra: dict = {"pid": proc.pid, "command": " ".join(cmd)}
+        if mode == "odometry" and indoor_map_names:
+            start_extra["indoor_map_names"] = list(indoor_map_names)
         self._publish_status(
             event="start",
             status="ok",
             message=f"{mode} 모드 실행을 시작했습니다.",
             mode=mode,
-            map_name=map_name,
-            extra={"pid": proc.pid, "command": " ".join(cmd)},
+            map_name=map_name if mode == "mapping" else self._proc_map_name,
+            extra=start_extra,
         )
-        print(f"[INFO] started: mode={mode}, map_name={map_name}, pid={proc.pid}")
+        print(
+            f"[INFO] started: mode={mode}, map_name={map_name!r}, "
+            f"indoor_map_names={indoor_map_names!r}, pid={proc.pid}"
+        )
 
     def _stop_mode(self, reason: str) -> None:
         with self._lock:
             proc = self._proc
             mode = self._proc_mode
             map_name = self._proc_map_name
+            indoor_names = self._proc_indoor_map_names
             if proc is None or proc.poll() is not None:
                 self._proc = None
                 self._proc_mode = "idle"
                 self._proc_map_name = ""
+                self._proc_indoor_map_names = []
                 self.state = ModeState()
                 self._publish_status(
                     event="stop",
@@ -275,52 +307,85 @@ class ModeOrchestrator:
             self._proc = None
             self._proc_mode = "idle"
             self._proc_map_name = ""
+            self._proc_indoor_map_names = []
             self.state = ModeState()
 
+        stop_extra: dict = {"exit_code": exit_code, "reason": reason}
+        if mode == "odometry" and indoor_names:
+            stop_extra["indoor_map_names"] = indoor_names
         self._publish_status(
             event="stop",
             status="ok",
             message=stop_msg,
             mode=mode,
             map_name=map_name,
-            extra={"exit_code": exit_code, "reason": reason},
+            extra=stop_extra,
         )
         print(f"[INFO] stopped: mode={mode}, map_name={map_name}, exit_code={exit_code}, reason={reason}")
 
-    def _parse_control(self, payload: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    def _parse_control(
+        self, payload: str
+    ) -> Tuple[Optional[str], Optional[str], List[str], Optional[str]]:
         """
         Returns:
-          (command, mode, error_message)
+          (command, mapping_map_name, indoor_map_names_odometry, error_message)
           command: "start_mapping" | "start_odometry" | "stop" | None
-          mode: mapping/odometry/idle or None
         """
         try:
             obj = json.loads(payload)
         except json.JSONDecodeError:
-            return None, None, "제어 메시지가 JSON 형식이 아닙니다."
+            return None, None, [], "제어 메시지가 JSON 형식이 아닙니다."
 
         command = str(obj.get("command", "")).strip().lower()
         if command == "stop":
-            return "stop", "idle", None
+            return "stop", "", [], None
 
         if command not in ("", "start"):
-            return None, None, "command는 start 또는 stop 이어야 합니다."
+            return None, None, [], "command는 start 또는 stop 이어야 합니다."
 
         mapping_mode = obj.get("mapping_mode")
         if not isinstance(mapping_mode, bool):
-            return None, None, "mapping_mode(boolean) 필드가 필요합니다."
+            return None, None, [], "mapping_mode(boolean) 필드가 필요합니다."
 
         if mapping_mode:
             map_name = obj.get("map_name")
             if not _is_valid_map_name(map_name):
-                return None, None, "mapping_mode=true일 때 map_name은 영문/숫자/_/- 조합의 필수 문자열입니다."
-            return "start_mapping", str(map_name).strip(), None
+                return None, None, [], "mapping_mode=true일 때 map_name은 영문/숫자/_/- 조합의 필수 문자열입니다."
+            return "start_mapping", str(map_name).strip(), [], None
 
-        return "start_odometry", "", None
+        # Odometry: only map_names (array). map_name is not accepted (mapping-only field).
+        if str(obj.get("map_name", "")).strip():
+            return (
+                None,
+                None,
+                [],
+                'odometry: map_name 필드는 사용하지 않습니다. map_names: ["map1"] 형식만 사용하세요.',
+            )
+
+        indoor_names: List[str] = []
+        raw_names = obj.get("map_names")
+        if raw_names is not None:
+            if not isinstance(raw_names, list):
+                return None, None, [], "odometry: map_names는 문자열 배열이어야 합니다."
+            seen: set[str] = set()
+            for x in raw_names:
+                if not _is_valid_map_name(x):
+                    return (
+                        None,
+                        None,
+                        [],
+                        "odometry: map_names 각 요소는 영문/숫자/_/- 만 허용됩니다.",
+                    )
+                s = str(x).strip()
+                if s not in seen:
+                    indoor_names.append(s)
+                    seen.add(s)
+
+        return "start_odometry", "", indoor_names, None
 
     def _on_message(self, client, userdata, msg) -> None:
         payload = msg.payload.decode("utf-8", errors="replace")
-        command, mode_or_map, error = self._parse_control(payload)
+        command, mapping_map_name, indoor_map_names, error = self._parse_control(payload)
         if error:
             self._publish_status(event="control", status="error", message=error)
             print(f"[WARN] invalid control message: {error}, payload={payload}")
@@ -330,10 +395,10 @@ class ModeOrchestrator:
             self._stop_mode(reason="remote_stop_message")
             return
         if command == "start_odometry":
-            self._start_mode(mode="odometry")
+            self._start_mode(mode="odometry", indoor_map_names=indoor_map_names)
             return
         if command == "start_mapping":
-            self._start_mode(mode="mapping", map_name=mode_or_map)
+            self._start_mode(mode="mapping", map_name=mapping_map_name or "")
             return
 
         self._publish_status(event="control", status="error", message="알 수 없는 제어 명령입니다.")
@@ -343,6 +408,7 @@ class ModeOrchestrator:
             proc = self._proc
             mode = self._proc_mode
             map_name = self._proc_map_name
+            indoor_names = self._proc_indoor_map_names
             if proc is None:
                 return
             rc = proc.poll()
@@ -351,17 +417,21 @@ class ModeOrchestrator:
             self._proc = None
             self._proc_mode = "idle"
             self._proc_map_name = ""
+            self._proc_indoor_map_names = []
             self.state = ModeState()
 
         status = "ok" if rc == 0 else "error"
         message = "모드 실행이 종료되었습니다." if rc == 0 else "모드 실행이 비정상 종료되었습니다."
+        ended_extra: dict = {"exit_code": rc}
+        if mode == "odometry" and indoor_names:
+            ended_extra["indoor_map_names"] = indoor_names
         self._publish_status(
             event="ended",
             status=status,
             message=message,
             mode=mode,
             map_name=map_name,
-            extra={"exit_code": rc},
+            extra=ended_extra,
         )
         print(f"[INFO] ended: mode={mode}, map_name={map_name}, exit_code={rc}")
 

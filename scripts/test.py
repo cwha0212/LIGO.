@@ -3,7 +3,23 @@ import time
 import paho.mqtt.client as mqtt
 
 topic = "navi1/control/mode"
-payload = {"command": "start", "mapping_mode": False, "map_name": "site_a_20260422"}
+# Odometry: PCD/<id>/<id>.pcd 순서로 시도 (없으면 pcd_save.map_name)
+# payload = {
+#     "command": "start",
+#     "mapping_mode": False,
+#     "map_names": ["site_a"],
+# }
+
+# payload = {
+#     "command": "start",
+#     "mapping_mode": True,
+#     "map_name": "site_a",
+# }
+
+payload = {
+    "command": "stop",
+}
+
 # payload = {"command": "stop"}
 state = {"connected": False, "published": False, "failed": False, "mid": None}
 

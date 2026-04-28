@@ -95,7 +95,7 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 다운샘플 없이 odometry 발행, path/scan 발행 등. **PCD 저장 기능은 `mapping.mapping_mode=true`에서만 동작**한다.
 
 - 기존 전체 맵 저장: `pcd_save.map_name`, `pcd_save.interval`, `pcd_save.grid2d_resolution`
-  - 출력: `<ROOT_DIR>/PCD/{map_name}_vN.pcd`
+  - 출력: `<ROOT_DIR>/PCD/{map_name}/{map_name}.pcd` 및 동일 디렉터리의 `*_grid2d.yaml`, `*_grid2d.pgm`, `*_ecef.pcd` 등(같은 이름으로 **덮어쓰기**)
 - 실시간 분할 저장(기존 저장과 병행): `pcd_save.tmp_map.enable`, `pcd_save.tmp_map.interval_sec`
   - 출력: `<ROOT_DIR>/tmp_map/{start}_{end}.pcd`
   - 파일명 예시 (`interval_sec=1.0`): `000000_000001.pcd`, `000001_000002.pcd`
@@ -104,6 +104,8 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 ## `indoor.*`
 
 실내 플래그, 그리드 맵 경로, GICP 임계·복셀·반복 횟수, GTSAM 실내 포즈 노이즈 등. `indoor.grid_map_dir`은 상대 경로일 때 패키지 소스 또는 `share/ligo`로 해석된다. 실내 scan-to-map GICP는 **`ligo_mapping`** 바이너리에서 C++로 수행한다 (별도 Python 노드 없음).
+
+- **odometry 모드**에서는 기본적으로 `indoor.grid_map_dir`·수동 `indoor.map_pcd_path` 대신 참조 PCD를 **`PCD/<map_id>/<map_id>.pcd`** 에서 고릅니다. 우선순위는 ROS 파라미터 `indoor.preferred_map_names_csv`(쉼표 구분, 예: 런치 인자 `indoor_map_names_csv`; MQTT 오케스트레이터는 **`map_names` 배열만** 이 인자로 넘김) → 비어 있으면 `pcd_save.map_name` 한 번만 시도.
 
 ## 루트 파라미터 (YAML에 평탄하게 둘 수 있음)
 

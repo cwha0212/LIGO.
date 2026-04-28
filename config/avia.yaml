@@ -131,8 +131,8 @@
       indoor_flag: false
       # *_grid2d.yaml + pgm + source_pcd. Relative: package source <src>/LIGO./<path> if that dir exists, else share/ligo/<path>.
       grid_map_dir: "PCD"
-      # Absolute path to the reference PCD map file built during the mapping session.
-      # Typically: <workspace>/src/LIGO./PCD/<map_name>_vN.pcd
+      # Absolute path to the reference PCD (odometry는 보통 비움; 런타임에 PCD/<id>/<id>.pcd 사용)
+      # Typically: <workspace>/src/LIGO./PCD/<map_name>/<map_name>.pcd
       map_pcd_path: ""
       # 실내 GICP → GTSAM factor 허용 조건. small_gicp result.error 스케일은 보통 수십~수백(레거시 기본 5면 100% REJECT).
       gicp_max_factor_error: 400.0

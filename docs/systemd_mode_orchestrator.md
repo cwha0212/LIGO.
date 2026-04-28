@@ -24,12 +24,41 @@
 
 ### 2) Odometry 시작
 
+지도를 쓰지 않고 기동만 할 때(설정의 `pcd_save.map_name` 등으로 참조 시도):
+
 ```json
 {
   "command": "start",
   "mapping_mode": false
 }
 ```
+
+**지도 ID를 지정할 때는 `map_names` 배열만 사용합니다.** (1개일 때도 `["map1"]` — `map_name` 필드는 odometry에서 사용하지 않으며, 넣으면 오류)
+
+- 배열 **앞에서부터** `PCD/<id>/<id>.pcd` 가 있는 첫 ID를 참조합니다.
+- 실제 파일 경로는 매핑 저장과 동일하게 `PCD/<id>/<id>.pcd` 입니다.
+
+단일 지도 예시:
+
+```json
+{
+  "command": "start",
+  "mapping_mode": false,
+  "map_names": ["site_a"]
+}
+```
+
+후보가 여러 개일 때(순서대로 시도):
+
+```json
+{
+  "command": "start",
+  "mapping_mode": false,
+  "map_names": ["building_a", "building_b"]
+}
+```
+
+**odometry 제어 메시지에 `map_name` 필드를 넣으면 오류로 거절됩니다.** (`map_names`만 허용)
 
 ### 3) 현재 모드 종료
 
@@ -63,8 +92,8 @@
 
 ## 실행되는 launch
 
-- mapping: `ros2 launch ligo nx_mapping.launch.py --ros-args -p pcd_save.map_name:=<map_name>`
-- odometry: `ros2 launch ligo nx_odometry.launch.py`
+- mapping: `ros2 launch ligo nx_mapping.launch.py map_name:=<map_name>` → `PCD/<map_name>/` 에 `.pcd`, grid `yaml`/`pgm` 등 저장(동일 이름 시 덮어쓰기)
+- odometry: `ros2 launch ligo nx_odometry.launch.py` — 선택 인자 `indoor_map_names_csv:=a,b` 로 참조 PCD 우선순위 전달
 
 ## 설치/운영 명령
 
@@ -77,5 +106,5 @@
 1. Mapping 시작 메시지(`map_name` 포함) 발행
 2. `mode_status`에서 `start` 이벤트 확인
 3. `stop` 메시지 발행 후 `stop` 이벤트 확인
-4. Odometry 시작 메시지 발행 후 `start` 이벤트 확인
+4. Odometry 시작 메시지 발행(`map_names` 권장, 예: `["map1"]`) 후 `start` 이벤트 확인
 5. 필요 시 반복

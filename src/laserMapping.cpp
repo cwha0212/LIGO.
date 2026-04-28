@@ -76,9 +76,6 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
-#include <map>
-#include <regex>
-#include <sstream>
 #include <opencv2/opencv.hpp>
 #include "chi-square.h"
 #define PUBFRAME_PERIOD     (20)
@@ -288,181 +285,10 @@ static std::filesystem::path ligo_make_map_root_dir()
     return std::filesystem::path(ROOT_DIR) / "PCD" / pcd_save_map_name;
 }
 
-static std::filesystem::path ligo_make_map_version_info_path()
+/** Single map directory: `PCD/{map_name}/{map_name}.pcd` (overwrite on each save). */
+static std::string ligo_make_pcd_save_path()
 {
-    return std::filesystem::path(ROOT_DIR) / "PCD" / "map_version_info.json";
-}
-
-/** Max version N among `PCD/{map_name}/v{N}` directories. */
-static int ligo_find_max_saved_version_for_basename(const std::string &basename)
-{
-    (void)basename;
-    int max_ver = 0;
-    try
-    {
-        const std::filesystem::path map_dir = ligo_make_map_root_dir();
-        if (!std::filesystem::exists(map_dir) || !std::filesystem::is_directory(map_dir))
-        {
-            return 0;
-        }
-        for (const auto &entry : std::filesystem::directory_iterator(map_dir))
-        {
-            if (!entry.is_directory())
-            {
-                continue;
-            }
-            const std::string name = entry.path().filename().string();
-            if (name.rfind("v", 0) != 0 || name.size() <= 1)
-            {
-                continue;
-            }
-            const std::string ver_str = name.substr(1);
-            bool all_digit = !ver_str.empty();
-            for (char c : ver_str)
-            {
-                if (c < '0' || c > '9')
-                {
-                    all_digit = false;
-                    break;
-                }
-            }
-            if (!all_digit)
-            {
-                continue;
-            }
-            const int v = std::stoi(ver_str);
-            max_ver = std::max(max_ver, v);
-        }
-    }
-    catch (const std::exception &e)
-    {
-        RCLCPP_WARN(rclcpp::get_logger("ligo"), "[pcd] failed to scan existing map PCD files: %s", e.what());
-    }
-    return max_ver;
-}
-
-static std::string ligo_make_pcd_save_path(int version_number)
-{
-    return (ligo_make_map_root_dir() / ("v" + std::to_string(version_number)) / (pcd_save_map_name + ".pcd")).string();
-}
-
-static std::map<std::string, int> ligo_parse_map_version_info(const std::string &text)
-{
-    std::map<std::string, int> out;
-    const std::regex pair_re("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*([0-9]+)");
-    std::smatch m;
-    std::string::const_iterator search_start(text.cbegin());
-    while (std::regex_search(search_start, text.cend(), m, pair_re))
-    {
-        const std::string key = m[1].str();
-        const int ver = std::stoi(m[2].str());
-        out[key] = ver;
-        search_start = m.suffix().first;
-    }
-    return out;
-}
-
-static std::string ligo_serialize_map_version_info(const std::map<std::string, int> &kv)
-{
-    std::ostringstream oss;
-    oss << "{\n";
-    bool first = true;
-    for (const auto &it : kv)
-    {
-        if (!first)
-        {
-            oss << ",\n";
-        }
-        first = false;
-        oss << "  \"" << ligo_json_escape(it.first) << "\": " << it.second;
-    }
-    oss << "\n}\n";
-    return oss.str();
-}
-
-static bool ligo_update_map_version_info(const std::string &map_name, int latest_version)
-{
-    if (map_name.empty() || latest_version <= 0)
-    {
-        return false;
-    }
-    try
-    {
-        const std::filesystem::path info_path = ligo_make_map_version_info_path();
-        const std::filesystem::path info_dir = info_path.parent_path();
-        if (!info_dir.empty())
-        {
-            std::error_code mkdir_ec;
-            std::filesystem::create_directories(info_dir, mkdir_ec);
-            if (mkdir_ec)
-            {
-                RCLCPP_ERROR(
-                    rclcpp::get_logger("ligo"),
-                    "[pcd] failed to create version info dir: %s",
-                    mkdir_ec.message().c_str());
-                return false;
-            }
-        }
-
-        std::map<std::string, int> kv;
-        if (std::filesystem::exists(info_path))
-        {
-            std::ifstream in(info_path);
-            if (!in.good())
-            {
-                RCLCPP_WARN(
-                    rclcpp::get_logger("ligo"),
-                    "[pcd] map version info exists but cannot be read: %s",
-                    info_path.string().c_str());
-            }
-            else
-            {
-                std::ostringstream buf;
-                buf << in.rdbuf();
-                kv = ligo_parse_map_version_info(buf.str());
-            }
-        }
-        kv[map_name] = latest_version;
-
-        const std::filesystem::path tmp_path = info_path.string() + ".tmp";
-        std::ofstream out(tmp_path, std::ios::trunc);
-        if (!out.good())
-        {
-            RCLCPP_ERROR(
-                rclcpp::get_logger("ligo"),
-                "[pcd] failed to open temp version info file: %s",
-                tmp_path.string().c_str());
-            return false;
-        }
-        out << ligo_serialize_map_version_info(kv);
-        out.close();
-
-        std::error_code ec;
-        std::filesystem::rename(tmp_path, info_path, ec);
-        if (ec)
-        {
-            std::filesystem::remove(info_path, ec);
-            ec.clear();
-            std::filesystem::rename(tmp_path, info_path, ec);
-            if (ec)
-            {
-                RCLCPP_ERROR(
-                    rclcpp::get_logger("ligo"),
-                    "[pcd] failed to update map version info json: %s",
-                    ec.message().c_str());
-                return false;
-            }
-        }
-        return true;
-    }
-    catch (const std::exception &e)
-    {
-        RCLCPP_ERROR(
-            rclcpp::get_logger("ligo"),
-            "[pcd] failed to update map version info json: %s",
-            e.what());
-        return false;
-    }
+    return (ligo_make_map_root_dir() / (pcd_save_map_name + ".pcd")).string();
 }
 
 static std::string ligo_make_tmp_map_save_path(long long bucket_idx, double interval_sec)
@@ -1022,12 +848,10 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 scan_wait_num++;
                 if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
                 {
-                    pcd_index++;
-                    string all_points_dir = ligo_make_pcd_save_path(pcd_index);
+                    string all_points_dir = ligo_make_pcd_save_path();
                     cout << "current scan saved to " << all_points_dir << " (ENU)" << endl;
                     if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
                     {
-                        ligo_update_map_version_info(pcd_save_map_name, pcd_index);
                         save_grid2d_from_cloud_with_rays(
                             pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                             3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla);
@@ -1071,13 +895,9 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
             scan_wait_num++;
             if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
             {
-                pcd_index++;
-                string all_points_dir = ligo_make_pcd_save_path(pcd_index);
+                string all_points_dir = ligo_make_pcd_save_path();
                 cout << "current scan saved to " << all_points_dir << endl;
-                if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
-                {
-                    ligo_update_map_version_info(pcd_save_map_name, pcd_index);
-                }
+                ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save);
                 pcl_wait_save->clear();
                 pcl_wait_ray_origins.clear();
                 scan_wait_num = 0;
@@ -1827,16 +1647,10 @@ int main(int argc, char** argv)
     readParameters(node.get());
     if (mapping_mode)
     {
-        const int max_saved_ver = ligo_find_max_saved_version_for_basename(pcd_save_map_name);
-        if (max_saved_ver > pcd_index)
-        {
-            pcd_index = max_saved_ver;
-        }
         RCLCPP_INFO(node->get_logger(),
-                    "[pcd] map_name=%s next dir will be PCD/%s/v%d/",
+                    "[pcd] mapping saves overwrite PCD/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
                     pcd_save_map_name.c_str(),
-                    pcd_save_map_name.c_str(),
-                    pcd_index + 1);
+                    pcd_save_map_name.c_str());
     }
     RCLCPP_INFO(node->get_logger(), "lidar_type: %d", lidar_type);
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
@@ -3390,8 +3204,7 @@ after_sync_packages:
     /* 2. noted that pcd save will influence the real-time performences **/
     if (pcl_wait_save->size() > 0 && mapping_mode)
     {
-        pcd_index++;
-        string all_points_dir = ligo_make_pcd_save_path(pcd_index);
+        string all_points_dir = ligo_make_pcd_save_path();
         const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
         const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? gnss_comm::ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
@@ -3399,7 +3212,6 @@ after_sync_packages:
         cout << "current scan saved to " << all_points_dir << (saved_in_enu ? " (ENU)" : "") << endl;
         if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
         {
-            ligo_update_map_version_info(pcd_save_map_name, pcd_index);
             if (saved_in_enu)
             {
                 save_grid2d_from_cloud_with_rays(

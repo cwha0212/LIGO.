@@ -39,10 +39,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <fstream>
 #include <filesystem>
-#include <map>
 #include <rclcpp/exceptions.hpp>
-#include <regex>
-#include <sstream>
+#include <vector>
 
 namespace {
 
@@ -79,65 +77,55 @@ static std::string resolve_indoor_grid_map_dir(const std::string& raw) {
   return src_joined.string();
 }
 
-static std::map<std::string, int> parse_map_version_info(const std::string& text) {
-  std::map<std::string, int> out;
-  const std::regex pair_re("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*([0-9]+)");
-  std::smatch m;
-  std::string::const_iterator search_start(text.cbegin());
-  while (std::regex_search(search_start, text.cend(), m, pair_re)) {
-    const std::string key = m[1].str();
-    const int ver = std::stoi(m[2].str());
-    if (!key.empty() && ver > 0) {
-      out[key] = ver;
+static std::vector<std::string> parse_indoor_preferred_map_names_csv(const std::string& csv) {
+  std::vector<std::string> out;
+  std::string s = trim_ws(csv);
+  if (s.empty()) {
+    return out;
+  }
+  size_t start = 0;
+  while (start < s.size()) {
+    size_t comma = s.find(',', start);
+    const size_t end = (comma == std::string::npos) ? s.size() : comma;
+    std::string part = trim_ws(s.substr(start, end - start));
+    if (!part.empty()) {
+      out.push_back(part);
     }
-    search_start = m.suffix().first;
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
   }
   return out;
 }
 
-static std::string resolve_latest_indoor_map_pcd_from_version_info(const std::string& preferred_map_name) {
+/** `PCD/<map_name>/<map_name>.pcd` if the file exists. */
+static std::string resolve_map_pcd_at_map_dir(const std::string& map_name) {
+  if (map_name.empty()) {
+    return "";
+  }
   namespace fs = std::filesystem;
-  const fs::path info_path = fs::path(ROOT_DIR) / "PCD" / "map_version_info.json";
-  std::ifstream in(info_path);
-  if (!in.good()) {
-    return "";
-  }
-
-  std::ostringstream buf;
-  buf << in.rdbuf();
-  const std::map<std::string, int> kv = parse_map_version_info(buf.str());
-  if (kv.empty()) {
-    return "";
-  }
-
-  std::string selected_name;
-  int selected_ver = -1;
-  const auto it_pref = kv.find(preferred_map_name);
-  if (!preferred_map_name.empty() && it_pref != kv.end()) {
-    selected_name = it_pref->first;
-    selected_ver = it_pref->second;
-  } else {
-    // Fallback: choose highest version across all map entries.
-    for (const auto& it : kv) {
-      if (it.second > selected_ver) {
-        selected_name = it.first;
-        selected_ver = it.second;
-      }
-    }
-  }
-
-  if (selected_name.empty() || selected_ver <= 0) {
-    return "";
-  }
-
-  fs::path pcd_path =
-      fs::path(ROOT_DIR) / "PCD" / selected_name / ("v" + std::to_string(selected_ver)) / (selected_name + ".pcd");
+  const fs::path pcd_path = fs::path(ROOT_DIR) / "PCD" / map_name / (map_name + ".pcd");
   std::error_code ec;
   if (!fs::exists(pcd_path, ec) || !fs::is_regular_file(pcd_path, ec)) {
     return "";
   }
   const fs::path canon = fs::weakly_canonical(pcd_path, ec);
   return ec ? pcd_path.string() : canon.string();
+}
+
+/** Try each preferred map id in order; first existing PCD path wins. */
+static std::string resolve_preferred_indoor_map_pcd(const std::vector<std::string>& preferred_order) {
+  for (const std::string& name : preferred_order) {
+    if (name.empty()) {
+      continue;
+    }
+    const std::string resolved = resolve_map_pcd_at_map_dir(name);
+    if (!resolved.empty()) {
+      return resolved;
+    }
+  }
+  return "";
 }
 
 }  // namespace
@@ -446,31 +434,33 @@ void readParameters(rclcpp::Node * node)
     indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
     indoor_grid_map_dir = resolve_indoor_grid_map_dir(get_param("indoor.grid_map_dir", std::string("")));
     if (!mapping_mode) {
-      // Odometry mode: force map discovery to use map_version_info.json only.
-      // This intentionally bypasses grid_map_dir/*_grid2d.yaml lookup to avoid startup warnings
-      // when grid metadata is not exported.
+      // Odometry: load reference PCD from PCD/<map>/<map>.pcd (MQTT CSV or pcd_save.map_name order).
       if (!indoor_map_pcd_path.empty()) {
         RCLCPP_WARN(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; map is selected from map_version_info.json.");
+            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; using PCD/<name>/<name>.pcd lookup.");
       }
       if (!indoor_grid_map_dir.empty()) {
         RCLCPP_WARN(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.grid_map_dir is ignored in odometry mode; map is selected from map_version_info.json.");
+            "[indoor/gicp] indoor.grid_map_dir is ignored in odometry mode; using PCD/<name>/<name>.pcd lookup.");
       }
       indoor_grid_map_dir.clear();
-      const std::string auto_map_pcd = resolve_latest_indoor_map_pcd_from_version_info(pcd_save_map_name);
-      indoor_map_pcd_path = auto_map_pcd;
+      std::vector<std::string> preferred_maps =
+          parse_indoor_preferred_map_names_csv(get_param("indoor.preferred_map_names_csv", std::string("")));
+      if (preferred_maps.empty() && !pcd_save_map_name.empty()) {
+        preferred_maps.push_back(pcd_save_map_name);
+      }
+      indoor_map_pcd_path = resolve_preferred_indoor_map_pcd(preferred_maps);
       if (!indoor_map_pcd_path.empty()) {
         RCLCPP_INFO(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.map_pcd_path auto-selected from map_version_info.json: %s",
+            "[indoor/gicp] indoor reference PCD: %s",
             indoor_map_pcd_path.c_str());
       } else {
         RCLCPP_WARN(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] no valid map found from PCD/map_version_info.json (odometry mode).");
+            "[indoor/gicp] no PCD found at PCD/<map>/<map>.pcd for preferred names (odometry mode).");
       }
     } else if (!indoor_grid_map_dir.empty()) {
       cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;

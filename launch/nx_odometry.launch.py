@@ -19,6 +19,16 @@ def generate_launch_description():
         description="Run RViz2 (default: false)",
     )
 
+    indoor_map_names_csv = LaunchConfiguration("indoor_map_names_csv")
+    indoor_map_names_csv_arg = DeclareLaunchArgument(
+        "indoor_map_names_csv",
+        default_value="",
+        description=(
+            "Comma-separated indoor map ids; first existing PCD at PCD/<id>/<id>.pcd wins "
+            "(e.g. site_a,site_b). Empty: try pcd_save.map_name from YAML only."
+        ),
+    )
+
     pkg = get_package_share_directory("ligo")
     base_config = PathJoinSubstitution([pkg, "config", "avia.yaml"])
     mode_config = PathJoinSubstitution([pkg, "config", "nx_mode_odometry.yaml"])
@@ -29,7 +39,11 @@ def generate_launch_description():
         executable="ligo_mapping",
         name="laserMapping",
         output="screen",
-        parameters=[base_config, mode_config],
+        parameters=[
+            base_config,
+            mode_config,
+            {"indoor.preferred_map_names_csv": indoor_map_names_csv},
+        ],
     )
 
     rviz_node = Node(
@@ -52,6 +66,7 @@ def generate_launch_description():
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(stdout_colorized_envvar)
     ld.add_action(use_rviz_arg)
+    ld.add_action(indoor_map_names_csv_arg)
     ld.add_action(ligo_node)
     ld.add_action(mqtt_bridge)
     ld.add_action(rviz_node)

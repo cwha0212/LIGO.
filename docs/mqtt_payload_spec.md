@@ -192,6 +192,34 @@ python3 scripts/ligo_topic_to_mqtt.py --ros-args \
 }
 ```
 
+참조 지도는 디스크의 **`PCD/<map_id>/<map_id>.pcd`** 를 사용합니다(매핑 시 저장된 경로와 동일). **odometry 시작 시 지도 ID는 `map_names` 배열만 사용합니다** (`map_name` 필드는 거부됨).
+
+선택 우선순위:
+
+1. MQTT `map_names` 배열 **앞에서부터**, 해당 경로에 PCD가 있으면 그 지도 사용
+2. `map_names`가 없거나 비어 있거나 매칭 실패 시, 설정 파일의 `pcd_save.map_name` 으로 `PCD/<그 이름>/<그 이름>.pcd` 시도
+3. 그래도 없으면 실내 참조 PCD를 찾지 못함(경고 로그)
+
+단일 지도 예시:
+
+```json
+{
+  "command": "start",
+  "mapping_mode": false,
+  "map_names": ["building_a"]
+}
+```
+
+후보가 여러 개일 때:
+
+```json
+{
+  "command": "start",
+  "mapping_mode": false,
+  "map_names": ["building_a", "building_b"]
+}
+```
+
 #### 3) 현재 모드 종료
 
 ```json

@@ -39,8 +39,9 @@
 
 - Mapping 시작 (`map_name` 필수)
   - `{"command":"start","mapping_mode":true,"map_name":"site_a_20260422"}`
-- Odometry 시작
+- Odometry 시작(선택: `map_names` — `PCD/<id>/<id>.pcd` 우선순위; `map_name` 미사용)
   - `{"command":"start","mapping_mode":false}`
+  - `{"command":"start","mapping_mode":false,"map_names":["site_a","site_b"]}`
 - 종료
   - `{"command":"stop"}`
 
