@@ -276,13 +276,17 @@ PointCloudXYZI::Ptr pcl_wait_save_tmp_map(new PointCloudXYZI());
 static std::vector<Eigen::Vector3d> pcl_wait_tmp_map_ray_origins;
 static double g_tmp_map_time_base_sec = std::numeric_limits<double>::quiet_NaN();
 static long long g_tmp_map_bucket_idx = -1;
+// 지도 저장 루트 수정 부분
+static const std::filesystem::path kMapStorageRoot("/mnt/rms_maps");
+// 기존 방식(패키지 내부 ROOT_DIR/PCD)을 쓰려면 아래 라인으로 교체:
+// static const std::filesystem::path kMapStorageRoot = std::filesystem::path(ROOT_DIR) / "PCD";
 
 static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointCloudXYZI::Ptr &cloud);
 static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix);
 
 static std::filesystem::path ligo_make_map_root_dir()
 {
-    return std::filesystem::path(ROOT_DIR) / "PCD" / pcd_save_map_name / pcd_save_sub_map_name;
+    return kMapStorageRoot / pcd_save_map_name / pcd_save_sub_map_name;
 }
 
 /** Single sub-map directory: `PCD/{map_name}/{sub_map_name}/{sub_map_name}.pcd` (overwrite on each save). */
@@ -298,7 +302,7 @@ static std::string ligo_make_tmp_map_save_path(long long bucket_idx, double inte
     const long long end_sec = std::max(start_sec + 1LL, static_cast<long long>(std::llround(static_cast<double>(idx + 1LL) * interval_sec)));
     char name_buf[128];
     std::snprintf(name_buf, sizeof(name_buf), "%s_%05lld_%06lld.pcd", pcd_save_map_name.c_str(), start_sec, end_sec);
-    return (std::filesystem::path(ROOT_DIR) / "tmp_map" / name_buf).string();
+    return (kMapStorageRoot / "tmp_map" / name_buf).string();
 }
 
 static PointCloudXYZI::Ptr ligo_convert_enu_cloud_to_ecef(
@@ -353,16 +357,21 @@ static bool ligo_flush_tmp_map_bucket(const rclcpp::Logger &logger)
         return false;
     }
     const std::string out_path = ligo_make_tmp_map_save_path(g_tmp_map_bucket_idx, pcd_tmp_map_interval_sec);
-    if (!ligo_try_write_binary_pcd(out_path, pcl_wait_save_tmp_map))
+    const size_t n_pts_in = pcl_wait_save_tmp_map->size();
+    PointCloudXYZI::Ptr pcd_out =
+        ligo_voxel_downsample_for_map_pcd(pcl_wait_save_tmp_map, pcd_save_downsample_voxel_m);
+    const size_t n_pts_out = pcd_out ? pcd_out->size() : 0U;
+    if (!ligo_try_write_binary_pcd(out_path, pcd_out))
     {
         RCLCPP_ERROR(logger, "[tmp_map] failed to save bucket file: %s", out_path.c_str());
         return false;
     }
     RCLCPP_INFO(
         logger,
-        "[tmp_map] saved split map: bucket=%lld points=%zu path=%s",
+        "[tmp_map] saved split map: bucket=%lld points_in=%zu points_saved=%zu path=%s",
         g_tmp_map_bucket_idx,
-        pcl_wait_save_tmp_map->size(),
+        n_pts_in,
+        n_pts_out,
         out_path.c_str());
     pcl_wait_save_tmp_map->clear();
     pcl_wait_tmp_map_ray_origins.clear();
@@ -371,7 +380,7 @@ static bool ligo_flush_tmp_map_bucket(const rclcpp::Logger &logger)
 
 static void ligo_cleanup_tmp_map_pcd_files(const rclcpp::Logger &logger)
 {
-    const std::filesystem::path tmp_dir = std::filesystem::path(ROOT_DIR) / "tmp_map";
+    const std::filesystem::path tmp_dir = kMapStorageRoot / "tmp_map";
     try
     {
         if (!std::filesystem::exists(tmp_dir) || !std::filesystem::is_directory(tmp_dir))
@@ -482,6 +491,30 @@ static bool ligo_ensure_parent_dir(const std::string &file_path)
         RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] failed to create parent dir: %s", e.what());
         return false;
     }
+}
+
+/** Map PCD/ECEF export: voxel downsample (leaf = pcd_save.downsample_voxel_m; 0 = off). Grid2D still uses full cloud+rays. */
+static PointCloudXYZI::Ptr ligo_voxel_downsample_for_map_pcd(const PointCloudXYZI::Ptr &in, double leaf_m)
+{
+    if (!in || in->empty())
+    {
+        return in;
+    }
+    if (leaf_m <= 0.0)
+    {
+        return in;
+    }
+    pcl::VoxelGrid<PointType> vg;
+    vg.setInputCloud(in);
+    const float s = static_cast<float>(leaf_m);
+    vg.setLeafSize(s, s, s);
+    PointCloudXYZI::Ptr out(new PointCloudXYZI());
+    vg.filter(*out);
+    if (out->empty())
+    {
+        return in;
+    }
+    return out;
 }
 
 static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointCloudXYZI::Ptr &cloud)
@@ -850,12 +883,14 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 {
                     string all_points_dir = ligo_make_pcd_save_path();
                     cout << "current scan saved to " << all_points_dir << " (ENU)" << endl;
-                    if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
+                    PointCloudXYZI::Ptr pcd_save =
+                        ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
+                    if (ligo_try_write_binary_pcd(all_points_dir, pcd_save))
                     {
                         save_grid2d_from_cloud_with_rays(
                             pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                             3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla);
-                        ligo_save_ecef_companion_pcd(all_points_dir, pcl_wait_save, R_ecef_enu, first_gps_ecef);
+                        ligo_save_ecef_companion_pcd(all_points_dir, pcd_save, R_ecef_enu, first_gps_ecef);
                     }
                     pcl_wait_save->clear();
                     pcl_wait_ray_origins.clear();
@@ -897,7 +932,9 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
             {
                 string all_points_dir = ligo_make_pcd_save_path();
                 cout << "current scan saved to " << all_points_dir << endl;
-                ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save);
+                PointCloudXYZI::Ptr pcd_save =
+                    ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
+                ligo_try_write_binary_pcd(all_points_dir, pcd_save);
                 pcl_wait_save->clear();
                 pcl_wait_ray_origins.clear();
                 scan_wait_num = 0;
@@ -1648,7 +1685,7 @@ int main(int argc, char** argv)
     if (mapping_mode)
     {
         RCLCPP_INFO(node->get_logger(),
-                    "[pcd] mapping saves overwrite PCD/%s/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
+                    "[pcd] mapping saves overwrite /mnt/rms_maps/%s/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
                     pcd_save_map_name.c_str(),
                     pcd_save_sub_map_name.c_str(),
                     pcd_save_sub_map_name.c_str());
@@ -3205,22 +3242,28 @@ after_sync_packages:
     /* 2. noted that pcd save will influence the real-time performences **/
     if (pcl_wait_save->size() > 0 && mapping_mode)
     {
+        const auto t_save_start = std::chrono::steady_clock::now();
         string all_points_dir = ligo_make_pcd_save_path();
         const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
         const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? gnss_comm::ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
         const Eigen::Vector3d anchor_lla_deg_m = saved_in_enu ? first_gps_lla : Eigen::Vector3d::Zero();
         cout << "current scan saved to " << all_points_dir << (saved_in_enu ? " (ENU)" : "") << endl;
-        if (ligo_try_write_binary_pcd(all_points_dir, pcl_wait_save))
+        PointCloudXYZI::Ptr pcd_save =
+            ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
+        if (ligo_try_write_binary_pcd(all_points_dir, pcd_save))
         {
             if (saved_in_enu)
             {
                 save_grid2d_from_cloud_with_rays(
                     pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
                     3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m);
-                ligo_save_ecef_companion_pcd(all_points_dir, pcl_wait_save, R_ecef_enu, anchor_ecef_m);
+                ligo_save_ecef_companion_pcd(all_points_dir, pcd_save, R_ecef_enu, anchor_ecef_m);
             }
         }
+        const double save_elapsed_s =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t_save_start).count();
+        RCLCPP_INFO(node->get_logger(), "[pcd] final map save (shutdown) took %.3f s", save_elapsed_s);
     }
     if (mapping_mode && pcd_tmp_map_enable && pcl_wait_save_tmp_map->size() > 0)
     {

@@ -13,7 +13,7 @@ topic = "navi1/control/mode"
 #     "command": "start",
 #     "mapping_mode": True,
 #     "map_name": "site_a",
-#     "sub_map_name": "floor_1",
+#     "sub_map_name": "floor_2",
 # }
 
 payload = {

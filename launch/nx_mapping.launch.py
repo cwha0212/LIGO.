@@ -30,6 +30,17 @@ def generate_launch_description():
         default_value="sub_map",
         description="Sub-map name under map_name directory",
     )
+    # launch ExecuteLocal: SIGINT 후 sigterm_timeout 초 뒤 SIGTERM, (sigterm_timeout + sigkill_timeout) 초 뒤 SIGKILL.
+    # ligo_mapping은 main() 종료 시점에 맵 PCD를 저장하므로, 기본값을 크게 두어 저장 중 SIGKILL을 피함.
+    map_save_shutdown_timeout_sec = LaunchConfiguration("map_save_shutdown_timeout_sec")
+    map_save_shutdown_timeout_arg = DeclareLaunchArgument(
+        "map_save_shutdown_timeout_sec",
+        default_value="86400",
+        description=(
+            "ligo_mapping 종료 시: SIGINT 후 SIGTERM까지 대기(초), SIGKILL은 이 값과 합으로 더 지연. "
+            "맵 PCD 저장이 길 수 있으므로 크게 두는 것을 권장 (기본 24h 단계)."
+        ),
+    )
 
     pkg = get_package_share_directory("ligo")
     base_config = PathJoinSubstitution([pkg, "config", "avia.yaml"])
@@ -42,6 +53,8 @@ def generate_launch_description():
         name="laserMapping",
         output="screen",
         parameters=[base_config, mode_config, {"pcd_save.map_name": map_name, "pcd_save.sub_map_name": sub_map_name}],
+        sigterm_timeout=map_save_shutdown_timeout_sec,
+        sigkill_timeout=map_save_shutdown_timeout_sec,
     )
 
     rviz_node = Node(
@@ -66,6 +79,7 @@ def generate_launch_description():
     ld.add_action(use_rviz_arg)
     ld.add_action(map_name_arg)
     ld.add_action(sub_map_name_arg)
+    ld.add_action(map_save_shutdown_timeout_arg)
     ld.add_action(ligo_node)
     ld.add_action(mqtt_bridge)
     ld.add_action(rviz_node)

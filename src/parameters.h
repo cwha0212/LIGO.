@@ -100,6 +100,8 @@ extern bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 extern bool   scan_pub_en, scan_body_pub_en;
 /** ENU 2D occupancy grid (PGM) cell size (m) when exporting *_grid2d alongside PCD; independent of ivox voxel size. */
 extern double pcd_save_grid2d_resolution_m;
+/** VoxelGrid leaf (m) for map PCD, ECEF companion, and tmp_map split PCD; 0 = no downsampling. */
+extern double pcd_save_downsample_voxel_m;
 /** Map name for mapping outputs (top-level directory under `{ROOT_DIR}/PCD`). */
 extern std::string pcd_save_map_name;
 /** Sub map name (directory + filename stem under map). */

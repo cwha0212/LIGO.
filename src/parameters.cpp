@@ -43,6 +43,9 @@
 #include <vector>
 
 namespace {
+static const std::filesystem::path kMapStorageRoot("/mnt/rms_maps");
+// 기존 방식(패키지 내부 ROOT_DIR/PCD)을 쓰려면 아래 라인으로 교체:
+// static const std::filesystem::path kMapStorageRoot = std::filesystem::path(ROOT_DIR) / "PCD";
 
 static std::string trim_ws(std::string s) {
   while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.pop_back();
@@ -92,7 +95,7 @@ static std::string sanitize_map_token(std::string raw, const std::string& fallba
 
 static std::string resolve_indoor_map_group_dir(const std::string& map_name) {
   namespace fs = std::filesystem;
-  const fs::path map_dir = fs::path(ROOT_DIR) / "PCD" / map_name;
+  const fs::path map_dir = kMapStorageRoot / map_name;
   std::error_code ec;
   const fs::path canon = fs::weakly_canonical(map_dir, ec);
   return ec ? map_dir.string() : canon.string();
@@ -138,6 +141,7 @@ std::vector<double> ppp_anc(3, 0.0);
 bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 bool   scan_pub_en, scan_body_pub_en;
 double pcd_save_grid2d_resolution_m = 0.2;
+double pcd_save_downsample_voxel_m = 0.2;
 std::string pcd_save_map_name = "map";
 std::string pcd_save_sub_map_name = "sub_map";
 bool pcd_tmp_map_enable = false;
@@ -312,6 +316,15 @@ void readParameters(rclcpp::Node * node)
       "pcd_save.grid2d_resolution", static_cast<double>(ivox_options_.resolution_));
   if (pcd_save_grid2d_resolution_m <= 0.0)
     pcd_save_grid2d_resolution_m = static_cast<double>(ivox_options_.resolution_);
+  pcd_save_downsample_voxel_m = get_param("pcd_save.downsample_voxel_m", 0.2);
+  if (pcd_save_downsample_voxel_m < 0.0)
+  {
+    RCLCPP_WARN(
+        rclcpp::get_logger("ligo"),
+        "[pcd_save] invalid pcd_save.downsample_voxel_m=%.6f, fallback to 0.2",
+        pcd_save_downsample_voxel_m);
+    pcd_save_downsample_voxel_m = 0.2;
+  }
   p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
   time_diff_valid = true;
   ppp_fname = get_param("nmea.ppp_file_name", std::string("TST.pos"));
@@ -398,7 +411,7 @@ void readParameters(rclcpp::Node * node)
       if (!indoor_map_pcd_path.empty()) {
         RCLCPP_WARN(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; grid maps are loaded from PCD/<map_name>/.");
+            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; grid maps are loaded from /mnt/rms_maps/<map_name>/.");
       }
       const std::string odom_map_name = sanitize_map_token(
           get_param("indoor.map_name_for_odometry", std::string("")),
