@@ -193,18 +193,20 @@ with preintegration covariance whitening:
 | Factor                 | 코드 링크                                                                                    | Residual | 연결 변수                | 목적                 |
 | ---------------------- | ---------------------------------------------------------------------------------------- | -------- | -------------------- | ------------------ |
 | `NmeaLioGravRelFactor` | `[nmea_lio_gravity_rel_factor.hpp](include/nmea_factor/nmea_lio_gravity_rel_factor.hpp)` | 27       | `P, R, A, O, G`      | LIO 상태와 중력/외부회전 결합 |
-| `NMEAFactor`           | `[nmea_factor.hpp](include/nmea_factor/nmea_factor.hpp)`                                 | 9 또는 3 | `P, E, A, R`         | `nmea_input_type=odometry`: P/V/R(9D). **`navsatfix**: 위치 3D만** (0 twist/quat 제약 방지). [`AddFactor`](src/NMEA_Processing_fg.cpp)에서 `position_only` 전달 |
-| `NMEAFactorNolidar`    | `[nmea_factor_nolidar.hpp](include/nmea_factor/nmea_factor_nolidar.hpp)`                 | 9 또는 3 | `R, F`               | 위와 동일 분기 (`navsatfix` → 3D) |
+| `NMEAFactor`           | `[nmea_factor.hpp](include/nmea_factor/nmea_factor.hpp)`                                 | 3        | `P, E, A, R`         | 위치 3D residual만 사용 (0 twist/quat 제약 방지) |
+| `NMEAFactorNolidar`    | `[nmea_factor_nolidar.hpp](include/nmea_factor/nmea_factor_nolidar.hpp)`                 | 3        | `R, F`               | 위치 3D residual만 사용 |
 | `NmeaLioFactorNolidar` | `[nmea_lio_factor_nolidar.hpp](include/nmea_factor/nmea_lio_factor_nolidar.hpp)`         | 15       | `R_i, F_i, R_j, F_j` | 상태 천이(재사용)         |
 
 
 추가 위치: `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`
 
+**GNSS 측정 노이즈 (LIO-SAM 스타일):** `NMEAFactor`는 위치 3D 잔차만 사용한다. `pose.covariance[0],[7]`를 수평 **분산**으로 읽고, Z는 항상 `nmea.altitude_deemph_var_m2`(GNSS 고도 약하게). `nmea.covariance_variance_floor_xy`로 XY 하한을 둔다. `values[16]=1.0` 고정으로 이중 스케일을 피한다.
+
 ### 핵심 수식
 
 #### (a) `NMEAFactor` / `NMEAFactorNolidar`
 
-`nmea_input_type == "navsatfix"`일 때는 residual이 \(\mathbf{r}=\mathbf{r}_p \in \mathbb{R}^3\)만 사용한다.
+현재는 residual이 \(\mathbf{r}=\mathbf{r}_p \in \mathbb{R}^3\)만 사용된다.
 
 \mathbf{r}*p = (\mathbf{p}*{est}-\mathbf{p}*{nmea})w
 

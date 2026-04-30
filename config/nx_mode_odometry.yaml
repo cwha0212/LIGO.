@@ -1,6 +1,24 @@
-# nx_odometry.launch.py 용 오버레이 — 베이스는 config/avia.yaml
-# mapping_mode: false → PCD 누적/저장 비활성 (odometry·주행 전용)
+# nx_odometry.launch.py 전용 오버레이 (베이스: config/avia.yaml)
+#
+# ▶ 오도메트리 실행 시 지도 저장 루트·실내 GICP 로드 경로는 보통 이 파일만 수정하면 됩니다.
+# ▶ 런치 인자 indoor_map_name 이 비어 있으면 아래 pcd_save.map_name 과 동일한 이름의 하위 폴더를 씁니다.
+#
 /**:
   ros__parameters:
     mapping:
       mapping_mode: false
+
+    # PCD 루트: odometry_use_explicit_map_paths 가 false 일 때
+    #   그리드 로드 경로 = {storage_root}/{indoor_map_name 런치인자 또는 이 map_name}/
+    # (절대 경로 또는 패키지 상대, 비우면 소스 트리의 ROOT_DIR/PCD)
+    pcd_save:
+      storage_root: ""
+      map_name: "map"
+
+    indoor:
+      # false(기본): grid_map_dir·map_pcd_path 는 무시되고 위 {storage_root}/{맵이름}/ 만 사용
+      # true: 아래 grid_map_dir·map_pcd_path 를 그대로 사용(절대 경로 권장, 하위 폴더 재귀 스캔)
+      odometry_use_explicit_map_paths: false
+      # explicit false 일 때는 무시됨. true 일 때만 사용 (예: "/home/user/maps" → 그 아래 map1/submap1/*_grid2d.yaml)
+      grid_map_dir: "PCD"
+      map_pcd_path: ""

@@ -24,7 +24,7 @@
 | `/ligo/global_position` | `sensor_msgs/NavSatFix` | 동일 |
 | `/ligo/ecef_position` | `geometry_msgs/PointStamped` | 동일 |
 | `/ligo/nmea_graph_anchor_marker` | `visualization_msgs/Marker` | `NMEA_ENABLE`, 그래프 앵커 시각화 |
-| `/ligo/nmea_stamp_diag` | `std_msgs/Float64MultiArray` | `nmea.publish_stamp_diag` + NavSatFix 입력 시 |
+| `/ligo/nmea_stamp_diag` | `std_msgs/Float64MultiArray` | `NMEA_ENABLE` 시(입력 NavSatFix 브리지 경로) |
 | `/icp_pairs_marker` | `visualization_msgs/Marker` | `NMEA_ENABLE`, 여러 namespace |
 | `/init_pairs_from_gps_move_marker` | `visualization_msgs/Marker` | 초기화 시각화 |
 | `/planner_normal` | `visualization_msgs/Marker` | 퍼블리셔만 생성, **현재 `publish` 호출 없음** |
@@ -82,7 +82,7 @@
 
 | 토픽 | 타입 | 조건 |
 |------|------|------|
-| `/ligo/nmea_stamp_diag` | `std_msgs/Float64MultiArray` | `nmea.publish_stamp_diag`가 true이고 GNSS 입력이 `navsatfix` 모드일 때(`li_initialization.cpp`). LiDAR·GNSS 스탬프 정합 진단. |
+| `/ligo/nmea_stamp_diag` | `std_msgs/Float64MultiArray` | `NMEA_ENABLE`일 때(`li_initialization.cpp`). LiDAR·GNSS 스탬프 정합 진단. |
 
 ---
 

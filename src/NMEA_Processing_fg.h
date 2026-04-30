@@ -133,7 +133,6 @@ class NMEAProcess
   bool graphAnchorEnu(Eigen::Vector3d &out) const;
   state_output state_const_;
   state_output state_const_last;
-  double nmea_weight = 1.0;
   // NMEA-LIO init guard: run ICP only after cumulative motion from start.
   bool init_start_set = false;
   Eigen::Vector3d init_start_lio = Eigen::Vector3d::Zero();

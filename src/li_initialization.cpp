@@ -48,7 +48,7 @@ void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> nod
 {
     if (!node)
         return;
-    if (!NMEA_ENABLE || !nmea_publish_stamp_diag || nmea_input_type != std::string("navsatfix"))
+    if (!NMEA_ENABLE)
         return;
     g_nmea_stamp_diag_pub =
         node->create_publisher<std_msgs::msg::Float64MultiArray>("/ligo/nmea_stamp_diag", rclcpp::QoS(100));
@@ -128,13 +128,6 @@ std::deque<PointCloudXYZI::Ptr>  lidar_buffer;
 std::deque<double>               time_buffer;
 std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_deque;
 std::queue<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_buf;
-
-void nmea_meas_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &meas_msg)
-{
-    nav_msgs::msg::Odometry::SharedPtr nmea_meas = std::make_shared<nav_msgs::msg::Odometry>(*meas_msg);
-    last_nmea_time = rclcpp::Time(nmea_meas->header.stamp).seconds();
-    nmea_meas_buf.push(std::move(nmea_meas)); // ?
-}
 
 void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
 {

@@ -1,22 +1,31 @@
-# nx_mapping.launch.py 용 오버레이 — 베이스는 config/avia.yaml
-# mapping_mode: true → PCD 누적/저장 활성 (지도 저장 세션)
-# 실내 그리드/참조 PCD 경로 비움 → 기동 시 loadIndoorGridMaps/initIndoorGICP 분기 미실행
+# nx_mapping.launch.py 전용 오버레이 (베이스: config/avia.yaml)
+#
+# ▶ 매핑(지도 저장) 세션: 저장 루트·PCD/그리드2D 옵션은 이 파일에서 조정.
+# ▶ 런치 인자 map_name, sub_map_name 은 이 파일의 pcd_save.map_name / sub_map_name 을 덮어씁니다.
+#
+# mapping_mode: true → PCD 누적/저장 활성
+# indoor 는 기본 비움 → 기동 시 대용량 GICP 로드 생략(필요 시 아래만 채움)
 /**:
   ros__parameters:
     mapping:
       mapping_mode: true
+
     indoor:
+      # 매핑 중에도 /ligo/indoor_mode용 자산이 필요하면 경로 지정(비우면 스킵)
       grid_map_dir: ""
       map_pcd_path: ""
-    # 매핑 세션 PCD 저장 이름·간격·그리드 (경로는 코드상 ROOT_DIR/PCD/ 고정)
+
     pcd_save:
-      # <ROOT_DIR>/PCD/{map_name}/{sub_map_name}/{sub_map_name}.pcd (+ grid yaml/pgm, ecef) — 동일 이름이면 덮어쓰기
+      # 맵·tmp_map 저장 루트. 비우면 ROOT_DIR/PCD
+      # 예: "/mnt/rms_maps" 또는 패키지 상대 "PCD"
+      storage_root: "/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD"
+      # 런치 map_name / sub_map_name 이 없을 때의 기본값(런치로 덮어쓰기 가능)
       map_name: "map"
+      sub_map_name: "sub_map1"
       interval: -1
       grid2d_resolution: 0.2
-      # 맵 PCD·ECEF·tmp_map 분할 PCD 공통 VoxelGrid 리프(m). 0이면 다운샘플 없이 저장
+      # 맵 PCD·ECEF·tmp_map VoxelGrid 리프(m). 0이면 다운샘플 없음
       downsample_voxel_m: 0.2
-      # 실시간 분할: tmp_map/… (ECEF 누적); 위 downsample_voxel_m 적용
       tmp_map:
         enable: false
         interval_sec: 1.0

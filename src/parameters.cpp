@@ -43,9 +43,6 @@
 #include <vector>
 
 namespace {
-static const std::filesystem::path kMapStorageRoot("/mnt/rms_maps");
-// 기존 방식(패키지 내부 ROOT_DIR/PCD)을 쓰려면 아래 라인으로 교체:
-// static const std::filesystem::path kMapStorageRoot = std::filesystem::path(ROOT_DIR) / "PCD";
 
 static std::string trim_ws(std::string s) {
   while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.pop_back();
@@ -80,6 +77,74 @@ static std::string resolve_indoor_grid_map_dir(const std::string& raw) {
   return src_joined.string();
 }
 
+/** Empty → `{ROOT_DIR}/PCD`; relative → package source dir if present, else share/ligo (same as grid_map_dir). */
+static std::string resolve_map_storage_root(const std::string& raw) {
+  std::string s = trim_ws(raw);
+  namespace fs = std::filesystem;
+  if (s.empty()) {
+    std::error_code ec;
+    const fs::path def = (fs::path(ROOT_DIR) / "PCD").lexically_normal();
+    const fs::path canon = fs::weakly_canonical(def, ec);
+    return ec ? def.string() : canon.string();
+  }
+  fs::path p(s);
+  if (p.is_absolute()) {
+    std::error_code ec;
+    const fs::path canon = fs::weakly_canonical(p, ec);
+    return ec ? s : canon.string();
+  }
+  std::string root(ROOT_DIR);
+  if (!root.empty() && (root.back() == '/' || root.back() == '\\'))
+    root.pop_back();
+  fs::path src_joined = (fs::path(root) / p).lexically_normal();
+  std::error_code ec;
+  if (fs::is_directory(src_joined, ec)) {
+    const fs::path canon = fs::weakly_canonical(src_joined, ec);
+    return ec ? src_joined.string() : canon.string();
+  }
+  try {
+    const std::string share = ament_index_cpp::get_package_share_directory("ligo");
+    fs::path joined = fs::path(share) / p;
+    fs::path canon = fs::weakly_canonical(joined, ec);
+    return ec ? joined.lexically_normal().string() : canon.string();
+  } catch (...) {
+  }
+  return src_joined.string();
+}
+
+/** Resolve relative PCD file path against package source or share (absolute unchanged). */
+static std::string resolve_indoor_pcd_path(const std::string& raw) {
+  std::string s = trim_ws(raw);
+  if (s.empty())
+    return s;
+  namespace fs = std::filesystem;
+  fs::path p(s);
+  if (p.is_absolute()) {
+    std::error_code ec;
+    const fs::path canon = fs::weakly_canonical(p, ec);
+    return ec ? s : canon.string();
+  }
+  std::string root(ROOT_DIR);
+  if (!root.empty() && (root.back() == '/' || root.back() == '\\'))
+    root.pop_back();
+  fs::path src_joined = (fs::path(root) / p).lexically_normal();
+  std::error_code ec;
+  if (fs::is_regular_file(src_joined, ec)) {
+    const fs::path canon = fs::weakly_canonical(src_joined, ec);
+    return ec ? src_joined.string() : canon.string();
+  }
+  try {
+    const std::string share = ament_index_cpp::get_package_share_directory("ligo");
+    fs::path joined = fs::path(share) / p;
+    if (fs::is_regular_file(joined, ec)) {
+      fs::path canon = fs::weakly_canonical(joined, ec);
+      return ec ? joined.lexically_normal().string() : canon.string();
+    }
+  } catch (...) {
+  }
+  return src_joined.string();
+}
+
 static std::string sanitize_map_token(std::string raw, const std::string& fallback) {
   raw = trim_ws(raw);
   if (raw.empty()) {
@@ -93,9 +158,9 @@ static std::string sanitize_map_token(std::string raw, const std::string& fallba
   return raw;
 }
 
-static std::string resolve_indoor_map_group_dir(const std::string& map_name) {
+static std::string resolve_indoor_map_group_dir(const std::string& map_name, const std::string& storage_root) {
   namespace fs = std::filesystem;
-  const fs::path map_dir = kMapStorageRoot / map_name;
+  const fs::path map_dir = fs::path(storage_root) / map_name;
   std::error_code ec;
   const fs::path canon = fs::weakly_canonical(map_dir, ec);
   return ec ? map_dir.string() : canon.string();
@@ -142,6 +207,7 @@ bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 bool   scan_pub_en, scan_body_pub_en;
 double pcd_save_grid2d_resolution_m = 0.2;
 double pcd_save_downsample_voxel_m = 0.2;
+std::string map_storage_root = (std::filesystem::path(ROOT_DIR) / "PCD").string();
 std::string pcd_save_map_name = "map";
 std::string pcd_save_sub_map_name = "sub_map";
 bool pcd_tmp_map_enable = false;
@@ -154,8 +220,6 @@ double time_update_last = 0.0, time_current = 0.0, time_predict_last_const = 0.0
 
 std::string ppp_fname;
 std::string nmea_meas_topic;
-std::string nmea_input_type;
-bool nmea_publish_stamp_diag = false;
 std::string enu_position_topic = "/ligo/enu_position";
 std::string enu_position_frame_id = "enu";
 std::string enu_heading_topic = "/ligo/enu_heading_deg";
@@ -170,6 +234,8 @@ bool nmea_use_fixed_anchor = false;
 std::vector<double> nmea_fixed_anchor_lla_deg;
 bool nmea_force_indoor_on_high_cov = true;
 double nmea_indoor_high_cov_threshold = 50.0;
+double nmea_covariance_variance_floor_xy = 1e-10;
+double nmea_altitude_deemph_var_m2 = 1e6;
 bool update_nmea = false;
 bool time_diff_valid = false, is_first_nmea;
 double last_nmea_time = -1;
@@ -190,6 +256,7 @@ gtsam::noiseModel::Base::shared_ptr indoorPoseNoise;
 gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
 std::string indoor_map_pcd_path;
 std::string indoor_grid_map_dir;
+bool indoor_odometry_use_explicit_map_paths = false;
 bool indoor_gicp_map_loaded = false;
 Eigen::Isometry3d indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
 bool indoor_flag_dynamic = false;
@@ -285,6 +352,7 @@ void readParameters(rclcpp::Node * node)
         pcd_tmp_map_interval_sec);
     pcd_tmp_map_interval_sec = 1.0;
   }
+  map_storage_root = resolve_map_storage_root(get_param("pcd_save.storage_root", std::string("")));
   {
     pcd_save_map_name = sanitize_map_token(
         get_param("pcd_save.map_name", std::string("map")),
@@ -339,10 +407,7 @@ void readParameters(rclcpp::Node * node)
   if (NMEA_ENABLE)
   {
     p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
-    p_nmea->nmea_weight = get_param("nmea.nmea_weight", 0.1);
     nmea_meas_topic = get_param("nmea.posit_odo_topic", std::string("/mavros/local_position/odom"));
-    nmea_input_type = get_param("nmea.nmea_input_type", std::string("odometry"));
-    nmea_publish_stamp_diag = get_param("nmea.publish_stamp_diag", false);
     p_nmea->gravity_init << VEC_FROM_ARRAY(gravity);
     time_diff_nmea_local = get_param("nmea.nmea_local_time_diff", 0.0);
     nmea_gps_latency = get_param("nmea.nmea_gps_latency", 0.0);
@@ -364,12 +429,13 @@ void readParameters(rclcpp::Node * node)
     p_nmea->p_assign->outlier_thres_init = get_param("gnss.outlier_thres_init", 0.1);
     p_nmea->nmea_sample_period = get_param("gnss.gnss_sample_period", 0.1);
     p_nmea->p_assign->ppp_std_threshold = get_param("nmea.ppp_std_thres", 20.0);
+    nmea_covariance_variance_floor_xy =
+        get_param("nmea.covariance_variance_floor_xy", 1e-10);
+    nmea_altitude_deemph_var_m2 = get_param("nmea.altitude_deemph_var_m2", 1e6);
     nmea_force_indoor_on_high_cov = get_param("nmea.force_indoor_on_high_cov", true);
     nmea_indoor_high_cov_threshold = get_param("nmea.indoor_high_cov_threshold", 50.0);
-    const double legacy_lio_disp_m = get_param("nmea.init_min_lio_disp_m", 3.0);
-    const double legacy_nmea_disp_m = get_param("nmea.init_min_nmea_disp_m", 3.0);
-    p_nmea->init_min_lio_total_move_m = get_param("nmea.init_min_lio_total_move_m", legacy_lio_disp_m);
-    p_nmea->init_min_nmea_total_move_m = get_param("nmea.init_min_nmea_total_move_m", legacy_nmea_disp_m);
+    p_nmea->init_min_lio_total_move_m = get_param("nmea.init_min_lio_total_move_m", 3.0);
+    p_nmea->init_min_nmea_total_move_m = get_param("nmea.init_min_nmea_total_move_m", 3.0);
     p_nmea->init_icp_max_iterations = get_param("nmea.init_icp_max_iterations", 80);
     p_nmea->init_icp_max_fitness = get_param("nmea.init_icp_max_fitness", 5.0);
     {
@@ -407,24 +473,44 @@ void readParameters(rclcpp::Node * node)
                                        indoorPoseNoise, indoorPoseNoiseInit);
     indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
     indoor_grid_map_dir = resolve_indoor_grid_map_dir(get_param("indoor.grid_map_dir", std::string("")));
+    indoor_odometry_use_explicit_map_paths = get_param("indoor.odometry_use_explicit_map_paths", false);
     if (!mapping_mode) {
-      if (!indoor_map_pcd_path.empty()) {
-        RCLCPP_WARN(
+      if (indoor_odometry_use_explicit_map_paths) {
+        if (!indoor_map_pcd_path.empty()) {
+          indoor_map_pcd_path = resolve_indoor_pcd_path(indoor_map_pcd_path);
+        }
+        RCLCPP_INFO(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; grid maps are loaded from /mnt/rms_maps/<map_name>/.");
+            "[indoor/gicp] odometry: explicit YAML paths — grid_map_dir=%s map_pcd_path=%s",
+            indoor_grid_map_dir.c_str(),
+            indoor_map_pcd_path.c_str());
+      } else {
+        if (!indoor_map_pcd_path.empty()) {
+          RCLCPP_WARN(
+              rclcpp::get_logger("ligo"),
+              "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode (use "
+              "indoor.odometry_use_explicit_map_paths: true to enable); grid maps load from "
+              "<pcd_save.storage_root>/<map_name>/.");
+        }
+        const std::string odom_map_name = sanitize_map_token(
+            get_param("indoor.map_name_for_odometry", std::string("")),
+            pcd_save_map_name);
+        indoor_grid_map_dir = resolve_indoor_map_group_dir(odom_map_name, map_storage_root);
+        indoor_map_pcd_path.clear();
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "[indoor/gicp] odometry map group: map_name=%s dir=%s root=%s",
+            odom_map_name.c_str(),
+            indoor_grid_map_dir.c_str(),
+            map_storage_root.c_str());
       }
-      const std::string odom_map_name = sanitize_map_token(
-          get_param("indoor.map_name_for_odometry", std::string("")),
-          pcd_save_map_name);
-      indoor_grid_map_dir = resolve_indoor_map_group_dir(odom_map_name);
-      indoor_map_pcd_path.clear();
-      RCLCPP_INFO(
-          rclcpp::get_logger("ligo"),
-          "[indoor/gicp] odometry map group: map_name=%s dir=%s",
-          odom_map_name.c_str(),
-          indoor_grid_map_dir.c_str());
-    } else if (!indoor_grid_map_dir.empty()) {
-      cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;
+    } else {
+      if (!indoor_map_pcd_path.empty()) {
+        indoor_map_pcd_path = resolve_indoor_pcd_path(indoor_map_pcd_path);
+      }
+      if (!indoor_grid_map_dir.empty()) {
+        cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;
+      }
     }
     indoor_gicp_max_factor_error   = get_param("indoor.gicp_max_factor_error", 250.0);
     indoor_gicp_min_factor_inliers = get_param("indoor.gicp_min_factor_inliers", 50);

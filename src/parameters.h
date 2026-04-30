@@ -102,7 +102,9 @@ extern bool   scan_pub_en, scan_body_pub_en;
 extern double pcd_save_grid2d_resolution_m;
 /** VoxelGrid leaf (m) for map PCD, ECEF companion, and tmp_map split PCD; 0 = no downsampling. */
 extern double pcd_save_downsample_voxel_m;
-/** Map name for mapping outputs (top-level directory under `{ROOT_DIR}/PCD`). */
+/** Absolute or package-relative root for PCD outputs and default odometry indoor map group `{root}/{map_name}/`. Empty YAML → `{ROOT_DIR}/PCD`. */
+extern std::string map_storage_root;
+/** Map name for mapping outputs (top-level directory under map_storage_root). */
 extern std::string pcd_save_map_name;
 /** Sub map name (directory + filename stem under map). */
 extern std::string pcd_save_sub_map_name;
@@ -119,9 +121,6 @@ extern double dyn_filter_resolution;
 
 extern std::string ppp_fname;
 extern std::string nmea_meas_topic;
-extern std::string nmea_input_type;
-/** If true, gpsHandler publishes stamp diagnostics on /ligo/nmea_stamp_diag (NavSatFix path). */
-extern bool nmea_publish_stamp_diag;
 extern std::string enu_position_topic;
 extern std::string enu_position_frame_id;
 extern std::string enu_heading_topic;
@@ -141,6 +140,10 @@ extern std::vector<double> nmea_fixed_anchor_lla_deg;
 /** If true, high NMEA covariance can trigger indoor reloc path (see nmea.indoor_high_cov_threshold). */
 extern bool nmea_force_indoor_on_high_cov;
 extern double nmea_indoor_high_cov_threshold;
+/** LIO-SAM style: min variance (m²) for horizontal axes after reading pose.covariance [0],[7] (extremely small = trust reported cov when good). */
+extern double nmea_covariance_variance_floor_xy;
+/** Z variance (m²) for NMEAFactor position block; GNSS height is always weak (not from covariance zz). */
+extern double nmea_altitude_deemph_var_m2;
 extern double gnss_ekf_noise;
 extern bool update_nmea;
 extern bool time_diff_valid, is_first_nmea;
@@ -163,6 +166,8 @@ extern gtsam::noiseModel::Base::shared_ptr indoorPoseNoiseInit;
 extern std::string indoor_map_pcd_path;
 /** Non-empty: resolve GICP reference PCD via * _grid2d.yaml occupancy (same as indoor map membership). */
 extern std::string indoor_grid_map_dir;
+/** Odometry mode: if true, use YAML `indoor.grid_map_dir` and `indoor.map_pcd_path` instead of `{map_storage_root}/{map_name}/`. */
+extern bool indoor_odometry_use_explicit_map_paths;
 extern bool indoor_gicp_map_loaded;
 extern Eigen::Isometry3d indoor_gicp_T_map_lidar;
 extern bool indoor_flag_dynamic;

@@ -80,29 +80,28 @@
 
     nmea:
       # 실외 재정렬(실내 후 GNSS 품질): 그래프만 비우고 ICP 유지 → fused ENU 연속; NMEALIAlign 완료 후 IVox만 지연 리셋
-      # true: gpsHandler가 nmea_meas_buf에 넣는 stamp 진단을 /ligo/nmea_stamp_diag 로 퍼블리시 (navsatfix 경로만)
-      publish_stamp_diag: true
       nmea_enable: true
       posit_odo_topic: "/ublox_driver/receiver_lla"
-      nmea_input_type: "navsatfix"
       ppp_std_thres: 0.01
       # 높은 NMEA 공분산(실내 등)일 때 indoor reloc 트리거 허용 (기존 하드코딩 상수 대체)
       force_indoor_on_high_cov: true
       indoor_high_cov_threshold: 50.0
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
-      init_min_lio_total_move_m: 10.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
-      init_min_nmea_total_move_m: 10.0
+      init_min_lio_total_move_m: 3.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
+      init_min_nmea_total_move_m: 3.0
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
       # LIO–NMEA init rotation: yaw_only (2D, default) | weighted_3d (Z-downweighted Kabsch; see z_weight / max_tilt_deg)
-      lio_align_rotation_mode: "weighted_3d"
+      lio_align_rotation_mode: "yaw_only"
       lio_align_z_weight: 1.0
       lio_align_max_tilt_deg: 10.0
       pos_noise: 0.1
       pos_noise_z: 0.1
-      rot_noise: 1.0
-      vel_noise: 1.0
-      nmea_weight: 2000.0 
+      # LIO-SAM: pose.covariance [0],[7] variances for XY; Z always altitude_deemph_var_m2 (weak GNSS height).
+      covariance_variance_floor_xy: 1.0e-10
+      altitude_deemph_var_m2: 1000000.0
+      rot_noise: 0.001
+      vel_noise: 0.001
       nmea_local_time_diff: 0.0
       nmea_gps_latency: 0.0
       ppp_file_name: "deg2.pos"
@@ -125,10 +124,18 @@
 
     # pcd_save.* 는 매핑 전용 오버레이 config/nx_mode_mapping.yaml 에서 설정 (nx_mapping.launch.py)
 
+    pcd_save:
+      # 비우면 기본: 패키지 소스 ROOT_DIR/PCD. 절대경로 또는 패키지 상대(PCD 등) 가능.
+      storage_root: ""
+      # 이하 항목은 nx_mode_mapping.yaml 오버레이에서 보통 덮어씀
+
     indoor:
       # true: GTSAM indoor factor + continuous indoor. mapping_mode:true forces this false but
       # grid_map_dir / map_pcd_path are still loaded for /ligo/indoor_mode GICP.
       indoor_flag: false
+      # 오도메트리(mapping_mode:false): 기본은 <pcd_save.storage_root>/<indoor.map_name_for_odometry 또는 pcd_save.map_name>/ 에서 그리드 로드.
+      # true 이면 아래 grid_map_dir·map_pcd_path를 그대로 사용(패키지 상대 경로 해석 포함).
+      odometry_use_explicit_map_paths: false
       # *_grid2d.yaml + pgm + source_pcd. Relative: package source <src>/LIGO./<path> if that dir exists, else share/ligo/<path>.
       grid_map_dir: "PCD"
       # Absolute path to the reference PCD (odometry는 보통 비움; 런타임에 PCD/<id>/<id>.pcd 사용)
@@ -142,12 +149,12 @@
       gicp_scan_voxel_m: 0.5
       gicp_max_iterations: 50
       # GTSAM IndoorLocalizationFactor 잔차 스케일(values[16] relative_sqrt_info). 1.0=기본, 크게 할수록 GICP 측위를 그래프에서 더 강하게 반영(비용은 대략 스케일²).
-      gicp_factor_sqrt_info_scale: 5.0
+      gicp_factor_sqrt_info_scale: 15.0
       # true: 첫 GICP 후 참조 PCD/2D맵을 T^{-1}로 밀어 raw LIO(map)와 겹침; GICP 전에는 /indoor/map_cloud 미발행(icp 준비 시).
-      gicp_align_reference_map_to_lio: true
+      gicp_align_reference_map_to_lio: false
       # Noise models for IndoorLocalizationFactor in the GTSAM graph.
-      pos_noise: 0.2         # (m) horizontal
-      pos_noise_z: 0.5       # (m) vertical
+      pos_noise: 0.05         # (m) horizontal
+      pos_noise_z: 0.05       # (m) vertical
       rot_noise: 0.05        # (rad)
       # Outlier rejection (Cauchy robust kernel)
       outlier_rejection: false

@@ -42,7 +42,55 @@
 #include "parameters.h"
 #include <rclcpp/rclcpp.hpp>
 #include <gtsam/linear/linearExceptions.h>
+#include <gtsam/linear/NoiseModel.h>
 #include <chrono>
+
+namespace {
+
+/**
+ * LIO-SAM-style diagonal variances for NMEAFactor position block (navsatfix / position_only, 3D residual):
+ * pose.covariance [0],[7] for horizontal; Z always uses nmea_altitude_deemph_var_m2 (GNSS height not from cov zz).
+ * Odometry (9D residual): YAML fixed noise until 9D covariance mapping exists.
+ */
+gtsam::noiseModel::Base::shared_ptr buildNmeaPositionNoiseModel(
+    const nav_msgs::msg::Odometry::SharedPtr &odom,
+    bool is_init_window,
+    bool position_only,
+    NMEAAssignment *p_assign)
+{
+  if (!p_assign) {
+    return gtsam::noiseModel::Isotropic::Sigma(3, 1.0);
+  }
+  if (!position_only) {
+    return is_init_window ? p_assign->robustnmeaNoise_init : p_assign->robustnmeaNoise;
+  }
+
+  const auto &c = odom->pose.covariance;
+  const double cxx = c[0], cyy = c[7];
+  const bool finite = std::isfinite(cxx) && std::isfinite(cyy);
+  const bool horiz_invalid = (cxx <= 0.0 && cyy <= 0.0);
+  if (!finite || horiz_invalid) {
+    return is_init_window ? p_assign->robustnmeaNoise_init : p_assign->robustnmeaNoise;
+  }
+
+  double vx = std::max(cxx, nmea_covariance_variance_floor_xy);
+  double vy = std::max(cyy, nmea_covariance_variance_floor_xy);
+  const double vz = nmea_altitude_deemph_var_m2;
+
+  gtsam::Vector v(3);
+  v << vx, vy, vz;
+
+  if (p_assign->outlier_rej) {
+    const double k =
+        is_init_window ? p_assign->outlier_thres_init : p_assign->outlier_thres;
+    return gtsam::noiseModel::Robust::Create(
+        gtsam::noiseModel::mEstimator::Cauchy::Create(k),
+        gtsam::noiseModel::Diagonal::Variances(v));
+  }
+  return gtsam::noiseModel::Diagonal::Variances(v);
+}
+
+}  // namespace
 
 NMEAProcess::NMEAProcess()
 {
@@ -881,28 +929,31 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     const bool indoor_gicp_replaces_nmea = indoor_flag_dynamic;
     if (!indoor_gicp_replaces_nmea)
     {
-      const bool nmea_navsatfix_pos_only = (nmea_input_type == "navsatfix");
+      const gtsam::noiseModel::Base::shared_ptr nmea_noise_init_model =
+          buildNmeaPositionNoiseModel(nmea_meas_[0], true, true, p_assign);
+      const gtsam::noiseModel::Base::shared_ptr nmea_noise_run_model =
+          buildNmeaPositionNoiseModel(nmea_meas_[0], false, true, p_assign);
       double values[17];
       values[0] = Tex_imu_r[0]; values[1] = Tex_imu_r[1]; values[2] = Tex_imu_r[2]; values[3] = anc_local[0]; values[4] = anc_local[1]; values[5] = anc_local[2];
       values[6] = nmea_meas_[0]->pose.pose.position.x; values[7] = nmea_meas_[0]->pose.pose.position.y; values[8] = nmea_meas_[0]->pose.pose.position.z;
       values[9] = nmea_meas_[0]->twist.twist.linear.x; values[10] = nmea_meas_[0]->twist.twist.linear.y; values[11] = nmea_meas_[0]->twist.twist.linear.z;
       values[12] = nmea_meas_[0]->pose.pose.orientation.w; values[13] = nmea_meas_[0]->pose.pose.orientation.x; values[14] = nmea_meas_[0]->pose.pose.orientation.y;
       values[15] = nmea_meas_[0]->pose.pose.orientation.z;
-      values[16] = nmea_weight;
+      values[16] = 1.0;
       RCLCPP_INFO(rclcpp::get_logger("ligo"), "[NMEA FACTOR INPUT]");
       if (!nolidar)
       {
         if (frame_num < delete_thred)
         {
-          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise_init,
-                                    nmea_navsatfix_pos_only));
+          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, nmea_noise_init_model,
+                                    true));
         }
         else
         {
-          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
-                                    nmea_navsatfix_pos_only));
+          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, nmea_noise_run_model,
+                                    true));
         }
-        if (nmea_navsatfix_pos_only && invalid_lidar)
+        if (invalid_lidar)
         {
           p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
           factor_id_cur.push_back(id_accumulate);
@@ -933,8 +984,10 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       }
       else
       {
-        p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
-                                                         nmea_navsatfix_pos_only));  // not work
+        const gtsam::noiseModel::Base::shared_ptr nmea_noise_nolidar =
+            (frame_num < delete_thred) ? nmea_noise_init_model : nmea_noise_run_model;
+        p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, nmea_noise_nolidar,
+                                                         true));  // not work
       }
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
