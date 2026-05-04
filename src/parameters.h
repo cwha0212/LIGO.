@@ -92,6 +92,8 @@ extern double acc_cov_input, gyr_cov_input, vel_cov;
 extern double gyr_cov_output, acc_cov_output, b_gyr_cov, b_acc_cov;
 extern double imu_meas_acc_cov, imu_meas_omg_cov; 
 extern int    lidar_type, pcd_save_interval;
+/** Absolute root for map PCD save/load and odometry grid group: `{map_folder}/{pcd_save.map_name}/…`. Empty yaml → `/mnt/rms_maps`; relative → under `ROOT_DIR`. */
+extern std::string map_folder;
 extern std::vector<double> gravity_init, gravity;
 extern std::vector<double> extrinT, extrinT_gnss;
 extern std::vector<double> extrinR, extrinR_gnss;
@@ -102,11 +104,11 @@ extern bool   scan_pub_en, scan_body_pub_en;
 extern double pcd_save_grid2d_resolution_m;
 /** VoxelGrid leaf (m) for map PCD, ECEF companion, and tmp_map split PCD; 0 = no downsampling. */
 extern double pcd_save_downsample_voxel_m;
-/** Map name for mapping outputs (top-level directory under `{ROOT_DIR}/PCD`). */
+/** Map name for mapping outputs (directory under `map_folder`). */
 extern std::string pcd_save_map_name;
 /** Sub map name (directory + filename stem under map). */
 extern std::string pcd_save_sub_map_name;
-/** Enable time-bucket split PCD export to `{ROOT_DIR}/tmp_map`. */
+/** Enable time-bucket split PCD export to `{map_folder}/tmp_map`. */
 extern bool pcd_tmp_map_enable;
 /** Split export interval (sec) for tmp_map files. */
 extern double pcd_tmp_map_interval_sec;

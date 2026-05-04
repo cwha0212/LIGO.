@@ -42,15 +42,39 @@
 #include <rclcpp/exceptions.hpp>
 #include <vector>
 
-namespace {
-static const std::filesystem::path kMapStorageRoot("/mnt/rms_maps");
-// 기존 방식(패키지 내부 ROOT_DIR/PCD)을 쓰려면 아래 라인으로 교체:
-// static const std::filesystem::path kMapStorageRoot = std::filesystem::path(ROOT_DIR) / "PCD";
+std::string map_folder = "/mnt/rms_maps";
 
+namespace {
 static std::string trim_ws(std::string s) {
   while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.pop_back();
   while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.erase(s.begin());
   return s;
+}
+
+static std::string resolve_map_folder_param(const std::string &raw)
+{
+  std::string s = trim_ws(raw);
+  if (s.empty())
+  {
+    return std::string("/mnt/rms_maps");
+  }
+  namespace fs = std::filesystem;
+  fs::path p(s);
+  if (p.is_absolute())
+  {
+    std::error_code ec;
+    const fs::path canon = fs::weakly_canonical(p, ec);
+    return ec ? fs::absolute(p).lexically_normal().string() : canon.string();
+  }
+  std::string root(ROOT_DIR);
+  if (!root.empty() && (root.back() == '/' || root.back() == '\\'))
+  {
+    root.pop_back();
+  }
+  const fs::path joined = (fs::path(root) / p).lexically_normal();
+  std::error_code ec;
+  const fs::path canon = fs::weakly_canonical(joined, ec);
+  return ec ? joined.string() : canon.string();
 }
 
 /** If non-empty and relative: prefer package source ROOT_DIR/p when that directory exists, else share/ligo/p. */
@@ -95,7 +119,7 @@ static std::string sanitize_map_token(std::string raw, const std::string& fallba
 
 static std::string resolve_indoor_map_group_dir(const std::string& map_name) {
   namespace fs = std::filesystem;
-  const fs::path map_dir = kMapStorageRoot / map_name;
+  const fs::path map_dir = fs::path(map_folder) / map_name;
   std::error_code ec;
   const fs::path canon = fs::weakly_canonical(map_dir, ec);
   return ec ? map_dir.string() : canon.string();
@@ -224,6 +248,11 @@ void readParameters(rclcpp::Node * node)
     }
     return node->get_parameter(name).get_value<decltype(default_val)>();
   };
+  map_folder = resolve_map_folder_param(get_param("map_folder", std::string("")));
+  RCLCPP_INFO(
+      rclcpp::get_logger("ligo"),
+      "[map] map_folder=%s",
+      map_folder.c_str());
   prop_at_freq_of_imu = get_param("prop_at_freq_of_imu", true);
   check_satu = get_param("check_satu", true);
   init_map_size = get_param("init_map_size", 100);
@@ -411,7 +440,8 @@ void readParameters(rclcpp::Node * node)
       if (!indoor_map_pcd_path.empty()) {
         RCLCPP_WARN(
             rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; grid maps are loaded from /mnt/rms_maps/<map_name>/.");
+            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; grid maps are loaded from <map_folder>/<map_name>/ "
+            "(see map_folder in yaml).");
       }
       const std::string odom_map_name = sanitize_map_token(
           get_param("indoor.map_name_for_odometry", std::string("")),

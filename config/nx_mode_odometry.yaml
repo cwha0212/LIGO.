@@ -2,5 +2,6 @@
 # mapping_mode: false → PCD 누적/저장 비활성 (odometry·주행 전용)
 /**:
   ros__parameters:
+    map_folder: "/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD"
     mapping:
       mapping_mode: false

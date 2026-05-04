@@ -3,14 +3,16 @@
 # 실내 그리드/참조 PCD 경로 비움 → 기동 시 loadIndoorGridMaps/initIndoorGICP 분기 미실행
 /**:
   ros__parameters:
+    # 필요 시 베이스 avia.yaml 의 map_folder 를 여기서 덮어씀 (예: map_folder: "/data/maps")
+    map_folder: "/mnt/rms_maps"
     mapping:
       mapping_mode: true
     indoor:
       grid_map_dir: ""
       map_pcd_path: ""
-    # 매핑 세션 PCD 저장 이름·간격·그리드 (경로는 코드상 ROOT_DIR/PCD/ 고정)
+    # 매핑 세션 PCD 저장 이름·간격·그리드 (루트는 map_folder)
     pcd_save:
-      # <ROOT_DIR>/PCD/{map_name}/{sub_map_name}/{sub_map_name}.pcd (+ grid yaml/pgm, ecef) — 동일 이름이면 덮어쓰기
+      # {map_folder}/{map_name}/{sub_map_name}/{sub_map_name}.pcd (+ grid yaml/pgm, ecef) — 동일 이름이면 덮어쓰기
       map_name: "map"
       interval: -1
       grid2d_resolution: 0.2

@@ -1,5 +1,7 @@
 /**:
   ros__parameters:
+    # 맵(PCD·그리드·odometry 그룹) 저장·로드 루트. 비우면 기본 /mnt/rms_maps. 상대 경로는 소스 트리 ROOT_DIR 기준.
+    map_folder: "/mnt/rms_maps"
     common:
       lid_topic:  "/livox/lidar" 
       imu_topic:  "/livox/imu" 

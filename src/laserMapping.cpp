@@ -276,20 +276,15 @@ PointCloudXYZI::Ptr pcl_wait_save_tmp_map(new PointCloudXYZI());
 static std::vector<Eigen::Vector3d> pcl_wait_tmp_map_ray_origins;
 static double g_tmp_map_time_base_sec = std::numeric_limits<double>::quiet_NaN();
 static long long g_tmp_map_bucket_idx = -1;
-// 지도 저장 루트 수정 부분
-static const std::filesystem::path kMapStorageRoot("/mnt/rms_maps");
-// 기존 방식(패키지 내부 ROOT_DIR/PCD)을 쓰려면 아래 라인으로 교체:
-// static const std::filesystem::path kMapStorageRoot = std::filesystem::path(ROOT_DIR) / "PCD";
-
 static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointCloudXYZI::Ptr &cloud);
 static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix);
 
 static std::filesystem::path ligo_make_map_root_dir()
 {
-    return kMapStorageRoot / pcd_save_map_name / pcd_save_sub_map_name;
+    return std::filesystem::path(map_folder) / pcd_save_map_name / pcd_save_sub_map_name;
 }
 
-/** Single sub-map directory: `PCD/{map_name}/{sub_map_name}/{sub_map_name}.pcd` (overwrite on each save). */
+/** Single sub-map directory: `{map_folder}/{map_name}/{sub_map_name}/{sub_map_name}.pcd` (overwrite on each save). */
 static std::string ligo_make_pcd_save_path()
 {
     return (ligo_make_map_root_dir() / (pcd_save_sub_map_name + ".pcd")).string();
@@ -302,7 +297,7 @@ static std::string ligo_make_tmp_map_save_path(long long bucket_idx, double inte
     const long long end_sec = std::max(start_sec + 1LL, static_cast<long long>(std::llround(static_cast<double>(idx + 1LL) * interval_sec)));
     char name_buf[128];
     std::snprintf(name_buf, sizeof(name_buf), "%s_%05lld_%06lld.pcd", pcd_save_map_name.c_str(), start_sec, end_sec);
-    return (kMapStorageRoot / "tmp_map" / name_buf).string();
+    return (std::filesystem::path(map_folder) / "tmp_map" / name_buf).string();
 }
 
 static PointCloudXYZI::Ptr ligo_convert_enu_cloud_to_ecef(
@@ -346,6 +341,8 @@ static bool ligo_save_ecef_companion_pcd(
     return true;
 }
 
+static PointCloudXYZI::Ptr ligo_voxel_downsample_for_map_pcd(const PointCloudXYZI::Ptr &in, double leaf_m);
+
 static bool ligo_flush_tmp_map_bucket(const rclcpp::Logger &logger)
 {
     if (!pcd_tmp_map_enable || !mapping_mode)
@@ -380,7 +377,7 @@ static bool ligo_flush_tmp_map_bucket(const rclcpp::Logger &logger)
 
 static void ligo_cleanup_tmp_map_pcd_files(const rclcpp::Logger &logger)
 {
-    const std::filesystem::path tmp_dir = kMapStorageRoot / "tmp_map";
+    const std::filesystem::path tmp_dir = std::filesystem::path(map_folder) / "tmp_map";
     try
     {
         if (!std::filesystem::exists(tmp_dir) || !std::filesystem::is_directory(tmp_dir))
@@ -1685,7 +1682,8 @@ int main(int argc, char** argv)
     if (mapping_mode)
     {
         RCLCPP_INFO(node->get_logger(),
-                    "[pcd] mapping saves overwrite /mnt/rms_maps/%s/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
+                    "[pcd] mapping saves overwrite %s/%s/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
+                    map_folder.c_str(),
                     pcd_save_map_name.c_str(),
                     pcd_save_sub_map_name.c_str(),
                     pcd_save_sub_map_name.c_str());
