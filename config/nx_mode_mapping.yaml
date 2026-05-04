@@ -4,7 +4,7 @@
 /**:
   ros__parameters:
     # 필요 시 베이스 avia.yaml 의 map_folder 를 여기서 덮어씀 (예: map_folder: "/data/maps")
-    map_folder: "/mnt/rms_maps"
+    map_folder: "/home/chang/projects/NAVICOM/GPS_LIO_ws/src/LIGO./PCD"
     mapping:
       mapping_mode: true
     indoor:

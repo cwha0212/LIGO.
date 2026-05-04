@@ -40,6 +40,41 @@ namespace {
   static bool s_refmap_display_T_inv_valid = false;
   static uint64_t s_gicp_session_nonce = 0;
 
+  /** small_gicp T acts on map-frame scan points: p' = T * p. Compose with body→map Isometry, then express in system ENU. */
+  static void computeEnuPoseFromGicpMapTransform(const Eigen::Matrix3d& R_local_to_enu,
+                                                 const Eigen::Vector3d& t_local_to_enu,
+                                                 const Eigen::Isometry3d& T_gicp,
+                                                 Eigen::Vector3d* out_pos,
+                                                 Eigen::Quaterniond* out_rot) {
+    const Eigen::Vector3d p_local = kf_output.x_.pos;
+    const Eigen::Matrix3d R_local = kf_output.x_.rot;
+    const Eigen::Matrix3d R_body_enu = R_local_to_enu * R_local;
+    const Eigen::Vector3d t_body_enu = R_local_to_enu * p_local + t_local_to_enu;
+
+    Eigen::Isometry3d iso_body_in_map = Eigen::Isometry3d::Identity();
+    if (s_sys_to_map_valid) {
+      iso_body_in_map.linear() = s_R_sys_to_map * R_body_enu;
+      iso_body_in_map.translation() = s_R_sys_to_map * t_body_enu + s_t_sys_to_map;
+    } else {
+      iso_body_in_map.linear() = R_body_enu;
+      iso_body_in_map.translation() = t_body_enu;
+    }
+
+    const Eigen::Isometry3d iso_gicp = T_gicp * iso_body_in_map;
+
+    Eigen::Matrix3d R_sys;
+    Eigen::Vector3d p_sys;
+    if (s_sys_to_map_valid) {
+      R_sys = s_R_sys_to_map.transpose() * iso_gicp.rotation();
+      p_sys = s_R_sys_to_map.transpose() * (iso_gicp.translation() - s_t_sys_to_map);
+    } else {
+      R_sys = iso_gicp.rotation();
+      p_sys = iso_gicp.translation();
+    }
+    *out_pos = p_sys;
+    *out_rot = Eigen::Quaterniond(R_sys).normalized();
+  }
+
   static void applyRefMapDisplayCorrectionToGrid(nav_msgs::msg::OccupancyGrid& grid) {
     if (!indoor_gicp_align_reference_map_to_lio || !s_refmap_display_T_inv_valid) return;
     const Eigen::Isometry3d& T = s_refmap_display_T_inv;
@@ -369,17 +404,11 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
 
   if (quality_ok)
   {
-    // Scan points are already warped into map-local ENU before GICP; T_map_lidar is then a small
-    // scan↔map registration residual (~Identity), NOT sensor absolute pose in map (see laserMapping
-    // seed comment). Factor ENU pose must match the same LIO→ENU chain as scan conversion.
-    const Eigen::Vector3d p_lio_enu =
-        R_local_to_enu * kf_output.x_.pos + t_local_to_enu;
-    const Eigen::Matrix3d R_lio_enu =
-        R_local_to_enu * kf_output.x_.rot;
-    indoor_pos_enu_meas = p_lio_enu;
-    indoor_rot_enu_meas = Eigen::Quaterniond(R_lio_enu).normalized();
-    indoor_pose_time    = timestamp;
-    indoor_pose_valid   = true;
+    // Global indoor constraint uses ONLY GICP-refined ENU pose (T_map_lidar ∘ body pose in map frame).
+    computeEnuPoseFromGicpMapTransform(R_local_to_enu, t_local_to_enu, result.T_map_lidar,
+                                       &indoor_pos_enu_meas, &indoor_rot_enu_meas);
+    indoor_pose_time  = timestamp;
+    indoor_pose_valid = true;
   }
   else
   {
@@ -561,11 +590,10 @@ void addIndoorFactorToGraph(int frame_num) {
   values[13] = indoor_rot_enu_meas.x();
   values[14] = indoor_rot_enu_meas.y();
   values[15] = indoor_rot_enu_meas.z();
-  values[16] = indoor_gicp_factor_sqrt_info_scale;  // relative_sqrt_info (see indoor_localization_factor.hpp)
+  values[16] = indoor_gicp_factor_sqrt_info_scale;
 
   const bool init_phase = (frame_num < p_nmea->delete_thred);
   const auto& noise = init_phase ? indoorPoseNoiseInit : indoorPoseNoise;
-  // Same keys/geometry as outdoor NMEAFactor: P(0), E(0), A, R — global ENU pose vs graph anchor E(0).
   p_nmea->p_assign->gtSAMgraph.add(ligo::IndoorLocalizationFactor(
       P(0), E(0), A(frame_num), R(frame_num), false, values, Eigen::Vector3d::Zero(), p_nmea->Rex_imu_r, noise));
 
@@ -573,12 +601,13 @@ void addIndoorFactorToGraph(int frame_num) {
   ++s_indoor_factor_cnt;
   if (s_indoor_factor_cnt <= 5 || s_indoor_factor_cnt % 50 == 0) {
     RCLCPP_INFO(rclcpp::get_logger("ligo"),
-                "[INDOOR FACTOR INPUT] #%zu  frame=%d  pos_enu=(%.2f,%.2f,%.2f)  "
-                "quat=(%.3f,%.3f,%.3f,%.3f)  noise=%s",
+                "[INDOOR FACTOR INPUT (GICP ENU)] #%zu  frame=%d  pos_enu=(%.2f,%.2f,%.2f)  "
+                "quat=(%.3f,%.3f,%.3f,%.3f)  sqrt_info=%.3f  noise=%s",
                 s_indoor_factor_cnt, frame_num,
                 indoor_pos_enu_meas[0], indoor_pos_enu_meas[1], indoor_pos_enu_meas[2],
                 indoor_rot_enu_meas.w(), indoor_rot_enu_meas.x(),
                 indoor_rot_enu_meas.y(), indoor_rot_enu_meas.z(),
+                indoor_gicp_factor_sqrt_info_scale,
                 init_phase ? "init" : "normal");
   }
 }

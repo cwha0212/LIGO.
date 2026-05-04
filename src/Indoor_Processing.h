@@ -55,9 +55,9 @@ std::optional<Eigen::Vector3d> ecefToLoadedMapEnu(const Eigen::Vector3d& ecef);
 void setSystemEcefAnchor(const Eigen::Vector3d& anc_ecef,
                          const Eigen::Matrix3d& R_ecef_enu);
 
-/** Run scan-to-map GICP and update indoor_pos_enu_meas / indoor_rot_enu_meas.
+/** Run scan-to-map GICP; on quality pass sets indoor_* to GICP-refined ENU pose only.
  *  scan_world: current scan in LIO local/world frame.
- *  Returns true on GICP convergence. */
+ *  Returns true after successful registration (even if quality gate fails). */
 bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
                          double timestamp,
                          const Eigen::Matrix3d& R_local_to_enu,
@@ -84,7 +84,7 @@ void publishIndoorViz(
     double timestamp_sec,
     const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid = nullptr);
 
-/** Add IndoorLocalizationFactor(P,E,A,R) — same variable layout as outdoor NMEAFactor; used when indoor (NMEAFactor off). */
+/** Add one IndoorLocalizationFactor: global ENU measurement = GICP-refined pose only (quality-gated in runIndoorGICPUpdate). */
 void addIndoorFactorToGraph(int frame_num);
 
 }  // namespace indoor

@@ -177,7 +177,7 @@ extern double indoor_gicp_scan_voxel_m;
 extern int    indoor_gicp_max_iterations_reg;
 /** If true: defer first /indoor/map_cloud until one GICP result, then shift PCD by T_map_lidar^{-1} so it matches raw LIO in map (same frame as pre-indoor map). */
 extern bool indoor_gicp_align_reference_map_to_lio;
-/** IndoorLocalizationFactor `relative_sqrt_info` (values[16]). >1.0 pulls pose harder toward GICP vs IMU/LIO. */
+/** IndoorLocalizationFactor `relative_sqrt_info` (values[16]); measurement is GICP-refined ENU pose only. */
 extern double indoor_gicp_factor_sqrt_info_scale;
 extern MeasureGroup Measures;
 
