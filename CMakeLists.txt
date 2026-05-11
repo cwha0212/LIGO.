@@ -211,6 +211,7 @@ install(TARGETS ligo_mapping
   DESTINATION lib/${PROJECT_NAME}
 )
 set(ligo_python_scripts
+  scripts/mqtt_config.py
   scripts/ligo_topic_to_mqtt.py
   scripts/mqtt_mode_orchestrator.py
   scripts/mqtt_nav_pub.py

@@ -28,10 +28,8 @@ The codes of this repo are contributed by [Dongjiao He (贺东娇)](https://gith
 
 운영/연동 문서는 아래를 우선 참고한다.
 
-- MQTT 토픽 개요: `docs/MQTT_TOPICS.md`
-- MQTT payload 상세: `docs/mqtt_payload_spec.md`
-- systemd 모드 오케스트레이터 개요: `docs/systemd_mode_orchestrator.md`
-- systemd 설치/운영 명령 순서: `docs/systemd_mode_orchestrator_commands.md`
+- MQTT 통합(토픽·payload·오케스트레이션·동기화): `docs/MQTT.md` (`config/mqtt_topics.yaml`)
+- systemd 모드 오케스트레이터 설치/운영 명령: `docs/systemd_mode_orchestrator_commands.md`
 - ROS 발행 토픽 정리: `docs/published_topics.md`
 - 파라미터 레퍼런스: `docs/PARAMETERS.md`
 

@@ -1,0 +1,38 @@
+# MQTT 토픽·브로커·맵 동기화 경로 — scripts/mqtt_config.py 가 로드한다.
+# prefix 는 mqtt.topic_prefix; 토픽 문자열의 {prefix} 가 치환된다.
+
+mqtt:
+  host: rms.bottle-tak.com
+  port: 80
+  use_websocket: true
+  ws_path: /mqtt
+  username: ""
+  password: ""
+  keepalive_sec: 10
+  topic_prefix: navi1
+  topics:
+    control_mode: "{prefix}/control/mode"
+    control_status: "{prefix}/control/mode_status"
+    position: "{prefix}/position"
+    heading: "{prefix}/heading"
+    gps: "{prefix}/gps"
+    init_heading_icp: "{prefix}/init_heading_icp"
+    ligo_mode: "{prefix}/ligo_mode"
+    nav_prefix: "{prefix}/nav"
+
+orchestrator:
+  # SIGINT 후 SIGTERM 까지 기다리는 시간(초). mapping 은 PCD/그리드 저장에 시간이 걸리므로 길게.
+  # nx_mapping.launch.py 의 sigterm_timeout(기본 86400) 과 맞춤.
+  stop_timeout_sec_mapping: 86400.0
+  stop_timeout_sec_odometry: 10.0
+  start_confirm_sec: 1.5
+
+sync:
+  # 공유(서버) 맵 루트 — synchronization 시 여기서 읽어 로컬로 rsync
+  shared_map_root: /mnt/rms_maps
+  # 로컬 동기화 대상. ${LIGO_ROOT} 미설정 시 mqtt_config 가 패키지 루트로 대체
+  local_map_root: "${LIGO_ROOT}/PCD"
+  rsync_options:
+    - "-a"
+    - "--delete"
+    - "--info=stats2"

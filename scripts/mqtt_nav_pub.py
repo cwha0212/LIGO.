@@ -21,6 +21,10 @@ try:
 except ImportError as exc:
     raise SystemExit("paho-mqtt가 필요합니다: pip install paho-mqtt") from exc
 
+from mqtt_config import load_mqtt_config, topic_prefix
+
+_MQTT = load_mqtt_config().get("mqtt", {}) or {}
+
 
 def _mqtt_reason_failed(reason_code: object) -> bool:
     """paho-mqtt v2 ReasonCode / 레거시 int 모두 대응."""
@@ -43,9 +47,9 @@ def _mqtt_reason_failed(reason_code: object) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Publish start/goal lat-lon to MQTT")
-    p.add_argument("--host", default="rms.bottle-tak.com", help="MQTT broker host")
-    p.add_argument("--port", type=int, default=80, help="MQTT broker port")
-    p.add_argument("--topic-prefix", default="navi1", help="Topic prefix")
+    p.add_argument("--host", default=str(_MQTT.get("host", "rms.bottle-tak.com")), help="MQTT broker host")
+    p.add_argument("--port", type=int, default=int(_MQTT.get("port", 80)), help="MQTT broker port")
+    p.add_argument("--topic-prefix", default=topic_prefix(), help="Topic prefix")
     p.add_argument(
         "--kind",
         choices=["start", "goal", "current", "start_pose"],

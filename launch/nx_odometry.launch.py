@@ -60,6 +60,8 @@ def generate_launch_description():
         executable="ligo_topic_to_mqtt.py",
         name="ligo_topic_to_mqtt",
         output="screen",
+        sigterm_timeout="20",
+        sigkill_timeout="5",
     )
 
     ld = LaunchDescription()

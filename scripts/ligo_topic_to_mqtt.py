@@ -2,12 +2,12 @@
 """
 LIGO ROS2 topic -> MQTT bridge.
 
-MQTT topic별로 JSON을 분리 발행한다 (기본 prefix: navi1):
-  - navi1/position   : lat, lon
-  - navi1/heading    : deg_from_north_cw, cardinal
-  - navi1/gps        : status, ntrip_connected (/receiver_pvt 기반)
-  - navi1/init_heading_icp : success/status (/ligo/nmea_heading_align_status 기반)
-  - navi1/ligo_mode  : /ligo/mode(String JSON) 미러
+MQTT topic별로 JSON을 분리 발행한다. 토픽 이름·브로커 기본값은 config/mqtt_topics.yaml (또는 LIGO_MQTT_CONFIG).
+  - {prefix}/position   : lat, lon
+  - {prefix}/heading    : deg_from_north_cw, cardinal
+  - {prefix}/gps        : status, ntrip_connected (/receiver_pvt 기반)
+  - {prefix}/init_heading_icp : success/status (/ligo/nmea_heading_align_status 기반)
+  - {prefix}/ligo_mode  : /ligo/mode(String JSON) 미러
 
 Run:
   python3 scripts/ligo_topic_to_mqtt.py
@@ -42,6 +42,8 @@ try:
     import paho.mqtt.client as mqtt
 except ImportError as exc:
     raise SystemExit("paho-mqtt가 필요합니다: pip install paho-mqtt") from exc
+
+from mqtt_config import load_mqtt_config
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -106,16 +108,26 @@ class LigoMqttBridge(Node):
     def __init__(self) -> None:
         super().__init__("ligo_topic_to_mqtt")
 
-        # MQTT params
-        self.declare_parameter("mqtt.host", "rms.bottle-tak.com")
-        self.declare_parameter("mqtt.port", 80)
-        self.declare_parameter("mqtt.topic_prefix", "navi1")
-        self.declare_parameter("mqtt.use_websocket", True)
-        self.declare_parameter("mqtt.ws_path", "/mqtt")
-        self.declare_parameter("mqtt.username", "")
-        self.declare_parameter("mqtt.password", "")
+        _cfg = load_mqtt_config()
+        _m = _cfg.get("mqtt", {}) or {}
+        _topics = _m.get("topics") if isinstance(_m.get("topics"), dict) else {}
+        _ka = _m.get("keepalive_sec", 5)
+        try:
+            _ka_i = int(_ka) if int(_ka) >= 1 else 5
+        except (TypeError, ValueError):
+            _ka_i = 5
+        _pref = str(_m.get("topic_prefix", "navi1")).strip().strip("/") or "navi1"
+
+        # MQTT params (기본값은 config/mqtt_topics.yaml)
+        self.declare_parameter("mqtt.host", str(_m.get("host", "rms.bottle-tak.com")))
+        self.declare_parameter("mqtt.port", int(_m.get("port", 80)))
+        self.declare_parameter("mqtt.topic_prefix", _pref)
+        self.declare_parameter("mqtt.use_websocket", bool(_m.get("use_websocket", True)))
+        self.declare_parameter("mqtt.ws_path", str(_m.get("ws_path", "/mqtt")))
+        self.declare_parameter("mqtt.username", str(_m.get("username", "") or ""))
+        self.declare_parameter("mqtt.password", str(_m.get("password", "") or ""))
         # paho-mqtt connect()의 keepalive는 정수(초)만 허용 — float 전달 시 "required argument is not an integer"
-        self.declare_parameter("mqtt.keepalive_sec", 5)
+        self.declare_parameter("mqtt.keepalive_sec", _ka_i)
         self.declare_parameter("reconnect_period_sec", 1.0)
 
         # ROS topic params
@@ -127,12 +139,17 @@ class LigoMqttBridge(Node):
 
         self.mqtt_host = str(self.get_parameter("mqtt.host").value)
         self.mqtt_port = int(self.get_parameter("mqtt.port").value)
-        prefix = str(self.get_parameter("mqtt.topic_prefix").value).strip().strip("/")
-        self.mqtt_topic_position = f"{prefix}/position"
-        self.mqtt_topic_heading = f"{prefix}/heading"
-        self.mqtt_topic_gps = f"{prefix}/gps"
-        self.mqtt_topic_icp = f"{prefix}/init_heading_icp"
-        self.mqtt_topic_ligo_mode = f"{prefix}/ligo_mode"
+        prefix = str(self.get_parameter("mqtt.topic_prefix").value).strip().strip("/") or "navi1"
+
+        def _mqtt_topic(key: str, fallback_tpl: str) -> str:
+            tpl = str(_topics.get(key, "") or "").strip() or fallback_tpl
+            return tpl.replace("{prefix}", prefix)
+
+        self.mqtt_topic_position = _mqtt_topic("position", "{prefix}/position")
+        self.mqtt_topic_heading = _mqtt_topic("heading", "{prefix}/heading")
+        self.mqtt_topic_gps = _mqtt_topic("gps", "{prefix}/gps")
+        self.mqtt_topic_icp = _mqtt_topic("init_heading_icp", "{prefix}/init_heading_icp")
+        self.mqtt_topic_ligo_mode = _mqtt_topic("ligo_mode", "{prefix}/ligo_mode")
         self.mqtt_use_websocket = bool(self.get_parameter("mqtt.use_websocket").value)
         self.mqtt_ws_path = str(self.get_parameter("mqtt.ws_path").value)
         self.mqtt_username = str(self.get_parameter("mqtt.username").value)
@@ -268,12 +285,8 @@ class LigoMqttBridge(Node):
         self._schedule_next_reconnect()
 
     def on_global_position(self, msg: NavSatFix) -> None:
-        lat = float(msg.latitude)
-        lon = float(msg.longitude)
-        if self.lat == lat and self.lon == lon:
-            return
-        self.lat = lat
-        self.lon = lon
+        self.lat = float(msg.latitude)
+        self.lon = float(msg.longitude)
         self._publish_position()
 
     def on_odom(self, msg: Odometry) -> None:
@@ -463,10 +476,14 @@ def main() -> None:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # disconnect 먼저 → MQTT 네트워크 스레드가 즉시 종료되어 loop_stop 이 빨리 끝남.
+        try:
+            node._mqtt.disconnect()
+        except Exception:
+            pass
         try:
             if getattr(node, "_mqtt_loop_started", False):
                 node._mqtt.loop_stop()
-            node._mqtt.disconnect()
         except Exception:
             pass
         node.destroy_node()

@@ -56,7 +56,7 @@ sudo journalctl -u ligo-mode-orchestrator.service -f
 
 ## 5) MQTT 제어 메시지 발행 예시
 
-브로커가 WebSocket(`:80`, `/mqtt`)을 사용하므로 아래 Python 예시를 권장합니다.
+브로커·토픽·페이로드 전체는 **[MQTT.md](MQTT.md)** 및 `config/mqtt_topics.yaml`을 따른다. 아래 예시의 `topic`·호스트는 기본값(`navi1`, `rms.bottle-tak.com`)이다.
 
 ### 5-1) Mapping 시작 (`map_name`, `sub_map_name` 필수)
 

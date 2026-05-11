@@ -1,8 +1,14 @@
 import json
 import time
-import paho.mqtt.client as mqtt
+import sys
+from pathlib import Path
 
-topic = "navi1/control/mode"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import paho.mqtt.client as mqtt
+from mqtt_config import resolve_topic
+
+topic = resolve_topic("control_mode")
 # Odometry: map_name 단일 지정 -> PCD/<map_name>/ 하위 sub-map 전체 로드
 # payload = {
 #     "command": "start",
@@ -16,8 +22,13 @@ topic = "navi1/control/mode"
 #     "sub_map_name": "floor_2",
 # }
 
+# payload = {
+#     "command": "stop",
+# }
+
 payload = {
-    "command": "stop",
+  "command": "synchronization",
+  "map_name": "site_a"
 }
 
 # payload = {"command": "stop"}
