@@ -199,7 +199,6 @@ bool time_diff_valid = false, is_first_nmea;
 double last_nmea_time = -1;
 double time_diff_nmea_local = 0.0;
 double nmea_gps_latency = 0.0;
-bool nolidar = false; 
 double lidar_time_inte = 0.1, first_imu_time = 0.0;
 bool NMEA_ENABLE = true;
 bool mapping_mode = false;
@@ -377,10 +376,6 @@ void readParameters(rclcpp::Node * node)
     nmea_gps_latency = get_param("nmea.nmea_gps_latency", 0.0);
     p_nmea->p_assign->prior_noise = get_param("gnss.prior_noise", 0.010);
     p_nmea->p_assign->marg_noise = get_param("gnss.marg_noise", 0.010);
-    p_nmea->pre_integration->acc_w = get_param("gnss.b_acc_noise", 0.10);
-    p_nmea->pre_integration->gyr_w = get_param("gnss.b_omg_noise", 0.10);
-    p_nmea->pre_integration->acc_n = get_param("gnss.acc_noise", 0.10);
-    p_nmea->pre_integration->gyr_n = get_param("gnss.omg_noise", 0.10);
     p_nmea->p_assign->rot_noise = get_param("nmea.rot_noise", 1.0);
     p_nmea->p_assign->vel_noise = get_param("nmea.vel_noise", 1.0);
     p_nmea->p_assign->odo_noise = get_param("gnss.odo_noise", 0.1);
@@ -408,7 +403,6 @@ void readParameters(rclcpp::Node * node)
       p_nmea->lio_align_z_weight = get_param("nmea.lio_align_z_weight", 0.2);
       p_nmea->lio_align_max_tilt_deg = get_param("nmea.lio_align_max_tilt_deg", 25.0);
     }
-    nolidar = get_param("gnss.nolidar", false);
     p_nmea->wind_size = get_param("gnss.window_size", 2);
     p_nmea->p_assign->initNoises();
     enu_position_topic = get_param("ligo.enu_position_topic", enu_position_topic);
@@ -504,18 +498,14 @@ void cout_state_to_file_nmea()
         {
             pos_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
         }
-        else if (!nolidar)
+        else
         {
             Eigen::Vector3d truth_imu;
-            truth_imu << 0.0, 0.0, 0.14; // 0.0, 0.02, -0.43; // 
-            Eigen::Vector3d pos_r = kf_output.x_.rot * truth_imu + kf_output.x_.pos; // maybe improper.normalized()
+            truth_imu << 0.0, 0.0, 0.14;
+            Eigen::Vector3d pos_r = kf_output.x_.rot * truth_imu + kf_output.x_.pos;
             Eigen::Matrix3d enu_rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(P(0)).matrix();
             Eigen::Vector3d anc_cur = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector3>(E(0));
             pos_enu = enu_rot * pos_r + anc_cur;
-        }
-        else
-        {
-            pos_enu = kf_output.x_.rot * p_nmea->Tex_imu_r + kf_output.x_.pos; // .normalized()
         }
         local_poses.push_back(kf_output.x_.pos);
         local_rots.push_back(kf_output.x_.rot);
@@ -537,7 +527,6 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
     if (!p_nmea->nmea_ready)
         return false;
     // ICP not ready but graph active: GTSAM E(0)/P(0) (can diverge from published LIO odom).
-    if (!nolidar)
     {
         Eigen::Vector3d truth_imu;
         truth_imu << 0.0, 0.0, 0.14;
@@ -545,10 +534,6 @@ bool compute_fused_imu_position_enu(Eigen::Vector3d &pos_enu)
         Eigen::Matrix3d enu_rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(P(0)).matrix();
         Eigen::Vector3d anc_cur = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector3>(E(0));
         pos_enu = enu_rot * pos_r + anc_cur;
-    }
-    else
-    {
-        pos_enu = kf_output.x_.rot * p_nmea->Tex_imu_r + kf_output.x_.pos;
     }
     return true;
 }

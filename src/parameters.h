@@ -149,7 +149,6 @@ extern bool time_diff_valid, is_first_nmea;
 extern double last_nmea_time;
 extern double time_diff_nmea_local;
 extern double nmea_gps_latency;
-extern bool nolidar; 
 extern double lidar_time_inte, first_imu_time;
 extern bool NMEA_ENABLE;
 extern bool mapping_mode;

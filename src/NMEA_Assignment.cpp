@@ -136,12 +136,10 @@ void NMEAAssignment::initNoises( void ) // maybe usable!
     }
 } // initNoises
 
-void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int frame_num, size_t &id_accumulate, gtsam::FactorIndices delete_factor)
+void NMEAAssignment::delete_variables(size_t frame_delete, int frame_num, size_t &id_accumulate, gtsam::FactorIndices delete_factor)
 {
-    if (!nolidar)
+    if (frame_delete > 0)
     {
-      if (frame_delete > 0)
-      {
         // Re-anchor global extrinsic states every marginalization cycle.
         // Runtime evidence showed p0 can become underconstrained near delete boundary.
         {
@@ -162,16 +160,8 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
         size_t j = 0;
         for (; j < marg_thred; j++)
         {
-            // get updated noise before reset
-            // gtsam::noiseModel::Gaussian::shared_ptr updatedRotNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(R(frame_delete+j))); // important
-            // gtsam::noiseModel::Gaussian::shared_ptr updatedPosNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(A(frame_delete+j))); // important
-            // gtsam::noiseModel::Gaussian::shared_ptr updatedPosNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(F(frame_delete+j))); // important
-            // gtsam::noiseModel::Gaussian::shared_ptr updatedDtNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(B(frame_delete+j))); // important
-            // gtsam::noiseModel::Gaussian::shared_ptr updatedDdtNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(C(frame_delete+j))); // important
-
-            gtsam::PriorFactor<gtsam::Rot3> init_rot(R(frame_delete+j),isamCurrentEstimate.at<gtsam::Rot3>(R(frame_delete+j)), margrotNoise); // updatedRotNoise); //  
-            // gtsam::PriorFactor<gtsam::Vector12> init_vel(F(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector12>(F(frame_delete+j)), updatedPosNoise); // margposNoise);
-            gtsam::PriorFactor<gtsam::Vector6> init_vel(A(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector6>(A(frame_delete+j)), margposNoise); // updatedPosNoise); // 
+            gtsam::PriorFactor<gtsam::Rot3> init_rot(R(frame_delete+j),isamCurrentEstimate.at<gtsam::Rot3>(R(frame_delete+j)), margrotNoise);
+            gtsam::PriorFactor<gtsam::Vector6> init_vel(A(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector6>(A(frame_delete+j)), margposNoise);
             gtsam::PriorFactor<gtsam::Vector3> init_grav(G(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector3>(G(frame_delete+j)), priorGravNoise);
             gtsam::PriorFactor<gtsam::Vector12> init_oth(O(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector12>(O(frame_delete+j)), priorBiasNoise);
             gtSAMgraph.add(init_rot);
@@ -184,51 +174,16 @@ void NMEAAssignment::delete_variables(bool nolidar, size_t frame_delete, int fra
             factor_id_frame[0].push_back(id_accumulate+3+(j)*4);
         }
         id_accumulate += j * 4;
-      }
-      try
-      {
-        isam.update(gtSAMgraph, initialEstimate);
-        gtSAMgraph.resize(0); // will the initialEstimate change?
-        initialEstimate.clear();
-        isam.update(gtSAMgraph, initialEstimate, delete_factor);
-      }
-      catch (const gtsam::IndeterminantLinearSystemException &)
-      {
-        throw;
-      }
     }
-    else
+    try
     {
-      if (frame_delete > 0) // (frame_delete == 0)
-      {
-        size_t j = 0;
-        // for (; j < 10; j++)
-        for (; j < marg_thred; j++)
-        {
-            gtsam::noiseModel::Gaussian::shared_ptr updatedRotNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(R(frame_delete+j))); // important
-            gtsam::noiseModel::Gaussian::shared_ptr updatedPosNoise = gtsam::noiseModel::Gaussian::Covariance(isam.marginalCovariance(F(frame_delete+j))); // important
-
-            gtsam::PriorFactor<gtsam::Rot3> init_rot(R(frame_delete+j),isamCurrentEstimate.at<gtsam::Rot3>(R(frame_delete+j)), updatedRotNoise); // margrotNoise);
-            gtsam::PriorFactor<gtsam::Vector12> init_vel(F(frame_delete+j), isamCurrentEstimate.at<gtsam::Vector12>(F(frame_delete+j)), updatedPosNoise); // margposNoise);
-            gtSAMgraph.add(init_rot);
-            gtSAMgraph.add(init_vel);
-            {
-            factor_id_frame[0].push_back(id_accumulate+j*2);
-            factor_id_frame[0].push_back(id_accumulate+1+j*2);
-            }
-        }
-        id_accumulate += j * 2;
-      }
-      try
-      {
         isam.update(gtSAMgraph, initialEstimate);
-        gtSAMgraph.resize(0); // will the initialEstimate change?
+        gtSAMgraph.resize(0);
         initialEstimate.clear();
         isam.update(gtSAMgraph, initialEstimate, delete_factor);
-      }
-      catch (const gtsam::IndeterminantLinearSystemException &)
-      {
+    }
+    catch (const gtsam::IndeterminantLinearSystemException &)
+    {
         throw;
-      }
     }
 }

@@ -74,7 +74,6 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 | `b_acc_noise`, `b_omg_noise`, `acc_noise`, `omg_noise` | 바이어스/관측 노이즈 | ✓ |
 | `gnss_ekf_noise` | EKF 측정 노이즈 스케일 ([Estimator.cpp](../src/Estimator.cpp)) | ✓ |
 | `gnss_extrinsic_T`, `gnss_extrinsic_R` | 안테나(GNSS 수신기 기준점)–IMU 외부표정; `NMEA_ENABLE`일 때 `laserMapping.cpp`에서 `p_nmea->Tex_imu_r` / `Rex_imu_r`에 반영 | |
-| `nolidar` | LiDAR 없이 GNSS만 (특수 모드) | ✓ |
 
 ## `nmea.*`
 

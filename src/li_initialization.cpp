@@ -403,122 +403,6 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
             time_diff_valid ? 1 : 0, time_diff_nmea_local, last_timestamp_imu);
     }
 
-    if (nolidar)
-    {
-        if (is_first_nmea && NMEA_ENABLE)
-        {
-            if (nmea_meas_buf.empty())
-            {
-                return false;
-            }
-            else
-            {
-                while (!imu_deque.empty())
-                {
-                    imu_deque.pop_front();
-                }
-                {
-                    is_first_nmea = false;
-                }
-            }
-        }
-
-
-        if (imu_deque.empty())
-        {
-            return false;
-        }
-        
-        imu_first_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // 
-
-        if ((last_nmea_time < time_diff_nmea_local + imu_first_time + lidar_time_inte) && NMEA_ENABLE)
-        {
-            return false;
-        }
-
-        if (last_timestamp_imu < imu_first_time + lidar_time_inte)
-        {
-            return false;
-        }
-
-        if (imu_deque.empty())
-        {
-            cout << "could not be here" << endl;
-            return false;
-        }
-
-        if (!imu_pushed)
-        { 
-            double imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds();
-            // imu_first_time = imu_time;
-
-            double imu_last_time = rclcpp::Time(imu_deque.back()->header.stamp).seconds();
-            if (imu_last_time - imu_first_time < lidar_time_inte)
-            {
-                return false;
-            }
-            /*** push imu data, and pop from imu buffer ***/
-            if (p_imu->imu_need_init_)
-            {
-                const size_t imu_buf_before = imu_deque.size();
-                imu_next = *(imu_deque.front());
-                meas.imu.shrink_to_fit();
-                while (imu_time - imu_first_time < lidar_time_inte)
-                {
-                    meas.imu.emplace_back(imu_deque.front());
-                    imu_last = imu_next;
-                    imu_deque.pop_front();
-                    if(imu_deque.empty()) break;
-                    imu_time = rclcpp::Time(imu_deque.front()->header.stamp).seconds(); // can be changed
-                    imu_next = *(imu_deque.front());
-                }
-                if (!nmea_meas_buf.empty())
-                {
-                    double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
-                    while (front_nmea_ts < imu_first_time + lidar_time_inte + time_diff_nmea_local)
-                    {
-                        nmea_meas_buf.pop();
-                        if(nmea_meas_buf.empty()) break;
-                        front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
-                    }
-                    if (meas.imu.empty())
-                    {
-                        return false;
-                    }
-                }
-                RCLCPP_INFO(
-                    rclcpp::get_logger("ligo"),
-                    "[sync/nolidar] IMU cut: imu_first=%.6f win=%.3f pushed=%zu imu_buf %zu->%zu",
-                    imu_first_time, lidar_time_inte, meas.imu.size(), imu_buf_before, imu_deque.size());
-            }
-            imu_pushed = true;
-        }
-
-        if (NMEA_ENABLE)
-        {
-            if (!nmea_meas_buf.empty()) // or can wait for a short time?
-            {
-                double front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds(); // take time
-                while (front_nmea_ts - imu_first_time < time_diff_nmea_local + lidar_time_inte) 
-                {
-                    nmea_msg.push(nmea_meas_buf.front());
-                    nmea_meas_buf.pop();
-                    if (nmea_meas_buf.empty()) break;
-                    front_nmea_ts = rclcpp::Time(nmea_meas_buf.front()->header.stamp).seconds();
-                }
-
-                if (!nmea_msg.empty())
-                {
-                    imu_pushed = false;
-                    return true;
-                }
-            }
-        }        
-        imu_pushed = false;
-        return true;
-    }
-    else
-    {
     if (!imu_en)
     {
         if (!lidar_buffer.empty())
@@ -793,6 +677,5 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
     lidar_pushed = false;
     imu_pushed = false;
     return true;
-    }
 }
 

@@ -48,22 +48,44 @@
 
 namespace ligo {
 
+/**
+ * NMEA absolute measurement factor in system-ENU.
+ *
+ * Input format is typed (same style as NmeaLioGravRelFactor / IndoorLocalizationFactor):
+ *   Tex_imu_r, anc_local, pos_meas (ENU), vel_meas (ENU), rot_meas (ENU, Eigen::Matrix3d),
+ *   relative_sqrt_info, hat_omg_T, Rex_imu_r.
+ *
+ * Predicted ENU pose (identical chain to IndoorLocalizationFactor):
+ *   P_enu = R_enu_local * (R * Tex_imu_r + p_body - anc_local) + ref_enu
+ *   V_enu = R^T * v_body + hat_omg_T
+ *   R_enu = R_enu_local * R * Rex_imu_r
+ *
+ * Residual:
+ *   - position_only_=true  (e.g. NavSatFix bridge):  r = (P_enu - pos_meas) * sqrt_info ∈ R^3
+ *   - position_only_=false (Odometry input)         :  r = [(P_enu-pos_meas); (V_enu-vel_meas); Log(rot_meas^T R_enu)] * sqrt_info ∈ R^9
+ *
+ * Notes:
+ *   - In NavSatFix (default) path the input rot_meas / vel_meas are unused because the
+ *     NavSatFix→Odometry bridge does not supply twist/orientation.
+ */
 class NMEAFactor : public gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, gtsam::Vector6, gtsam::Rot3>
 {
-    public: 
-        /** If true (NavSatFix bridge: no valid twist/orientation), only apply 3D position residual in ENU. */
-        NMEAFactor(gtsam::Key j1, gtsam::Key j2, gtsam::Key j3, gtsam::Key j4, bool invalid_lidar_, double values_[17],
-        Eigen::Vector3d hat_omg_T_, Eigen::Matrix3d Rex_imu_r_, const gtsam::SharedNoiseModel& model,
+    public:
+        NMEAFactor(gtsam::Key j1, gtsam::Key j2, gtsam::Key j3, gtsam::Key j4, bool invalid_lidar_,
+        const Eigen::Vector3d& Tex_imu_r_,
+        const Eigen::Vector3d& anc_local_,
+        const Eigen::Vector3d& pos_meas_,
+        const Eigen::Vector3d& vel_meas_,
+        const Eigen::Matrix3d& rot_meas_,
+        double relative_sqrt_info_,
+        const Eigen::Vector3d& hat_omg_T_,
+        const Eigen::Matrix3d& Rex_imu_r_,
+        const gtsam::SharedNoiseModel& model,
         bool position_only = false) :
-        hat_omg_T(hat_omg_T_), invalid_lidar(invalid_lidar_), Rex_imu_r(Rex_imu_r_), position_only_(position_only),
-        gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, gtsam::Vector6, gtsam::Rot3>(model, j1, j2, j3, j4) {
-            Tex_imu_r << values_[0], values_[1], values_[2];
-            anc_local << values_[3], values_[4], values_[5];
-            pos_meas << values_[6], values_[7], values_[8];
-            vel_meas << values_[9], values_[10], values_[11];
-            rot_meas = Eigen::Quaterniond(values_[12], values_[13], values_[14], values_[15]).normalized().toRotationMatrix();
-            relative_sqrt_info = values_[16];
-        }
+        Tex_imu_r(Tex_imu_r_), anc_local(anc_local_), pos_meas(pos_meas_), vel_meas(vel_meas_),
+        hat_omg_T(hat_omg_T_), rot_meas(rot_meas_), Rex_imu_r(Rex_imu_r_),
+        relative_sqrt_info(relative_sqrt_info_), invalid_lidar(invalid_lidar_), position_only_(position_only),
+        gtsam::NoiseModelFactor4<gtsam::Rot3, gtsam::Vector3, gtsam::Vector6, gtsam::Rot3>(model, j1, j2, j3, j4) {}
 
         virtual ~NMEAFactor() {}
 

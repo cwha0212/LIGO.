@@ -140,69 +140,41 @@ dt_j^{(k)} - dt_i^{(k)}
 
 ## 2.3 LIO 연계 factor (GNSS 경로)
 
-
-| Factor                 | 코드 링크                                                                            | Residual | 연결 변수                | 목적                    |
-| ---------------------- | -------------------------------------------------------------------------------- | -------- | -------------------- | --------------------- |
-| (제거됨) `GnssLioFactor` | NMEA-only 리팩터링으로 제거됨 | - | - | legacy GNSS-LIO factor |
-| `NmeaLioFactorNolidar` | `[nmea_lio_factor_nolidar.hpp](include/nmea_factor/nmea_lio_factor_nolidar.hpp)` | 15       | `R_i, F_i, R_j, F_j` | IMU preintegration 제약 |
-
-
-추가 위치(레거시 GNSS-LIO 표): 이전 `GNSS_Processing_fg.cpp`. NMEA 융합 측은 `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`.
-
-### 핵심 수식
-
-#### (a) `GnssLioFactor` (6D)
-
-
-\mathbf{r}_p=
-\left(\mathbf{p}_j-\mathbf{p}_i-\mathbf{v}*i\Delta t-\frac{1}{2}\mathbf{g}\Delta t^2\right)-\Delta\mathbf{p}*{lio}
-
-
-\mathbf{r}_v=
-\left(\mathbf{v}_j-\mathbf{v}*i-\mathbf{g}\Delta t\right)-\Delta\mathbf{v}*{lio}
-
-
-
-\mathbf{r}=[\mathbf{r}_p;\mathbf{r}_v]
-
-
-#### (b) `NmeaLioFactorNolidar` (15D preintegration)
-
-
-\mathbf{r}=
-\begin{bmatrix}
-\mathbf{r}*{\Delta p}
-\mathbf{r}*{\Delta R}
-\mathbf{r}*{\Delta v}
-\mathbf{r}*{b_a}
-\mathbf{r}_{b_g}
-\end{bmatrix}
-
-
-with preintegration covariance whitening:
-
-
-\mathbf{r}_{white} = \mathbf{\Lambda}^{1/2}\mathbf{r}
-
+GNSS-only 모드(LiDAR 미사용)는 더 이상 지원하지 않는다. LIO 사용 경로에서는 `NmeaLioGravRelFactor`(아래 3절)가 LiDAR sqrt info 화이트닝 기반 LIO 상태 결합을 담당한다.
 
 ---
 
 ## 3) NMEA 경로 활성 factor
 
 
-| Factor                 | 코드 링크                                                                                    | Residual | 연결 변수                | 목적                 |
-| ---------------------- | ---------------------------------------------------------------------------------------- | -------- | -------------------- | ------------------ |
-| `NmeaLioGravRelFactor` | `[nmea_lio_gravity_rel_factor.hpp](include/nmea_factor/nmea_lio_gravity_rel_factor.hpp)` | 27       | `P, R, A, O, G`      | LIO 상태와 중력/외부회전 결합 |
-| `NMEAFactor`           | `[nmea_factor.hpp](include/nmea_factor/nmea_factor.hpp)`                                 | 9 또는 3 | `P, E, A, R`         | `nmea_input_type=odometry`: P/V/R(9D). **`navsatfix**: 위치 3D만** (0 twist/quat 제약 방지). [`AddFactor`](src/NMEA_Processing_fg.cpp)에서 `position_only` 전달 |
-| `NMEAFactorNolidar`    | `[nmea_factor_nolidar.hpp](include/nmea_factor/nmea_factor_nolidar.hpp)`                 | 9 또는 3 | `R, F`               | 위와 동일 분기 (`navsatfix` → 3D) |
-| `NmeaLioFactorNolidar` | `[nmea_lio_factor_nolidar.hpp](include/nmea_factor/nmea_lio_factor_nolidar.hpp)`         | 15       | `R_i, F_i, R_j, F_j` | 상태 천이(재사용)         |
+| Factor                       | 코드 링크                                                                                  | Residual | 연결 변수            | 목적 |
+| ---------------------------- | -------------------------------------------------------------------------------------- | -------- | ------------------ | ------ |
+| `NmeaLioGravRelFactor`       | `[nmea_lio_gravity_rel_factor.hpp](include/nmea_factor/nmea_lio_gravity_rel_factor.hpp)` | 27       | `P, R, A, O, G`    | LIO 상태와 중력/외부회전 결합 |
+| `NMEAFactor`                 | `[nmea_factor.hpp](include/nmea_factor/nmea_factor.hpp)`                               | 9 또는 3 | `P, E, A, R`       | `nmea_input_type=odometry`: P/V/R(9D). **`navsatfix`: 위치 3D만** (0 twist/quat 제약 방지). [`AddFactor`](src/NMEA_Processing_fg.cpp)에서 `position_only` 전달 |
+| `IndoorLocalizationFactor`   | `[indoor_localization_factor.hpp](include/indoor_localization_factor.hpp)`             | 6        | `P, E, A, R`       | GICP/indoor 절대 포즈(system-ENU). 속도 미사용 |
 
 
-추가 위치: `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`
+추가 위치: `[src/NMEA_Processing_fg.cpp](src/NMEA_Processing_fg.cpp)`, `[src/Indoor_Processing.cpp](src/Indoor_Processing.cpp)`
+
+### 입력 포맷 통일
+
+세 팩터 모두 LIO factor와 동일한 **typed-인자** 시그니처를 사용한다. 회전은 `Eigen::Matrix3d`, 위치/속도는 `Eigen::Vector3d`, 가중치는 `double`로 직접 전달한다.
+
+| 인자                          | `NmeaLioGravRelFactor` | `NMEAFactor`         | `IndoorLocalizationFactor` |
+| ----------------------------- | ---------------------- | -------------------- | -------------------------- |
+| `Tex_imu_r` (`Vector3d`)      | 내부적으로 미사용     | ✓                    | ✓                          |
+| `anc_local` (`Vector3d`)      | 내부적으로 미사용     | ✓                    | ✓                          |
+| `pos_meas` (`Vector3d`)       | `pos_lio` (LIO 상태)  | NMEA 측정(ENU)       | GICP 측정(ENU)             |
+| `vel_meas` (`Vector3d`)       | `vel_lio`             | NMEA 측정(또는 0)    | **인자 없음(미사용)**     |
+| `rot_meas` (`Matrix3d`)       | `rot_lio`             | NMEA 측정(또는 0)    | GICP 측정                  |
+| `relative_sqrt_info` (`double`) | 별도(`sqrt_lidar`)  | `nmea_weight`        | `indoor_gicp_factor_sqrt_info_scale` |
+| `Rex_imu_r` (`Matrix3d`)      | 미사용                | ✓                    | ✓                          |
+
+> NMEA(navsatfix)는 NavSatFix → Odometry 브리지에서 twist/orientation을 채우지 못하므로 `position_only=true`로 설정되어 `vel_meas`, `rot_meas`가 잔차에서 제외된다. 즉 "회전이 없다"는 의미는 잔차에 들어가지 않는다는 뜻이며, 함수 시그니처상으로는 입력 슬롯이 동일하게 유지된다.
 
 ### 핵심 수식
 
-#### (a) `NMEAFactor` / `NMEAFactorNolidar`
+#### (a) `NMEAFactor`
 
 `nmea_input_type == "navsatfix"`일 때는 residual이 \(\mathbf{r}=\mathbf{r}_p \in \mathbb{R}^3\)만 사용한다.
 
@@ -340,19 +312,13 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 ### 8.3 프레임 업데이트(`AddFactor`)에서 추가되는 factor
 
-#### (a) LiDAR 사용 경로(`!nolidar`)
+#### (a) 기본 LiDAR 사용 경로 (항상)
 
-- 기본:
-  - `NmeaLioGravRelFactor(P(0), R(k), A(k), O(k), G(k), ...)`
-  - `NMEAFactor(P(0), E(0), A(k), R(k), ...)`
+- `NmeaLioGravRelFactor(P(0), R(k), A(k), O(k), G(k), ...)`
+- `NMEAFactor(P(0), E(0), A(k), R(k), ...)`
 - 초기 윈도우 구간(`k < delete_thred`)에서는 `NMEAFactor_init` 노이즈 모델이 사용된다.
 
-#### (b) LiDAR 비사용 경로(`nolidar`)
-
-- `NmeaLioFactorNolidar(R(k-1), F(k-1), R(k), F(k), ...)`
-- `NMEAFactorNolidar(R(k), F(k), ...)`
-
-#### (c) LiDAR 가중치 퇴화 fallback (`weight_lid_zero`)
+#### (b) LiDAR 가중치 퇴화 fallback (`weight_lid_zero`)
 
 `NmeaLioGravRelFactor` 대신 안정화 prior를 추가:
 
@@ -363,8 +329,7 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 ### 8.4 주의: 이름과 실제 사용 경로
 
-- 과거 `NmeaLioFactor` 경로는 미사용으로 정리되었고, 현재는 `NmeaLioFactorNolidar` 경로만 유지된다.
-- `NmeaLioFactorNolidar`는 NMEA-only 경로의 상태 천이 제약으로 실제 사용된다.
+- 과거 `NmeaLioFactor`, `NmeaLioFactorNolidar`, `NMEAFactorNolidar` 경로는 NMEA-only 리팩터링과 LiDAR 필수화 정리에서 모두 제거되었다. 현재는 `NmeaLioGravRelFactor` + `NMEAFactor` 두 가지만 사용된다.
 
 ### 8.5 NMEA-only 실제 사용 factor + 경로 일람
 
@@ -372,22 +337,20 @@ GTSAM 트랙과 별도로, `Curvefitter`에서 Ceres residual을 사용한다.
 
 | Factor | 사용 조건 | 실제 추가 코드(호출) | 클래스 정의 파일 | 이 문서 내 설명 위치 |
 |---|---|---|---|---|
-| `NmeaLioGravRelFactor` | `!nolidar` 이고 `!weight_lid_zero` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_lio_gravity_rel_factor.hpp`](include/nmea_factor/nmea_lio_gravity_rel_factor.hpp) | `3) NMEA 경로 활성 factor`, `8.3(a)` |
-| `NMEAFactor` (`NMEAFactor_init`) | `!nolidar` (초기 윈도우는 init 노이즈) | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_factor.hpp`](include/nmea_factor/nmea_factor.hpp) | `3) NMEA 경로 활성 factor`, `8.3(a)` |
-| `NmeaLioFactorNolidar` | `nolidar` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_lio_factor_nolidar.hpp`](include/nmea_factor/nmea_lio_factor_nolidar.hpp) | `2.3) LIO 연계 factor`, `3) NMEA 경로 활성 factor`, `8.3(b)` |
-| `NMEAFactorNolidar` | `nolidar` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_factor_nolidar.hpp`](include/nmea_factor/nmea_factor_nolidar.hpp) | `3) NMEA 경로 활성 factor`, `8.3(b)` |
+| `NmeaLioGravRelFactor` | `!weight_lid_zero` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_lio_gravity_rel_factor.hpp`](include/nmea_factor/nmea_lio_gravity_rel_factor.hpp) | `3) NMEA 경로 활성 factor`, `8.3(a)` |
+| `NMEAFactor` (`NMEAFactor_init`) | 매 프레임 (초기 윈도우는 init 노이즈) | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | [`include/nmea_factor/nmea_factor.hpp`](include/nmea_factor/nmea_factor.hpp) | `3) NMEA 경로 활성 factor`, `8.3(a)` |
 | `gtsam::PriorFactor<Rot3>(P(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
 | `gtsam::PriorFactor<Vector3>(E(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
 | `gtsam::PriorFactor<Rot3>(R(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
 | `gtsam::PriorFactor<Vector6>(A(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
 | `gtsam::PriorFactor<Vector12>(O(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
 | `gtsam::PriorFactor<Vector3>(G(0))` | 초기화 `SetInit()` | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`SetInit`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.2` |
-| `gtsam::PriorFactor<Vector3>(G(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(c)` |
-| `gtsam::PriorFactor<Vector6>(A(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(c)` |
-| `gtsam::PriorFactor<Rot3>(R(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(c)` |
-| `gtsam::PriorFactor<Vector12>(O(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(c)` |
+| `gtsam::PriorFactor<Vector3>(G(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(b)` |
+| `gtsam::PriorFactor<Vector6>(A(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(b)` |
+| `gtsam::PriorFactor<Rot3>(R(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(b)` |
+| `gtsam::PriorFactor<Vector12>(O(k))` | `weight_lid_zero` fallback | [`src/NMEA_Processing_fg.cpp`](src/NMEA_Processing_fg.cpp) (`AddFactor`) | GTSAM 템플릿(`gtsam::PriorFactor`) | `4) 공통 GTSAM Prior factor`, `8.3(b)` |
 
 #### NMEA-only에서 "사용되지 않는" 대표 factor (혼동 방지)
 
-- `NmeaLioFactor` 경로는 미사용 정리 단계에서 삭제됨.
+- `NmeaLioFactor`, `NmeaLioFactorNolidar`, `NMEAFactorNolidar` 경로는 모두 제거됨 (LiDAR 항상 사용 + nolidar 분기 제거).
 

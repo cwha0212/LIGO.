@@ -54,7 +54,7 @@ NMEAProcess::~NMEAProcess() {}
 
 bool NMEAProcess::graphAnchorEnu(Eigen::Vector3d &out) const
 {
-  if (nmea_ready && !nolidar && p_assign->isamCurrentEstimate.exists(E(0)))
+  if (nmea_ready && p_assign->isamCurrentEstimate.exists(E(0)))
   {
     const gtsam::Vector3 e = p_assign->isamCurrentEstimate.at<gtsam::Vector3>(E(0));
     out = Eigen::Vector3d(e(0), e(1), e(2));
@@ -104,10 +104,6 @@ void NMEAProcess::Reset()
   init_vel_buf.clear();
   init_nmea_buf.clear();
   init_lio_time_buf.clear();
-  // if (nolidar)
-  {
-    pre_integration->repropagate(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
-  }
 
   gtsam::ISAM2Params parameters;
   parameters.relinearizeThreshold = 0.1;
@@ -147,9 +143,6 @@ void NMEAProcess::ResetGraphClearingInitRetainIcp()
   init_vel_buf.clear();
   init_nmea_buf.clear();
   init_lio_time_buf.clear();
-  {
-    pre_integration->repropagate(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
-  }
 
   gtsam::ISAM2Params parameters;
   parameters.relinearizeThreshold = 0.1;
@@ -237,7 +230,7 @@ void NMEAProcess::runISAM2opt(void) //
           {
           for (size_t i = 0; i < p_assign->factor_id_frame[0].size(); i++)
           {
-            // if (p_assign->factor_id_frame[0][i] != 0 && p_assign->factor_id_frame[0][i] != 1 || nolidar)
+            // if (p_assign->factor_id_frame[0][i] != 0 && p_assign->factor_id_frame[0][i] != 1)
             {
               delete_factor.push_back(p_assign->factor_id_frame[0][i]);
             }
@@ -254,7 +247,7 @@ void NMEAProcess::runISAM2opt(void) //
 
       if (delete_happen)
       {
-        p_assign->delete_variables(nolidar, frame_delete, frame_num, id_accumulate, delete_factor);
+        p_assign->delete_variables(frame_delete, frame_num, id_accumulate, delete_factor);
       }
       else
       {
@@ -286,12 +279,6 @@ void NMEAProcess::runISAM2opt(void) //
     p_assign->gtSAMgraph.resize(0);
     p_assign->initialEstimate.clear();
     return;
-  }
-
-  if (nolidar) // || invalid_lidar)
-  {
-    pre_integration->repropagate(p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(6),
-                                p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(9));
   }
 }
 
@@ -618,7 +605,7 @@ bool NMEAProcess::NMEALIAlign()
     icp_pairs_lio.push_back(get_lio_corrected(i));
     icp_pairs_nmea_local.push_back(R.transpose() * (get_nmea_pos(i) - t));
   }
-  // Prepare for Evaluate: nmea_meas_[0], pos_window, rot_window, vel_window for nolidar SetInit.
+  // Prepare for Evaluate: nmea_meas_[0], pos_window, rot_window, vel_window.
   nmea_meas_.resize(1);
   nmea_meas_[0] = init_nmea_buf.back();
   pos_window[wind_size] = init_pos_buf.back();
@@ -647,40 +634,14 @@ bool NMEAProcess::Evaluate(state_output &state)
   double time_current = rclcpp::Time(nmea_meas_[0]->header.stamp).seconds();
   double delta_t = time_current - last_nmea_time;
 
-  gtsam::Rot3 rel_rot; // = gtsam::Rot3(pre_integration->delta_q);
-  gtsam::Point3 rel_pos, pos, acc, omg;
-  gtsam::Vector3 rel_vel, vel, ba, bg; 
-  Eigen::Matrix3d rot = Eigen::Matrix3d::Identity();
-  if (!nolidar) // && !invalid_lidar)
-  {
-    // Eigen::Matrix3d last_rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(0)).matrix(); // state_const_.rot; // 
-    // // cout << "check time period" << pre_integration->sum_dt << ";" << time_current - last_gnss_time <<  endl;
-    // Eigen::Vector3d last_pos = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(0)).segment<3>(0); // state_.pos; // 
-    // Eigen::Vector3d last_vel = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(0)).segment<3>(3); // state_.vel; //
-    rot = state.rot; //.normalized().toRotationMatrix(); last_rot.transpose() *
-    pos = state.pos; // - last_pos; // last_rot.transpose() * (state.pos - last_pos - last_vel * delta_t - 0.5 * state.gravity * delta_t * delta_t); 
-    vel = state.vel; // - last_vel; // last_rot.transpose() * (state.vel - last_vel - state.gravity * delta_t); // (state.vel - last_vel);
-    ba = state.ba;
-    bg = state.bg;
-    acc = state.acc;
-    omg = state.omg;
-    // Eigen::Matrix3d rot1 = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num-1)).matrix().transpose();
-    // Eigen::Vector3d pos1 = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(frame_num-1)).segment<3>(0);
-    // Eigen::Vector3d vel1 = p_assign->isamCurrentEstimate.at<gtsam::Vector6>(A(frame_num-1)).segment<3>(3);
-    // rel_pos = rot1 * (state.pos - pos1 - vel1 * delta_t - 0.5 * state.gravity * delta_t * delta_t);
-    // rel_vel = rot1 * (state.vel - vel1 - state.gravity * delta_t);
-    // rel_rot = gtsam::Rot3(rot1 * state.rot);
-  }
-  else
-  {
-    ba = state.ba;
-    bg = state.bg;
-    rel_rot = gtsam::Rot3(pre_integration->delta_q);
-    rel_pos = pre_integration->delta_p;
-    rel_vel = pre_integration->delta_v; 
-  }
-  
-  if (!nolidar) // && invalid_lidar)
+  Eigen::Matrix3d rot = state.rot;
+  Eigen::Vector3d pos = state.pos;
+  Eigen::Vector3d vel = state.vel;
+  Eigen::Vector3d ba  = state.ba;
+  Eigen::Vector3d bg  = state.bg;
+  Eigen::Vector3d acc = state.acc;
+  Eigen::Vector3d omg = state.omg;
+
   {
     Eigen::Matrix<double, 6, 1> init_vel_bias_vector_imu;
     Eigen::Matrix<double, 12, 1> init_others_vector_imu;
@@ -693,20 +654,10 @@ bool NMEAProcess::Evaluate(state_output &state)
     p_assign->initialEstimate.insert(A(frame_num), gtsam::Vector6(init_vel_bias_vector_imu));
     p_assign->initialEstimate.insert(O(frame_num), gtsam::Vector12(init_others_vector_imu));
     p_assign->initialEstimate.insert(G(frame_num), gtsam::Vector3(state.gravity));
-    p_assign->initialEstimate.insert(R(frame_num), gtsam::Rot3(state.rot));  // .normalized().toRotationMatrix()
+    p_assign->initialEstimate.insert(R(frame_num), gtsam::Rot3(state.rot));
   }
-  else
-  {
-    Eigen::Matrix<double, 12, 1> init_vel_bias_vector;
-    init_vel_bias_vector.block<3,1>(0,0) = state.pos;
-    init_vel_bias_vector.block<3,1>(3,0) = state.vel;
-    init_vel_bias_vector.block<3,1>(6,0) = state.ba;
-    init_vel_bias_vector.block<3,1>(9,0) = state.bg;
-    p_assign->initialEstimate.insert(F(frame_num), gtsam::Vector12(init_vel_bias_vector));
-    p_assign->initialEstimate.insert(R(frame_num), gtsam::Rot3(state.rot)); // .normalized().toRotationMatrix()
-  }              
-  // rot_pos = state.rot; //.normalized().toRotationMatrix();
-  if (AddFactor(rel_rot, rel_pos, rel_vel, state.gravity, delta_t, time_current, ba, bg, pos, vel, acc, omg, rot))
+
+  if (AddFactor(state.gravity, delta_t, time_current, ba, bg, pos, vel, acc, omg, rot))
   {
     frame_num ++;
     runISAM2opt();
@@ -715,27 +666,12 @@ bool NMEAProcess::Evaluate(state_output &state)
   {
     return false;
   }
-  
+
   if (frame_num <= 0)
   {
     return false;
   }
 
-  if (nolidar)
-  {
-    if (!p_assign->isamCurrentEstimate.exists(R(frame_num-1)) ||
-        !p_assign->isamCurrentEstimate.exists(F(frame_num-1)))
-    {
-      return false;
-    }
-    state.rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num-1)).matrix();
-    state.pos = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(0);
-    state.vel = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(3);
-    state.ba = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(6);
-    state.bg = p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(frame_num-1)).segment<3>(9);
-    state.gravity = gravity_init;
-  }
-  else
   {
     if (!p_assign->isamCurrentEstimate.exists(R(frame_num-1)) ||
         !p_assign->isamCurrentEstimate.exists(A(frame_num-1)) ||
@@ -752,16 +688,16 @@ bool NMEAProcess::Evaluate(state_output &state)
   return true;
 }
 
-bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::Vector3 rel_vel, Eigen::Vector3d state_gravity, double delta_t, double time_current,
+bool NMEAProcess::AddFactor(Eigen::Vector3d state_gravity, double delta_t, double time_current,
                 Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot)
 {
+  (void)delta_t; (void)time_current; (void)ba; (void)bg;
   invalid_lidar = false;
   bool weight_lid_zero = false;
-  if (!nolidar)
   {
     invalid_lidar = nolidar_cur;
     double weight_lid = 1;
-    if (p_assign->process_feat_num < 10) 
+    if (p_assign->process_feat_num < 10)
     {
       weight_lid = 0;
       weight_lid_zero = true;
@@ -772,12 +708,9 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     }
     norm_vec_num = 0;
     p_assign->process_feat_num = 0;
-    double weight_check = (sqrt_lidar(0, 0) + sqrt_lidar(1, 1) + sqrt_lidar(2, 2) 
-                          + sqrt_lidar(6, 6) + sqrt_lidar(7, 7) + sqrt_lidar(8, 8)) / 6; // + sqrt_lidar(3, 3) + sqrt_lidar(4, 4) + sqrt_lidar(5, 5)
+    double weight_check = (sqrt_lidar(0, 0) + sqrt_lidar(1, 1) + sqrt_lidar(2, 2)
+                          + sqrt_lidar(6, 6) + sqrt_lidar(7, 7) + sqrt_lidar(8, 8)) / 6;
     sqrt_lidar *= weight_lid / weight_check;
-    // invalid_lidar = nolidar_cur;
-    // size_t num_norm = norm_vec_holder.size();
-    // if (num_norm > 2) // 10)
     for (size_t j = 0; j < 9; j++)
     {
       if (sqrt_lidar(j, j) < 0.50)
@@ -787,24 +720,21 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       }
     }
   }
-  if (nolidar_cur && !nolidar) nolidar_cur = false;
+  if (nolidar_cur) nolidar_cur = false;
 
   std::vector<size_t> factor_id_cur;
   M3D omg_skew;
   omg_skew << SKEW_SYM_MATRX(omg);
   Eigen::Vector3d hat_omg_T = omg_skew * Tex_imu_r;
-  if (!nolidar)
   {
-    bool no_weight = false;
     // Keep per-frame gravity state G(frame_num) anchored even when lidar branch is active.
     // Runtime logs showed underconstrained g199 during marginalization update.
     p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector3>(G(frame_num), gtsam::Vector3(state_gravity), p_assign->priorGravNoise));
     factor_id_cur.push_back(id_accumulate);
     id_accumulate += 1;
-    // when weight_lid_zero, skip NmeaLioGravRelFactor to avoid singular G block; constrain G by prior only
     if (!weight_lid_zero)
     {
-      p_assign->gtSAMgraph.add(ligo::NmeaLioGravRelFactor(P(0), R(frame_num), A(frame_num), O(frame_num), G(frame_num), gravity_init, state_gravity, pos, vel, rot, ba, bg, acc, omg, sqrt_lidar, p_assign->odomNoise)); //LioNoise)); // odomNoiseIMU));
+      p_assign->gtSAMgraph.add(ligo::NmeaLioGravRelFactor(P(0), R(frame_num), A(frame_num), O(frame_num), G(frame_num), gravity_init, state_gravity, pos, vel, rot, ba, bg, acc, omg, sqrt_lidar, p_assign->odomNoise));
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
     }
@@ -834,42 +764,13 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
     }
-    // p_assign->gtSAMgraph.add(ligo::NmeaLioFactor(R(frame_num-1), A(frame_num-1), R(frame_num), A(frame_num), rel_rot, rel_pos, rel_vel, state_gravity, delta_t, p_assign->relatNoise));
-    // factor_id_cur.push_back(id_accumulate);
-    // id_accumulate += 1;
-    // if (frame_num < 200)
-    // {
-    //   odo_weight1 = 2*sqrt_lidar(0, 0); // odo_weight4 = sqrt_lidar(3, 3);
-    //   odo_weight2 = 2*sqrt_lidar(1, 1); // odo_weight5 = sqrt_lidar(4, 4);
-    //   odo_weight3 = 2*sqrt_lidar(2, 2) / 3; // odo_weight6 = sqrt_lidar(5, 5);
-    //   // odo_weight4 = sqrt_lidar(3, 3) / 3;
-    //   // odo_weight5 = sqrt_lidar(4, 4) / 3;
-    //   // odo_weight6 = sqrt_lidar(5, 5) / 3;
-    // }
-    // else
-    // {
-    //   odo_weight1 = 3*sqrt_lidar(0, 0); // odo_weight4 = sqrt_lidar(3, 3);
-    //   odo_weight2 = 3*sqrt_lidar(1, 1); // odo_weight5 = sqrt_lidar(4, 4);
-    //   odo_weight3 = sqrt_lidar(2, 2); // odo_weight6 = sqrt_lidar(5, 5);
-    //   // odo_weight4 = sqrt_lidar(3, 3) / 2; // odo_weight6 = sqrt_lidar(5, 5);
-    //   // odo_weight5 = sqrt_lidar(4, 4) / 2; // odo_weight6 = sqrt_lidar(5, 5);
-    //   // odo_weight6 = sqrt_lidar(5, 5) / 2; // odo_weight6 = sqrt_lidar(5, 5);
-    // }
-  }
-  else
-  {
-    p_assign->gtSAMgraph.add(ligo::NmeaLioFactorNolidar(R(frame_num-1), F(frame_num-1), R(frame_num), F(frame_num), rel_rot, rel_pos, rel_vel, 
-                  state_gravity, delta_t, ba, bg, pre_integration, p_assign->odomNoiseIMU));
-    p_assign->factor_id_frame[frame_num-1-frame_delete].push_back(id_accumulate);
-    id_accumulate += 1;
   }
   // Stabilize rotation DOF: always add a weak prior on R(frame_num)
   // to avoid occasional underconstrained rotation states (e.g., r31).
-  if (!nolidar)
   {
     static gtsam::noiseModel::Base::shared_ptr weak_rot_prior = []() {
       gtsam::Vector v(3);
-      v << 1e4, 1e4, 1e4;  // weak constraint
+      v << 1e4, 1e4, 1e4;
       return gtsam::noiseModel::Diagonal::Variances(v);
     }();
     p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(
@@ -882,59 +783,52 @@ bool NMEAProcess::AddFactor(gtsam::Rot3 rel_rot, gtsam::Point3 rel_pos, gtsam::V
     if (!indoor_gicp_replaces_nmea)
     {
       const bool nmea_navsatfix_pos_only = (nmea_input_type == "navsatfix");
-      double values[17];
-      values[0] = Tex_imu_r[0]; values[1] = Tex_imu_r[1]; values[2] = Tex_imu_r[2]; values[3] = anc_local[0]; values[4] = anc_local[1]; values[5] = anc_local[2];
-      values[6] = nmea_meas_[0]->pose.pose.position.x; values[7] = nmea_meas_[0]->pose.pose.position.y; values[8] = nmea_meas_[0]->pose.pose.position.z;
-      values[9] = nmea_meas_[0]->twist.twist.linear.x; values[10] = nmea_meas_[0]->twist.twist.linear.y; values[11] = nmea_meas_[0]->twist.twist.linear.z;
-      values[12] = nmea_meas_[0]->pose.pose.orientation.w; values[13] = nmea_meas_[0]->pose.pose.orientation.x; values[14] = nmea_meas_[0]->pose.pose.orientation.y;
-      values[15] = nmea_meas_[0]->pose.pose.orientation.z;
-      values[16] = nmea_weight;
+      const Eigen::Vector3d pos_meas(
+          nmea_meas_[0]->pose.pose.position.x,
+          nmea_meas_[0]->pose.pose.position.y,
+          nmea_meas_[0]->pose.pose.position.z);
+      const Eigen::Vector3d vel_meas(
+          nmea_meas_[0]->twist.twist.linear.x,
+          nmea_meas_[0]->twist.twist.linear.y,
+          nmea_meas_[0]->twist.twist.linear.z);
+      const Eigen::Quaterniond q_meas(
+          nmea_meas_[0]->pose.pose.orientation.w,
+          nmea_meas_[0]->pose.pose.orientation.x,
+          nmea_meas_[0]->pose.pose.orientation.y,
+          nmea_meas_[0]->pose.pose.orientation.z);
+      const Eigen::Matrix3d rot_meas = q_meas.normalized().toRotationMatrix();
       RCLCPP_INFO(rclcpp::get_logger("ligo"), "[NMEA FACTOR INPUT]");
-      if (!nolidar)
+      const auto& nmea_noise = (frame_num < delete_thred) ? p_assign->robustnmeaNoise_init : p_assign->robustnmeaNoise;
+      p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar,
+                                                Tex_imu_r, anc_local, pos_meas, vel_meas, rot_meas, nmea_weight,
+                                                hat_omg_T, Rex_imu_r, nmea_noise, nmea_navsatfix_pos_only));
+      if (nmea_navsatfix_pos_only && invalid_lidar)
       {
-        if (frame_num < delete_thred)
+        p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
+        factor_id_cur.push_back(id_accumulate);
+        id_accumulate += 1;
+        if (frame_num > 0 && p_assign->isamCurrentEstimate.exists(R(frame_num - 1)))
         {
-          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise_init,
-                                    nmea_navsatfix_pos_only));
-        }
-        else
-        {
-          p_assign->gtSAMgraph.add(ligo::NMEAFactor(P(0), E(0), A(frame_num), R(frame_num), invalid_lidar, values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
-                                    nmea_navsatfix_pos_only));
-        }
-        if (nmea_navsatfix_pos_only && invalid_lidar)
-        {
-          p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(frame_num), gtsam::Rot3(rot), p_assign->priorrotNoise));
+          const gtsam::Rot3 prev_rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num - 1));
+          const gtsam::Rot3 cur_rot = gtsam::Rot3(rot);
+          const gtsam::Rot3 rel_meas = prev_rot.between(cur_rot);
+          p_assign->gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Rot3>(R(frame_num - 1), R(frame_num), rel_meas, p_assign->margrotNoise));
           factor_id_cur.push_back(id_accumulate);
           id_accumulate += 1;
-          if (frame_num > 0 && p_assign->isamCurrentEstimate.exists(R(frame_num - 1)))
+        }
+        else if (frame_num > 0)
+        {
+          static std::chrono::steady_clock::time_point s_last_between_skip_log{};
+          const auto now = std::chrono::steady_clock::now();
+          if (now - s_last_between_skip_log > std::chrono::seconds(2))
           {
-            const gtsam::Rot3 prev_rot = p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(frame_num - 1));
-            const gtsam::Rot3 cur_rot = gtsam::Rot3(rot);
-            const gtsam::Rot3 rel_meas = prev_rot.between(cur_rot);
-            p_assign->gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Rot3>(R(frame_num - 1), R(frame_num), rel_meas, p_assign->margrotNoise));
-            factor_id_cur.push_back(id_accumulate);
-            id_accumulate += 1;
-          }
-          else if (frame_num > 0)
-          {
-            static std::chrono::steady_clock::time_point s_last_between_skip_log{};
-            const auto now = std::chrono::steady_clock::now();
-            if (now - s_last_between_skip_log > std::chrono::seconds(2))
-            {
-              s_last_between_skip_log = now;
-              RCLCPP_WARN(
-                  rclcpp::get_logger("ligo"),
-                  "[nmea] BetweenFactor R(%zu)->R(%zu) skipped: previous rotation not in ISAM (e.g. after graph recovery).",
-                  static_cast<size_t>(frame_num - 1), static_cast<size_t>(frame_num));
-            }
+            s_last_between_skip_log = now;
+            RCLCPP_WARN(
+                rclcpp::get_logger("ligo"),
+                "[nmea] BetweenFactor R(%zu)->R(%zu) skipped: previous rotation not in ISAM (e.g. after graph recovery).",
+                static_cast<size_t>(frame_num - 1), static_cast<size_t>(frame_num));
           }
         }
-      }
-      else
-      {
-        p_assign->gtSAMgraph.add(ligo::NMEAFactorNolidar(R(frame_num), F(frame_num), values, hat_omg_T, Rex_imu_r, p_assign->robustnmeaNoise,
-                                                         nmea_navsatfix_pos_only));  // not work
       }
       factor_id_cur.push_back(id_accumulate);
       id_accumulate += 1;
@@ -972,7 +866,6 @@ void NMEAProcess::SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
   // R_enu = R_enu_local * R_local * Rex  =>  R_enu_local = R_enu * (R_local * Rex)^T
   Eigen::Matrix3d r_enu_local = indoor_rot_enu * (seed_state.rot * Rex_imu_r).transpose();
 
-  if (!nolidar)
   {
     Eigen::Matrix<double, 6, 1> init_vel_bias_vector;
     Eigen::Matrix<double, 12, 1> init_others_vector;
@@ -1000,19 +893,6 @@ void NMEAProcess::SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
     p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1, 2, 3, 4, 5});
     id_accumulate += 6;
   }
-  else
-  {
-    Eigen::Matrix<double, 12, 1> init_vel_bias_vector;
-    init_vel_bias_vector.block<3,1>(0,0) = anc_enu + seed_state.pos;
-    init_vel_bias_vector.block<3,1>(3,0) = seed_state.vel;
-    init_vel_bias_vector.block<6,1>(6,0) = Eigen::Matrix<double, 6, 1>::Zero();
-    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Rot3>(R(0), gtsam::Rot3(indoor_rot_enu), p_assign->priorrotNoise));
-    p_assign->gtSAMgraph.add(gtsam::PriorFactor<gtsam::Vector12>(F(0), gtsam::Vector12(init_vel_bias_vector), p_assign->priorposNoise));
-    p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1});
-    p_assign->initialEstimate.insert(R(0), gtsam::Rot3(indoor_rot_enu));
-    p_assign->initialEstimate.insert(F(0), gtsam::Vector12(init_vel_bias_vector));
-    id_accumulate += 2;
-  }
 
   nmea_ready = true;
   frame_num = 1;
@@ -1039,57 +919,36 @@ void NMEAProcess::SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
 
 void NMEAProcess::SetInit()
 {
-  if (!nolidar)
-  {
-    Eigen::Matrix3d R_enu_local_;
-    R_enu_local_.setIdentity(); // = Rot_nmea_init; // * Eigen::AngleAxisd(yaw_enu_local, Eigen::Vector3d::UnitZ()) 
-    // prior factor 
-    Eigen::Matrix<double, 6, 1> init_vel_bias_vector;
-    Eigen::Matrix<double, 12, 1> init_others_vector;
-    init_vel_bias_vector.block<3,1>(0,0) = Eigen::Vector3d::Zero(); // (pos_window - rot_window * Tex_imu_r); // Rot_nmea_init.transpose() * 
-    init_vel_bias_vector.block<3,1>(3,0) = Eigen::Vector3d::Zero(); // vel_window; // Rot_nmea_init.transpose() * 
-    init_others_vector.block<3,1>(0,0) = Eigen::Vector3d::Zero(); // vel_window; // Rot_nmea_init.transpose() * 
-    init_others_vector.block<3,1>(3,0) = Eigen::Vector3d::Zero(); // vel_window; // Rot_nmea_init.transpose() * 
-    init_others_vector.block<3,1>(6,0) = Eigen::Vector3d::Zero(); // vel_window; // Rot_nmea_init.transpose() * 
-    init_others_vector.block<3,1>(9,0) = Eigen::Vector3d::Zero(); // vel_window; // Rot_nmea_init.transpose() * 
-    // dt[0] = para_rcv_dt[wind_size*4]; dt[1] = para_rcv_dt[wind_size*4+1], dt[2] = para_rcv_dt[wind_size*4+2], dt[3] = para_rcv_dt[wind_size*4+3];
-    // ddt = para_rcv_ddt[wind_size];
-    p_assign->initialEstimate.insert(P(0), gtsam::Rot3(Rot_nmea_init)); // rot_window)); // Rot_nmea_init.transpose() * 
-    // p_assign->initialEstimate.insert(F(0), gtsam::Vector12(init_vel_bias_vector));
-    p_assign->initialEstimate.insert(A(0), gtsam::Vector6(init_vel_bias_vector));
-    p_assign->initialEstimate.insert(O(0), gtsam::Vector12(init_others_vector));
-    p_assign->initialEstimate.insert(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]));
-    p_assign->initialEstimate.insert(R(0), gtsam::Rot3(R_enu_local_));
-    p_assign->initialEstimate.insert(G(0), gtsam::Vector3(gravity_init));
+  Eigen::Matrix3d R_enu_local_;
+  R_enu_local_.setIdentity();
+  Eigen::Matrix<double, 6, 1> init_vel_bias_vector;
+  Eigen::Matrix<double, 12, 1> init_others_vector;
+  init_vel_bias_vector.block<3,1>(0,0) = Eigen::Vector3d::Zero();
+  init_vel_bias_vector.block<3,1>(3,0) = Eigen::Vector3d::Zero();
+  init_others_vector.block<3,1>(0,0) = Eigen::Vector3d::Zero();
+  init_others_vector.block<3,1>(3,0) = Eigen::Vector3d::Zero();
+  init_others_vector.block<3,1>(6,0) = Eigen::Vector3d::Zero();
+  init_others_vector.block<3,1>(9,0) = Eigen::Vector3d::Zero();
 
-    gtsam::PriorFactor<gtsam::Rot3> init_rot_ext(P(0), gtsam::Rot3(gtsam::Rot3(Rot_nmea_init)), p_assign->priorextrotNoise);
-    gtsam::PriorFactor<gtsam::Vector3> init_pos_ext(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]), p_assign->priorextposNoise);
-    gtsam::PriorFactor<gtsam::Rot3> init_rot_(R(0), gtsam::Rot3(R_enu_local_), p_assign->priorrotNoise); // Rot_nmea_init.transpose() * 
-    gtsam::PriorFactor<gtsam::Vector6> init_vel_(A(0), gtsam::Vector6(init_vel_bias_vector), p_assign->priorNoise); // priorposNoise);
-    gtsam::PriorFactor<gtsam::Vector12> init_bias_(O(0), gtsam::Vector12(init_others_vector), p_assign->priorBiasNoise); // priorposNoise);
-    gtsam::PriorFactor<gtsam::Vector3> init_grav_(G(0), gtsam::Vector3(gravity_init), p_assign->priorGravNoise); // priorposNoise);
-    p_assign->gtSAMgraph.add(init_rot_ext);
-    p_assign->gtSAMgraph.add(init_pos_ext);
-    p_assign->gtSAMgraph.add(init_rot_);
-    p_assign->gtSAMgraph.add(init_vel_);
-    p_assign->gtSAMgraph.add(init_bias_);
-    p_assign->gtSAMgraph.add(init_grav_);
-    p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1, 2, 3, 4, 5});
-    id_accumulate += 6;
-  }
-  else
-  {
-    gtsam::PriorFactor<gtsam::Rot3> init_rot(R(0), gtsam::Rot3(rot_window[wind_size]), p_assign->priorrotNoise); //  * R_enu_local_
-    Eigen::Matrix<double, 12, 1> init_vel_bias_vector;
-    init_vel_bias_vector.block<3,1>(0,0) = anc_enu + pos_window[wind_size] - rot_window[wind_size] * Tex_imu_r; //  * R_enu_local_
-    init_vel_bias_vector.block<3,1>(3,0) = vel_window[wind_size]; // R_enu_local_ * 
-    init_vel_bias_vector.block<6,1>(6,0) = Eigen::Matrix<double, 6, 1>::Zero();
-    gtsam::PriorFactor<gtsam::Vector12> init_vel_bias(F(0), gtsam::Vector12(init_vel_bias_vector), p_assign->priorposNoise);
-    p_assign->gtSAMgraph.add(init_rot);
-    p_assign->gtSAMgraph.add(init_vel_bias);
-    p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1}); //{i * 4, i * 4 + 1, i * 4  + 2, i * 4 + 3});
-    p_assign->initialEstimate.insert(R(0), gtsam::Rot3(rot_window[wind_size])); // R_enu_local_ * 
-    p_assign->initialEstimate.insert(F(0), gtsam::Vector12(init_vel_bias_vector));
-    id_accumulate += 2;
-  }
+  p_assign->initialEstimate.insert(P(0), gtsam::Rot3(Rot_nmea_init));
+  p_assign->initialEstimate.insert(A(0), gtsam::Vector6(init_vel_bias_vector));
+  p_assign->initialEstimate.insert(O(0), gtsam::Vector12(init_others_vector));
+  p_assign->initialEstimate.insert(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]));
+  p_assign->initialEstimate.insert(R(0), gtsam::Rot3(R_enu_local_));
+  p_assign->initialEstimate.insert(G(0), gtsam::Vector3(gravity_init));
+
+  gtsam::PriorFactor<gtsam::Rot3> init_rot_ext(P(0), gtsam::Rot3(gtsam::Rot3(Rot_nmea_init)), p_assign->priorextrotNoise);
+  gtsam::PriorFactor<gtsam::Vector3> init_pos_ext(E(0), gtsam::Vector3(anc_enu[0], anc_enu[1], anc_enu[2]), p_assign->priorextposNoise);
+  gtsam::PriorFactor<gtsam::Rot3> init_rot_(R(0), gtsam::Rot3(R_enu_local_), p_assign->priorrotNoise);
+  gtsam::PriorFactor<gtsam::Vector6> init_vel_(A(0), gtsam::Vector6(init_vel_bias_vector), p_assign->priorNoise);
+  gtsam::PriorFactor<gtsam::Vector12> init_bias_(O(0), gtsam::Vector12(init_others_vector), p_assign->priorBiasNoise);
+  gtsam::PriorFactor<gtsam::Vector3> init_grav_(G(0), gtsam::Vector3(gravity_init), p_assign->priorGravNoise);
+  p_assign->gtSAMgraph.add(init_rot_ext);
+  p_assign->gtSAMgraph.add(init_pos_ext);
+  p_assign->gtSAMgraph.add(init_rot_);
+  p_assign->gtSAMgraph.add(init_vel_);
+  p_assign->gtSAMgraph.add(init_bias_);
+  p_assign->gtSAMgraph.add(init_grav_);
+  p_assign->factor_id_frame.push_back(std::vector<size_t>{0, 1, 2, 3, 4, 5});
+  id_accumulate += 6;
 }

@@ -64,7 +64,7 @@ class NMEAProcess
                                double init_time_sec);
   bool NMEALIAlign();
   void SetInit();
-  bool AddFactor(gtsam::Rot3 rel_rot_, gtsam::Point3 rel_pos_, gtsam::Vector3 rel_v_, Eigen::Vector3d state_gravity, double delta_t, double time_current,
+  bool AddFactor(Eigen::Vector3d state_gravity, double delta_t, double time_current,
                 Eigen::Vector3d ba, Eigen::Vector3d bg, Eigen::Vector3d pos, Eigen::Vector3d vel, Eigen::Vector3d acc, Eigen::Vector3d omg, Eigen::Matrix3d rot);
   // std::vector<ObsPtr> gnss_meas_buf[WINDOW_SIZE+1]; //
   std::vector<nav_msgs::msg::Odometry::SharedPtr> nmea_meas_; //[WINDOW_SIZE+1]; //
@@ -102,7 +102,6 @@ class NMEAProcess
   int delete_thred = 0;
   int wind_size = WINDOW_SIZE;
   int norm_vec_num = 0;
-  bool nolidar = false;
   bool nolidar_cur = false;
   std::vector<Eigen::Vector3d> norm_vec_holder;
   // double para_yaw_enu_local[1];
@@ -167,7 +166,6 @@ class NMEAProcess
   double odo_weight4 = 2.0;
   double odo_weight5 = 2.0;
   double odo_weight6 = 2.0;
-  IntegrationBase* pre_integration = new IntegrationBase{Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero()};
   NMEAAssignment* p_assign = new NMEAAssignment();
   // private:
     // int freq_idx = 0;

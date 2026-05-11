@@ -59,19 +59,15 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/ISAM2.h>
 
-#include <nmea_factor/nmea_lio_factor_nolidar.hpp>
 #include <nmea_factor/nmea_lio_gravity_rel_factor.hpp>
 #include <nmea_factor/nmea_factor.hpp>
-#include <nmea_factor/nmea_factor_nolidar.hpp>
 
-using gtsam::symbol_shorthand::R; // Pose3 ()
-using gtsam::symbol_shorthand::P; // Pose3 (x,y,z,r,p,y) ext_R
-// using gtsam::symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
-using gtsam::symbol_shorthand::E; // ext_p
-using gtsam::symbol_shorthand::F; // pos, vel and imu bias (vel ba bg)
-using gtsam::symbol_shorthand::A; // pos, vel
-using gtsam::symbol_shorthand::O; // pos, vel
-using gtsam::symbol_shorthand::G; // pos, vel
+using gtsam::symbol_shorthand::R; // body/local rotation Rot3
+using gtsam::symbol_shorthand::P; // extrinsic rotation Rot3 (local->ENU)
+using gtsam::symbol_shorthand::E; // extrinsic translation Vector3 (ENU anchor)
+using gtsam::symbol_shorthand::A; // body pos+vel Vector6
+using gtsam::symbol_shorthand::O; // omg, acc, bg, ba Vector12
+using gtsam::symbol_shorthand::G; // gravity Vector3
 // using gtsam::symbol_shorthand::G; // ext_R
 // using gtsam::symbol_shorthand::Y; // local enu (yaw)
 // using gtsam::symbol_shorthand::A; // anchor point (anc) total = 18 dimensions
@@ -131,5 +127,5 @@ class NMEAAssignment
         int change_ext = 1;
         std::deque<std::vector<size_t>> factor_id_frame; // 
 
-        void delete_variables(bool nolidar, size_t frame_delete, int frame_num, size_t &id_accumulate, gtsam::FactorIndices delete_factor);
+        void delete_variables(size_t frame_delete, int frame_num, size_t &id_accumulate, gtsam::FactorIndices delete_factor);
 };

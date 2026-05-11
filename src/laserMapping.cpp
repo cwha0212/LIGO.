@@ -1715,8 +1715,6 @@ int main(int argc, char** argv)
         p_nmea->Tex_imu_r << VEC_FROM_ARRAY(extrinT_gnss);
         p_nmea->Rex_imu_r << MAT_FROM_ARRAY(extrinR_gnss);
         p_nmea->nmea_ready = false;
-        p_nmea->nolidar = nolidar;
-        p_nmea->pre_integration->setnoise();
     }
     // Load grid registry / reference PCD whenever paths are set (also mapping_mode: indoor_flag may be false).
     if (!indoor_grid_map_dir.empty() || !indoor_map_pcd_path.empty())
@@ -2131,7 +2129,7 @@ int main(int argc, char** argv)
                     // kf_output.x_.acc << VEC_FROM_ARRAY(gravity);
                     // kf_output.x_.acc *= -1; 
 
-                    if (!nolidar && !imu_deque.empty())
+                    if (!imu_deque.empty())
                     {
                         while (Measures.lidar_beg_time > rclcpp::Time(imu_next.header.stamp).seconds()) // if it is needed for the new map?
                         {
@@ -2174,14 +2172,9 @@ int main(int argc, char** argv)
                 feats_down_body = Measures.lidar;
                 sort(feats_down_body->points.begin(), feats_down_body->points.end(), time_list); 
             }
-            if (!nolidar)
             {
                 time_seq = time_compressing<int>(feats_down_body);
                 feats_down_size = feats_down_body->points.size();
-            }
-            else
-            {
-                time_seq.clear();
             }
          
             if (!p_imu->after_imu_init_)
@@ -2208,7 +2201,7 @@ int main(int argc, char** argv)
                 goto after_sync_packages;}
             }
             /*** initialize the map ***/
-            if(!init_map && !nolidar && !lose_lid)
+            if(!init_map && !lose_lid)
             {
                 feats_down_world->resize(feats_undistort->size());
                 for(int i = 0; i < feats_undistort->size(); i++)
@@ -2772,11 +2765,11 @@ int main(int argc, char** argv)
                         imu_last = imu_next;
                         imu_next = *(imu_deque.front());
 
-                    while (rclcpp::Time(imu_next.header.stamp).seconds() > time_current && ((rclcpp::Time(imu_next.header.stamp).seconds() < imu_first_time + lidar_time_inte && nolidar) || (rclcpp::Time(imu_next.header.stamp).seconds() < Measures.lidar_beg_time + lidar_time_inte && !nolidar)))
+                    while (rclcpp::Time(imu_next.header.stamp).seconds() > time_current && rclcpp::Time(imu_next.header.stamp).seconds() < Measures.lidar_beg_time + lidar_time_inte)
                     { // >= ?
                         if (is_first_frame)
                         {
-                            if (!nolidar && NMEA_ENABLE)
+                            if (NMEA_ENABLE)
                             {p_nmea->p_assign->process_feat_num = 0;
                             p_nmea->norm_vec_num = 0;}
 
@@ -2798,45 +2791,23 @@ int main(int argc, char** argv)
                             }
                             else
                             {
-                                if (nolidar)
+                                while (rclcpp::Time(imu_next.header.stamp).seconds() < Measures.lidar_beg_time + lidar_time_inte)
                                 {
-                                    while (rclcpp::Time(imu_next.header.stamp).seconds() < imu_first_time + lidar_time_inte)
-                                    {
-                                        // meas.imu.emplace_back(imu_deque.front()); should add to initialization
-                                        imu_deque.pop_front();
-                                        if(imu_deque.empty()) break;
-                                        imu_last = imu_next;
-                                        imu_next = *(imu_deque.front()); // could be used to initialize
-                                    }
-                                    // if (imu_deque.empty()) break;
-                                }
-                                else
-                                {
-                                    while (rclcpp::Time(imu_next.header.stamp).seconds() < Measures.lidar_beg_time + lidar_time_inte)
-                                    {
-                                        // meas.imu.emplace_back(imu_deque.front()); should add to initialization
-                                        imu_deque.pop_front();
-                                        if(imu_deque.empty()) break;
-                                        imu_last = imu_next;
-                                        imu_next = *(imu_deque.front());
-                                    }
+                                    imu_deque.pop_front();
+                                    if(imu_deque.empty()) break;
+                                    imu_last = imu_next;
+                                    imu_next = *(imu_deque.front());
                                 }
                                 break;
                             }
                             angvel_avr<<imu_last.angular_velocity.x, imu_last.angular_velocity.y, imu_last.angular_velocity.z;
-                            if (nolidar) kf_output.x_.omg = angvel_avr;
-                                            
+
                             acc_avr   <<imu_last.linear_acceleration.x, imu_last.linear_acceleration.y, imu_last.linear_acceleration.z;
                             time_current = rclcpp::Time(imu_next.header.stamp).seconds();
 
                             time_update_last = time_current;
                             time_predict_last_const = time_current;
                             acc_avr_norm = acc_avr * G_m_s2 / acc_norm;
-                            if (NMEA_ENABLE)
-                            {
-                            p_nmea->pre_integration->repropagate(kf_output.x_.ba, kf_output.x_.bg);
-                            p_nmea->pre_integration->setacc0gyr0(acc_avr_norm, angvel_avr); 
-                            }
                             {
                                 is_first_frame = false;
                             }
@@ -2879,38 +2850,16 @@ int main(int argc, char** argv)
                                 kf_output.predict(dt, Q_output, input_in, true, false);
                                 time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
-                                if (p_nmea->nmea_ready)
-                                {
-                                    if (nolidar)
-                                    {
-                                        Eigen::Matrix3d R_enu_local;
-                                        R_enu_local = p_nmea->Rot_nmea_init; 
-                                        kf_output.x_.pos = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(0);
-                                        kf_output.x_.rot = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Rot3>(R(p_nmea->frame_num-1)).matrix();
-                                        kf_output.x_.vel = p_nmea->p_assign->isamCurrentEstimate.at<gtsam::Vector12>(F(p_nmea->frame_num-1)).segment<3>(3);
-                                        kf_output.x_.ba = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.bg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.omg = Eigen::Vector3d::Zero(); // R_ecef_enu * state.vel_end;
-                                        kf_output.x_.gravity = R_enu_local * kf_output.x_.gravity; // * R_enu_local_ 
-                                        kf_output.x_.acc = kf_output.x_.rot.transpose() * (-kf_output.x_.gravity); // R_ecef_enu * state.vel_end;.conjugate().normalized()
-                                        
-                                        kf_output.P_ = MD(24,24)::Identity() * INIT_COV;
-                                    }
-                                }
                                 nmeaClearCycleIfRealignComplete();
                             }
                             else
                             {
                                 if (dt_cov > 0.0)
                                 {
-                                    // kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                     time_update_last = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
                                 }
-                                // kf_output.predict(dt, Q_output, input_in, true, false);
-                                p_nmea->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); //acc_avr_norm, angvel_avr); 
                                 time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
-                                if (!nolidar)
                                 {
                                     p_nmea->sqrt_lidar = Eigen::LLT<Eigen::Matrix<double, 24, 24>>(kf_output.P_.inverse()).matrixL().transpose();
                                 }
@@ -3008,11 +2957,7 @@ int main(int argc, char** argv)
                                 if (update_nmea)
                                 {
                                     if (p_nmea->icp_tf_ready) { p_nmea->sum_nmea_lio_err_sq_xy += err_sq_xy_pre3; p_nmea->n_nmea_fusion_count++; }
-                                    if (!nolidar)
-                                    {
-                                        kf_output.update_iterated_dyn_share_NMEA();
-                                        // reset_cov_output(kf_output.P_);
-                                    }
+                                    kf_output.update_iterated_dyn_share_NMEA();
                                     if (!runtime_pos_log) cout_state_to_file_nmea();
                                     if (!mapping_mode && (indoor_flag || indoor_flag_dynamic) && indoor_pose_valid)
                                         ligo::indoor::addIndoorFactorToGraph(p_nmea->frame_num - 1);
@@ -3041,14 +2986,11 @@ int main(int argc, char** argv)
                                 // kf_output.predict(dt_cov, Q_output, input_in, false, true);
                                 time_update_last = time_current;
                             }
-                            // kf_output.predict(dt, Q_output, input_in, true, false);
-                            if (NMEA_ENABLE)   p_nmea->pre_integration->push_back(dt, acc_avr_norm, angvel_avr); // acc_avr_norm, angvel_avr); // 
                         }
 
                         time_predict_last_const = time_current;
 
                         angvel_avr<<imu_next.angular_velocity.x, imu_next.angular_velocity.y, imu_next.angular_velocity.z;
-                        if (nolidar) kf_output.x_.omg = angvel_avr;
                         acc_avr   <<imu_next.linear_acceleration.x, imu_next.linear_acceleration.y, imu_next.linear_acceleration.z; 
                         acc_avr_norm = acc_avr * G_m_s2 / acc_norm;
                         kf_output.update_iterated_dyn_share_IMU();

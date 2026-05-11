@@ -68,9 +68,7 @@
 
       # gnss_extrinsic_R: [ 0.992546, 0.0, -0.121869,
       #               0.0, 1.0, 0.0,
-      #               0.121869, 0.0, 0.992546 ]                    
-  
-      nolidar: false
+      #               0.121869, 0.0, 0.992546 ]
 
     ligo:
       # Marker /ligo/nmea_graph_anchor_marker: GTSAM E(0) (optimized) or prior anc_enu; frame_id map; RViz Fixed Frame map
