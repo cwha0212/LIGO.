@@ -13,13 +13,14 @@ topic = resolve_topic("control_mode")
 # payload = {
 #     "command": "start",
 #     "mapping_mode": False,
-#     # }
+#     "map_name": "site_a",
+# }
 
 # payload = {
 #     "command": "start",
 #     "mapping_mode": True,
 #     "map_name": "site_a",
-#     "sub_map_name": "floor_2",
+#     "sub_map_name": "floor_1",
 # }
 
 # payload = {

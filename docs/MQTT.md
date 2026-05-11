@@ -22,6 +22,8 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 원격 `stop` 명령 처리는 **별도 워커 스레드**에서 진행한다. mapping 의 PCD/그리드 저장이 수 분~수십 분 걸려도 MQTT 콜백 스레드가 막히지 않으므로 keepalive 가 끊기지 않고, 매핑이 끝나면 워커가 `event="stop"` → (성공 시) `event="map_saved"` 순으로 발행한다.
 
+상태 메시지는 **재연결 시 손실 방지용 링 버퍼**(최대 200개)에 저장한다. MQTT 연결이 끊긴 동안에 `_publish_status` 가 호출되면(예: 매핑 저장 중 브로커/프록시 측 단절) 큐에 넣어 두고, 재연결 후 `_on_connect` 에서 순서대로 flush 한다. 따라서 long mapping → 끊김 → 재연결 시나리오에서도 `event="stop"`·`event="map_saved"` 가 viewer 에 도달한다.
+
 설치 후 경로: `share/ligo/config/mqtt_topics.yaml` (`ament_index`로 탐색).
 
 ### `mqtt.topics` 템플릿

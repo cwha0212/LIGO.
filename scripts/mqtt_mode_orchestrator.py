@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import collections
 import json
 import os
 import signal
@@ -113,6 +114,9 @@ class ModeOrchestrator:
         # stop 진행 중에는 main loop 의 _poll_process_exit 가 중복 처리하지 않도록 함.
         self._stop_in_progress: bool = False
         self._lock = threading.Lock()
+        # 연결 단절 동안 잃지 않도록 status 메시지를 보관하는 링 버퍼. 재연결되면 flush.
+        self._pending_status: collections.deque = collections.deque(maxlen=200)
+        self._pending_lock = threading.Lock()
         self._running = True
         self._mqtt_connected = False
         self._mqtt_connect_requested = False
@@ -202,8 +206,6 @@ class ModeOrchestrator:
         sub_map_name: Optional[str] = None,
         extra: Optional[dict] = None,
     ) -> None:
-        if not self._mqtt_connected:
-            return
         payload = {
             "timestamp_unix": time.time(),
             "event": event,
@@ -216,29 +218,42 @@ class ModeOrchestrator:
             payload["sub_map_name"] = sub_map_name
         if extra:
             payload.update(extra)
-        try:
-            info = self._mqtt.publish(
-                self.mqtt_status_topic,
-                json.dumps(payload, ensure_ascii=False),
-                qos=0,
-                retain=False,
-            )
-            if int(getattr(info, "rc", mqtt.MQTT_ERR_UNKNOWN)) != mqtt.MQTT_ERR_SUCCESS:
-                self._mqtt_connected = False
-                self._mqtt_connect_requested = False
-                try:
-                    self._mqtt.disconnect()
-                except Exception:
-                    pass
-                self._schedule_next_reconnect()
-        except Exception:
-            self._mqtt_connected = False
-            self._mqtt_connect_requested = False
+        payload_str = json.dumps(payload, ensure_ascii=False)
+        # 연결 상태와 관계없이 큐에 넣어두고, 연결돼 있으면 즉시 flush.
+        # 끊긴 사이에 발생한 stop/map_saved/sync 같은 결과 메시지를 잃지 않도록 한다.
+        with self._pending_lock:
+            self._pending_status.append(payload_str)
+            if self._mqtt_connected:
+                self._flush_pending_status_locked()
+
+    def _flush_pending_status_locked(self) -> None:
+        """_pending_lock 보유 상태에서 호출. publish 실패 시 큐는 유지하고 재연결 예약."""
+        while self._pending_status:
+            payload_str = self._pending_status[0]
             try:
-                self._mqtt.disconnect()
+                info = self._mqtt.publish(
+                    self.mqtt_status_topic,
+                    payload_str,
+                    qos=0,
+                    retain=False,
+                )
+                rc = int(getattr(info, "rc", mqtt.MQTT_ERR_UNKNOWN))
             except Exception:
-                pass
-            self._schedule_next_reconnect()
+                self._mark_mqtt_broken()
+                return
+            if rc != int(mqtt.MQTT_ERR_SUCCESS):
+                self._mark_mqtt_broken()
+                return
+            self._pending_status.popleft()
+
+    def _mark_mqtt_broken(self) -> None:
+        self._mqtt_connected = False
+        self._mqtt_connect_requested = False
+        try:
+            self._mqtt.disconnect()
+        except Exception:
+            pass
+        self._schedule_next_reconnect()
 
     def _connect_mqtt(self) -> None:
         now = time.time()
@@ -278,6 +293,12 @@ class ModeOrchestrator:
             print(f"[ERROR] MQTT subscribe 실패: topic={self.mqtt_control_topic}, rc={sub_rc}")
             return
         print(f"[INFO] MQTT 구독 완료: {self.mqtt_control_topic}")
+        # 재연결이라면 끊긴 동안 쌓인 상태 메시지를 먼저 flush. 그 뒤 ready 발행.
+        with self._pending_lock:
+            pending_count = len(self._pending_status)
+            self._flush_pending_status_locked()
+        if pending_count > 0:
+            print(f"[INFO] 끊김 동안 쌓인 상태 메시지 {pending_count}건 flush 시도")
         self._publish_status(event="ready", status="ok", message="모드 제어 대기 중입니다.")
 
     def _on_disconnect(self, client, userdata, *args) -> None:
