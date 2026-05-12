@@ -175,7 +175,9 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 | `ended` | 하위 launch 프로세스 종료 (`exit_code`) |
 | `control` | 잘못된 제어 JSON (`status=error`) |
 | `sync` | 동기화 시작 (`status=ok`, message만) / 완료 (`status=ok`, `extra.elapsed_sec`) / 실패 (`status=error`, `extra.reason`, `extra.elapsed_sec`) |
-| `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 공유 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`) |
+| `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 공유 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`, 원격 `stop` 경유 시 `extra.save_elapsed_sec`) |
+
+매핑 `stop` 의 `extra.save_elapsed_sec` 은 오케스트레이터가 SIGINT 를 보낸 시점부터 `ros2 launch` 종료까지의 초이며, 사실상 `[pcd] final map save (shutdown) took ... s` 와 거의 일치한다(SIGINT 전파·rclcpp shutdown 오버헤드 포함). `_poll_process_exit` 경로(원격 stop 없이 launch 가 스스로 끝났을 때)에서는 `save_elapsed_sec` 이 포함되지 않는다.
 
 `map_saved`는 기대 파일 4종 존재 여부를 검사한다: `<sub>.pcd`, `<sub>_ecef.pcd`, `<sub>_grid2d.pgm`, `<sub>_grid2d.yaml` (경로: `sync.shared_map_root/<map_name>/<sub_map_name>/`). NMEA/ENU 저장 조건에 따라 일부가 없을 수 있으면 `status=warn` 및 `missing` 배열로 알린다.
 
@@ -216,7 +218,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 #### 3) `stop` 명령 처리 후 매핑 정상 종료 — `event="stop"`
 
-`exit_code: 0` 이면 PCD/그리드 저장까지 완료되고 launch 가 정상 종료된 상태.
+`exit_code: 0` 이면 PCD/그리드 저장까지 완료되고 launch 가 정상 종료된 상태. `save_elapsed_sec` 은 SIGINT 발사부터 launch 종료까지의 초.
 
 ```json
 {
@@ -228,7 +230,8 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "map_name": "site_a",
   "sub_map_name": "floor_2",
   "exit_code": 0,
-  "reason": "remote_stop_message"
+  "reason": "remote_stop_message",
+  "save_elapsed_sec": 245.812
 }
 ```
 
@@ -241,7 +244,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "timestamp_unix": 1778477750.100,
   "event": "map_saved",
   "status": "ok",
-  "message": "맵·서브맵 산출물이 모두 저장되었습니다.",
+  "message": "맵 저장이 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_2",
@@ -252,7 +255,8 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
     {"name": "floor_2_grid2d.pgm", "size": 130847},
     {"name": "floor_2_grid2d.yaml", "size": 964}
   ],
-  "missing": []
+  "missing": [],
+  "save_elapsed_sec": 245.812
 }
 ```
 
@@ -269,7 +273,8 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "sub_map_name": "floor_2",
   "save_root": "/mnt/rms_maps/site_a/floor_2",
   "files": [{"name": "floor_2.pcd", "size": 5516827}],
-  "missing": ["floor_2_ecef.pcd", "floor_2_grid2d.pgm", "floor_2_grid2d.yaml"]
+  "missing": ["floor_2_ecef.pcd", "floor_2_grid2d.pgm", "floor_2_grid2d.yaml"],
+  "save_elapsed_sec": 245.812
 }
 ```
 

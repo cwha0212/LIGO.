@@ -577,6 +577,8 @@ class ModeOrchestrator:
         stop_timeout = (
             self.stop_timeout_sec_mapping if mode == "mapping" else self.stop_timeout_sec_odometry
         )
+        # SIGINT 발사 시점부터 프로세스 종료까지 — 매핑에서는 곧 PCD/그리드 저장 소요 시간.
+        t_signal_sent = time.time()
         try:
             self._signal_proc_group(proc, signal.SIGINT)
             proc.wait(timeout=stop_timeout)
@@ -591,6 +593,7 @@ class ModeOrchestrator:
                 proc.wait(timeout=5.0)
             exit_code = proc.returncode
             stop_msg = "모드 종료가 지연되어 강제 종료했습니다."
+        save_elapsed_sec = round(time.time() - t_signal_sent, 3)
 
         with self._lock:
             self._proc = None
@@ -601,8 +604,10 @@ class ModeOrchestrator:
             self.state = ModeState()
 
         stop_extra: dict = {"exit_code": exit_code, "reason": reason}
-        if mode == "mapping" and sub_map_name:
-            stop_extra["sub_map_name"] = sub_map_name
+        if mode == "mapping":
+            stop_extra["save_elapsed_sec"] = save_elapsed_sec
+            if sub_map_name:
+                stop_extra["sub_map_name"] = sub_map_name
         if mode == "odometry" and indoor_names:
             stop_extra["indoor_map_names"] = indoor_names
         self._publish_status(
@@ -616,12 +621,13 @@ class ModeOrchestrator:
         )
         print(
             f"[INFO] stopped: mode={mode}, map_name={map_name}, exit_code={exit_code}, "
-            f"reason={reason}, stop_timeout_sec={stop_timeout}"
+            f"reason={reason}, stop_timeout_sec={stop_timeout}, "
+            f"save_elapsed_sec={save_elapsed_sec if mode == 'mapping' else 'n/a'}"
         )
 
         # 매핑이 정상 종료되었으면 저장 결과(map_saved)도 발행한다.
         if mode == "mapping" and exit_code == 0 and map_name and sub_map_name:
-            self._publish_map_saved(map_name, sub_map_name)
+            self._publish_map_saved(map_name, sub_map_name, save_elapsed_sec=save_elapsed_sec)
 
         with self._lock:
             self._stop_in_progress = False
@@ -711,7 +717,12 @@ class ModeOrchestrator:
         status = "ok" if not missing else "warn"
         return status, files_out, missing
 
-    def _publish_map_saved(self, map_name: str, sub_map_name: str) -> None:
+    def _publish_map_saved(
+        self,
+        map_name: str,
+        sub_map_name: str,
+        save_elapsed_sec: Optional[float] = None,
+    ) -> None:
         root = shared_map_root(self._cfg)
         save_dir = root / map_name / sub_map_name
         st, files_out, missing = self._map_artifact_status(save_dir, sub_map_name)
@@ -720,6 +731,9 @@ class ModeOrchestrator:
             if st == "ok"
             else f"일부 산출물이 없습니다: {', '.join(missing)}"
         )
+        extra: dict = {"save_root": str(save_dir), "files": files_out, "missing": missing}
+        if save_elapsed_sec is not None:
+            extra["save_elapsed_sec"] = save_elapsed_sec
         self._publish_status(
             event="map_saved",
             status=st,
@@ -727,7 +741,7 @@ class ModeOrchestrator:
             mode="mapping",
             map_name=map_name,
             sub_map_name=sub_map_name,
-            extra={"save_root": str(save_dir), "files": files_out, "missing": missing},
+            extra=extra,
         )
 
     _EVENT_FOR_KIND = {
