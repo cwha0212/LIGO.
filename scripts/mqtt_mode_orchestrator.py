@@ -415,12 +415,42 @@ class ModeOrchestrator:
         )
 
     @staticmethod
-    def _summarize_rsync_failure(exit_code: int, stderr: str) -> str:
-        tail = (stderr or "").strip().splitlines()
-        last = tail[-1] if tail else ""
-        if last:
-            return f"rsync exit={exit_code}: {last[:200]}"
-        return f"rsync exit={exit_code}"
+    def _summarize_rsync_failure(
+        exit_code: int,
+        stderr: str,
+        stdout: str = "",
+        *,
+        max_chars: int = 900,
+    ) -> str:
+        """rsync 실패 시 MQTT reason 용 요약. exit=23 은 보통 NFS/CIFS 에서 owner/group 보존 실패."""
+        err_lines = (stderr or "").strip().splitlines()
+        out_lines = (stdout or "").strip().splitlines()
+        lines = err_lines + out_lines
+        lines = [ln.strip() for ln in lines if ln.strip()]
+        if not lines:
+            return f"rsync exit={exit_code}"
+        key = (
+            "permission denied",
+            "operation not permitted",
+            "read-only",
+            "no space",
+            "failed:",
+            "error:",
+            "rsync:",
+        )
+        important = [ln for ln in lines if any(k in ln.lower() for k in key)]
+        tail = lines[-10:]
+        merged: list[str] = []
+        for ln in important[:6]:
+            if ln not in merged:
+                merged.append(ln)
+        for ln in tail:
+            if ln not in merged:
+                merged.append(ln)
+        text = " | ".join(merged)
+        if len(text) > max_chars:
+            text = "…" + text[-(max_chars - 1) :]
+        return f"rsync exit={exit_code}: {text}"
 
     def _run_sync_in_thread(self, map_name: str, src: Path, dst: Path, opts: list[str]) -> None:
         t0 = time.time()
@@ -432,7 +462,11 @@ class ModeOrchestrator:
             if completed.returncode == 0:
                 ok = True
             else:
-                reason = self._summarize_rsync_failure(completed.returncode, completed.stderr or "")
+                reason = self._summarize_rsync_failure(
+                    completed.returncode,
+                    completed.stderr or "",
+                    completed.stdout or "",
+                )
         except FileNotFoundError:
             reason = "rsync 실행 파일을 찾을 수 없습니다."
         except subprocess.TimeoutExpired:
@@ -783,7 +817,13 @@ class ModeOrchestrator:
                 )
                 print(f"[INFO] map_upload done: map={map_name}/{sub_map_name}, elapsed={elapsed_sec}s")
             else:
-                reason = self._summarize_rsync_failure(completed.returncode, completed.stderr or "")
+                stderr = completed.stderr or ""
+                stdout = completed.stdout or ""
+                reason = self._summarize_rsync_failure(
+                    completed.returncode,
+                    stderr,
+                    stdout,
+                )
                 self._publish_status(
                     event="map_upload",
                     status="error",
@@ -791,9 +831,18 @@ class ModeOrchestrator:
                     mode="mapping",
                     map_name=map_name,
                     sub_map_name=sub_map_name,
-                    extra={"reason": reason, "elapsed_sec": elapsed_sec},
+                    extra={
+                        "reason": reason,
+                        "elapsed_sec": elapsed_sec,
+                        "exit_code": completed.returncode,
+                    },
                 )
-                print(f"[ERROR] map_upload failed: map={map_name}/{sub_map_name}, reason={reason}")
+                print(
+                    f"[ERROR] map_upload failed: map={map_name}/{sub_map_name}, rc={completed.returncode}\n"
+                    f"  cmd: {' '.join(cmd)}\n"
+                    f"  stderr:\n{stderr}\n"
+                    f"  stdout:\n{stdout}"
+                )
         except FileNotFoundError:
             elapsed_sec = round(time.time() - t0, 3)
             self._publish_status(

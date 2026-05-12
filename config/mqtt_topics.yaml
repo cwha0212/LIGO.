@@ -37,7 +37,10 @@ sync:
     - "-a"
     - "--delete"
     - "--info=stats2"
-  # 로컬 → 공유 업로드 옵션 (매핑 완료 후 자동 업로드); --delete 제외
+  # 로컬 → 공유 업로드 옵션 (매핑 완료 후 자동 업로드).
+  # --no-owner --no-group: NFS/CIFS 등에서 소유자·그룹 보존 실패 시 rsync exit 23 방지.
   rsync_upload_options:
     - "-a"
+    - "--no-owner"
+    - "--no-group"
     - "--info=stats2"

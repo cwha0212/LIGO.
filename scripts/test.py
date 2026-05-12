@@ -23,14 +23,14 @@ topic = resolve_topic("control_mode")
 #     "sub_map_name": "floor_1",
 # }
 
-# payload = {
-#     "command": "stop",
-# }
-
 payload = {
-  "command": "synchronization",
-  "map_name": "site_a"
+    "command": "stop",
 }
+
+# payload = {
+#   "command": "synchronization",
+#   "map_name": "site_a"
+# }
 
 # payload = {"command": "stop"}
 state = {"connected": False, "published": False, "failed": False, "mid": None}

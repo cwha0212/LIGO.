@@ -134,9 +134,9 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 }
 ```
 
-#### 맵 동기화 (공유 → 로컬 `PCD`)
+#### 맵 동기화 (공유 `/mnt/rms_maps` → 로컬 `<패키지>/PCD`)
 
-`rsync`로 `sync.shared_map_root/<map_name>/` → `sync.local_map_root/<map_name>/`. **mapping·동기화가 이미 돌아가면 `stop`을 제외한 명령은 거부**한다.
+`rsync`로 공유 루트의 `<map_name>/` → 로컬 `PCD/<map_name>/`. **mapping·동기화가 이미 돌아가면 `stop`을 제외한 명령은 거부**한다.
 
 ```json
 {
@@ -176,11 +176,11 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 | `control` | 잘못된 제어 JSON (`status=error`) |
 | `sync` | 동기화 시작 (`status=ok`, message만) / 완료 (`status=ok`, `extra.elapsed_sec`) / 실패 (`status=error`, `extra.reason`, `extra.elapsed_sec`) |
 | `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 **로컬** 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`, 원격 `stop` 경유 시 `extra.save_elapsed_sec`) |
-| `map_upload` | `map_saved` 직후 로컬 → 공유(`/mnt/rms_maps`) rsync 업로드 진행 상태. 시작(`status=ok`, `extra.src/dst`), 완료(`status=ok`, `extra.elapsed_sec`), 실패(`status=error`, `extra.reason`, `extra.elapsed_sec`) |
+| `map_upload` | `map_saved` 직후 로컬 → 공유(`/mnt/rms_maps`) rsync 업로드. 시작(`status=ok`, `extra.src/dst`), 완료(`status=ok`, `extra.elapsed_sec`), 실패(`status=error`, `extra.reason`, `extra.elapsed_sec`, `extra.exit_code`). 업로드 옵션은 `sync.rsync_upload_options`(기본 `-a --no-owner --no-group`)로 조정한다. |
 
 매핑 `stop` 의 `extra.save_elapsed_sec` 은 오케스트레이터가 SIGINT 를 보낸 시점부터 `ros2 launch` 종료까지의 초이며, 사실상 `[pcd] final map save (shutdown) took ... s` 와 거의 일치한다(SIGINT 전파·rclcpp shutdown 오버헤드 포함). `_poll_process_exit` 경로(원격 stop 없이 launch 가 스스로 끝났을 때)에서는 `save_elapsed_sec` 이 포함되지 않는다.
 
-`map_saved`는 기대 파일 4종 존재 여부를 검사한다: `<sub>.pcd`, `<sub>_ecef.pcd`, `<sub>_grid2d.pgm`, `<sub>_grid2d.yaml` (경로: `sync.shared_map_root/<map_name>/<sub_map_name>/`). NMEA/ENU 저장 조건에 따라 일부가 없을 수 있으면 `status=warn` 및 `missing` 배열로 알린다.
+`map_saved`는 기대 파일 4종 존재 여부를 검사한다: `<sub>.pcd`, `<sub>_ecef.pcd`, `<sub>_grid2d.pgm`, `<sub>_grid2d.yaml` (경로: 로컬 `<패키지>/PCD/<map_name>/<sub_map_name>/`). NMEA/ENU 저장 조건에 따라 일부가 없을 수 있으면 `status=warn` 및 `missing` 배열로 알린다.
 
 ### 상태 페이로드 예시 (정상 흐름)
 
@@ -249,7 +249,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_2",
-  "save_root": "/mnt/rms_maps/site_a/floor_2",
+  "save_root": "/path/to/LIGO/PCD/site_a/floor_2",
   "files": [
     {"name": "floor_2.pcd", "size": 5516827},
     {"name": "floor_2_ecef.pcd", "size": 5516827},
@@ -272,7 +272,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_2",
-  "save_root": "/mnt/rms_maps/site_a/floor_2",
+  "save_root": "/path/to/LIGO/PCD/site_a/floor_2",
   "files": [{"name": "floor_2.pcd", "size": 5516827}],
   "missing": ["floor_2_ecef.pcd", "floor_2_grid2d.pgm", "floor_2_grid2d.yaml"],
   "save_elapsed_sec": 245.812
@@ -281,7 +281,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 #### 4-1) 공유 경로 업로드 — `event="map_upload"`
 
-`event="map_saved"` 직후 로컬 PCD 디렉터리를 `rsync` 로 `/mnt/rms_maps` 에 업로드한다.
+`event="map_saved"` 직후 로컬 PCD 디렉터리를 `rsync` 로 `/mnt/rms_maps` 에 업로드한다. 기본 옵션은 NFS/CIFS 에서 흔한 **exit 23**(일부 파일·속성 전송 실패)을 줄이기 위해 `--no-owner --no-group` 을 포함한다. 실패 시 `extra.reason` 에 stderr 요약이 들어가며, 상세는 오케스트레이터 `journalctl` 로그에 전체 stderr/stdout 이 출력된다.
 
 시작:
 
@@ -325,12 +325,13 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_2",
-  "reason": "rsync exit=11: No space left on device",
-  "elapsed_sec": 0.812
+  "reason": "rsync exit=23: rsync: …Permission denied…",
+  "elapsed_sec": 0.812,
+  "exit_code": 23
 }
 ```
 
-#### 5) Odometry `stop` — `event="stop"`
+`exit_code=23` 이 계속되면 공유 마운트 쓰기 권한·용량·읽기 전용 여부를 확인한다. `reason` 문자열에 rsync 가 남긴 구체적 오류 줄이 포함된다.
 
 ```json
 {

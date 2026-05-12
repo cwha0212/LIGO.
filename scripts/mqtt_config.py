@@ -40,8 +40,8 @@ _DEFAULT_MQTT: Dict[str, Any] = {
 _DEFAULT_SYNC: Dict[str, Any] = {
     # 공유 → 로컬 다운로드용 (synchronization 커맨드)
     "rsync_options": ["-a", "--delete", "--info=stats2"],
-    # 로컬 → 공유 업로드용 (매핑 완료 후 자동 업로드); --delete 제외
-    "rsync_upload_options": ["-a", "--info=stats2"],
+    # 로컬 → 공유 업로드용; NFS/CIFS 에서 -a 의 owner/group 보존 실패(exit 23) 방지
+    "rsync_upload_options": ["-a", "--no-owner", "--no-group", "--info=stats2"],
 }
 
 # 경로는 config 에서 관리하지 않고 코드에서 직접 참조한다.
