@@ -1,19 +1,19 @@
-image: /mnt/rms_maps/site_a/floor_1/floor_1_grid2d.pgm
+image: /home/maum/last_navi/src/LIGO./PCD/site_a/floor_1/floor_1_grid2d.pgm
 resolution: 0.20000000000000001
-origin: [-56.20000000000000284, -42.80000000000000426, 0.0]
+origin: [-70.40000000000000568, -110.20000000000000284, 0.0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196
 mode: trinary
-source_pcd: /mnt/rms_maps/site_a/floor_1/floor_1.pcd
+source_pcd: /home/maum/last_navi/src/LIGO./PCD/site_a/floor_1/floor_1.pcd
 frame_id: enu
 grid_type: occupancy_2d_raycast
 min_points_per_cell: 3
 z_filter_m: [-1000000000.00000000000000000, 1000000000.00000000000000000]
-width_cells: 333
-height_cells: 269
-num_cells_total: 27160
-num_cells_occupied: 22909
+width_cells: 404
+height_cells: 606
+num_cells_total: 80097
+num_cells_occupied: 69450
 ecef_from_enu:
   equation: p_ecef = anchor_ecef_m + R_ecef_enu * p_enu
   anchor_ecef_m: [-3059253.10291789658367634, 4046024.23886547004804015, 3853912.40683421352878213]

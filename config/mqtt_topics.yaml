@@ -9,7 +9,7 @@ mqtt:
   username: ""
   password: ""
   keepalive_sec: 10
-  topic_prefix: navi1
+  topic_prefix: 80f7e77a602ea53d
   topics:
     control_mode: "{prefix}/control/mode"
     control_status: "{prefix}/control/mode_status"
