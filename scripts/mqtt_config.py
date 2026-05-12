@@ -38,10 +38,19 @@ _DEFAULT_MQTT: Dict[str, Any] = {
 }
 
 _DEFAULT_SYNC: Dict[str, Any] = {
-    "shared_map_root": "/mnt/rms_maps",
-    "local_map_root": "${LIGO_ROOT}/PCD",
+    # 공유 → 로컬 다운로드용 (synchronization 커맨드)
     "rsync_options": ["-a", "--delete", "--info=stats2"],
+    # 로컬 → 공유 업로드용 (매핑 완료 후 자동 업로드); --delete 제외
+    "rsync_upload_options": ["-a", "--info=stats2"],
 }
+
+# 경로는 config 에서 관리하지 않고 코드에서 직접 참조한다.
+SHARED_MAP_ROOT = Path("/mnt/rms_maps")
+
+
+def local_map_root() -> Path:
+    """로컬 맵 루트: <패키지루트>/PCD (고정)."""
+    return (Path(__file__).resolve().parent.parent / "PCD").resolve()
 
 _DEFAULT_ORCH: Dict[str, Any] = {
     # 매핑은 종료 시 PCD/그리드 저장이 길어 launch sigterm_timeout 과 맞춤(24h).
@@ -118,33 +127,19 @@ def resolve_topic(key: str, cfg: Optional[Dict[str, Any]] = None) -> str:
     return tpl.replace("{prefix}", topic_prefix(c))
 
 
-def _ligo_root_default() -> Path:
-    env = os.environ.get("LIGO_ROOT", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    return Path(__file__).resolve().parent.parent
-
-
-def resolve_local_map_root(cfg: Optional[Dict[str, Any]] = None) -> Path:
-    c = cfg or load_mqtt_config()
-    raw = str(c.get("sync", {}).get("local_map_root", "") or "").strip()
-    root = _ligo_root_default()
-    if not raw:
-        return (root / "PCD").resolve()
-    expanded = raw.replace("${LIGO_ROOT}", str(root))
-    p = Path(expanded).expanduser()
-    return p.resolve() if p.is_absolute() else (root / p).resolve()
-
-
-def shared_map_root(cfg: Optional[Dict[str, Any]] = None) -> Path:
-    c = cfg or load_mqtt_config()
-    s = str(c.get("sync", {}).get("shared_map_root", "/mnt/rms_maps")).strip()
-    return Path(s).expanduser().resolve()
-
-
 def rsync_options(cfg: Optional[Dict[str, Any]] = None) -> list[str]:
+    """공유 → 로컬 다운로드용 옵션 (synchronization 커맨드)."""
     c = cfg or load_mqtt_config()
     opts = c.get("sync", {}).get("rsync_options")
     if isinstance(opts, list) and all(isinstance(x, str) for x in opts):
         return list(opts)
     return list(_DEFAULT_SYNC["rsync_options"])  # type: ignore[list-item]
+
+
+def rsync_upload_options(cfg: Optional[Dict[str, Any]] = None) -> list[str]:
+    """로컬 → 공유 업로드용 옵션 (매핑 완료 후 자동 업로드)."""
+    c = cfg or load_mqtt_config()
+    opts = c.get("sync", {}).get("rsync_upload_options")
+    if isinstance(opts, list) and all(isinstance(x, str) for x in opts):
+        return list(opts)
+    return list(_DEFAULT_SYNC["rsync_upload_options"])  # type: ignore[list-item]

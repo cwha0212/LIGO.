@@ -18,11 +18,12 @@ except ImportError as exc:
     raise SystemExit("paho-mqtt가 필요합니다: pip install paho-mqtt") from exc
 
 from mqtt_config import (
+    SHARED_MAP_ROOT,
     load_mqtt_config,
-    resolve_local_map_root,
+    local_map_root,
     resolve_topic,
     rsync_options,
-    shared_map_root,
+    rsync_upload_options,
     topic_prefix,
 )
 
@@ -476,8 +477,7 @@ class ModeOrchestrator:
                     map_name=map_name,
                 )
                 return
-            root_shared = shared_map_root(self._cfg)
-            src = root_shared / map_name
+            src = SHARED_MAP_ROOT / map_name
             if not src.is_dir():
                 self._publish_status(
                     event="sync",
@@ -488,8 +488,7 @@ class ModeOrchestrator:
                     extra={"reason": f"공유 맵 경로에 해당 map이 없습니다: {src}"},
                 )
                 return
-            dst_root = resolve_local_map_root(self._cfg)
-            dst = dst_root / map_name
+            dst = local_map_root() / map_name
             try:
                 dst.mkdir(parents=True, exist_ok=True)
             except Exception as exc:
@@ -625,9 +624,16 @@ class ModeOrchestrator:
             f"save_elapsed_sec={save_elapsed_sec if mode == 'mapping' else 'n/a'}"
         )
 
-        # 매핑이 정상 종료되었으면 저장 결과(map_saved)도 발행한다.
+        # 매핑이 정상 종료되었으면 저장 결과(map_saved) 발행 후 공유 경로로 업로드한다.
         if mode == "mapping" and exit_code == 0 and map_name and sub_map_name:
             self._publish_map_saved(map_name, sub_map_name, save_elapsed_sec=save_elapsed_sec)
+            th_upload = threading.Thread(
+                target=self._upload_map_to_shared,
+                args=(map_name, sub_map_name),
+                name=f"map_upload_{map_name}_{sub_map_name}",
+                daemon=True,
+            )
+            th_upload.start()
 
         with self._lock:
             self._stop_in_progress = False
@@ -723,8 +729,7 @@ class ModeOrchestrator:
         sub_map_name: str,
         save_elapsed_sec: Optional[float] = None,
     ) -> None:
-        root = shared_map_root(self._cfg)
-        save_dir = root / map_name / sub_map_name
+        save_dir = local_map_root() / map_name / sub_map_name
         st, files_out, missing = self._map_artifact_status(save_dir, sub_map_name)
         msg = (
             "맵 저장이 완료되었습니다."
@@ -743,6 +748,85 @@ class ModeOrchestrator:
             sub_map_name=sub_map_name,
             extra=extra,
         )
+
+    def _upload_map_to_shared(self, map_name: str, sub_map_name: str) -> None:
+        """로컬 PCD → 공유 경로 rsync 업로드. _stop_mode_worker 완료 후 별도 스레드에서 실행."""
+        src = local_map_root() / map_name / sub_map_name
+        dst = SHARED_MAP_ROOT / map_name / sub_map_name
+        opts = rsync_upload_options(self._cfg)
+
+        t0 = time.time()
+        self._publish_status(
+            event="map_upload",
+            status="ok",
+            message="맵 업로드를 시작했습니다.",
+            mode="mapping",
+            map_name=map_name,
+            sub_map_name=sub_map_name,
+            extra={"src": str(src), "dst": str(dst)},
+        )
+        print(f"[INFO] map_upload start: {src} → {dst}")
+        try:
+            dst.mkdir(parents=True, exist_ok=True)
+            cmd = ["rsync", *opts, f"{src}/", f"{dst}/"]
+            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+            elapsed_sec = round(time.time() - t0, 3)
+            if completed.returncode == 0:
+                self._publish_status(
+                    event="map_upload",
+                    status="ok",
+                    message="맵 업로드가 완료되었습니다.",
+                    mode="mapping",
+                    map_name=map_name,
+                    sub_map_name=sub_map_name,
+                    extra={"elapsed_sec": elapsed_sec},
+                )
+                print(f"[INFO] map_upload done: map={map_name}/{sub_map_name}, elapsed={elapsed_sec}s")
+            else:
+                reason = self._summarize_rsync_failure(completed.returncode, completed.stderr or "")
+                self._publish_status(
+                    event="map_upload",
+                    status="error",
+                    message="맵 업로드에 실패했습니다.",
+                    mode="mapping",
+                    map_name=map_name,
+                    sub_map_name=sub_map_name,
+                    extra={"reason": reason, "elapsed_sec": elapsed_sec},
+                )
+                print(f"[ERROR] map_upload failed: map={map_name}/{sub_map_name}, reason={reason}")
+        except FileNotFoundError:
+            elapsed_sec = round(time.time() - t0, 3)
+            self._publish_status(
+                event="map_upload",
+                status="error",
+                message="맵 업로드에 실패했습니다.",
+                mode="mapping",
+                map_name=map_name,
+                sub_map_name=sub_map_name,
+                extra={"reason": "rsync 실행 파일을 찾을 수 없습니다.", "elapsed_sec": elapsed_sec},
+            )
+        except subprocess.TimeoutExpired:
+            elapsed_sec = round(time.time() - t0, 3)
+            self._publish_status(
+                event="map_upload",
+                status="error",
+                message="맵 업로드에 실패했습니다.",
+                mode="mapping",
+                map_name=map_name,
+                sub_map_name=sub_map_name,
+                extra={"reason": "업로드가 시간 제한(7200초)을 초과했습니다.", "elapsed_sec": elapsed_sec},
+            )
+        except Exception as exc:
+            elapsed_sec = round(time.time() - t0, 3)
+            self._publish_status(
+                event="map_upload",
+                status="error",
+                message="맵 업로드에 실패했습니다.",
+                mode="mapping",
+                map_name=map_name,
+                sub_map_name=sub_map_name,
+                extra={"reason": f"업로드 중 예외: {exc}", "elapsed_sec": elapsed_sec},
+            )
 
     _EVENT_FOR_KIND = {
         "start_mapping": "start",
@@ -844,6 +928,13 @@ class ModeOrchestrator:
 
         if mode == "mapping" and rc == 0 and map_name and sub_map_name:
             self._publish_map_saved(map_name, sub_map_name)
+            th_upload = threading.Thread(
+                target=self._upload_map_to_shared,
+                args=(map_name, sub_map_name),
+                name=f"map_upload_{map_name}_{sub_map_name}",
+                daemon=True,
+            )
+            th_upload.start()
 
     def shutdown(self) -> None:
         self._running = False

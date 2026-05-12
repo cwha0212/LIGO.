@@ -28,11 +28,16 @@ orchestrator:
   start_confirm_sec: 1.5
 
 sync:
-  # 공유(서버) 맵 루트 — synchronization 시 여기서 읽어 로컬로 rsync
-  shared_map_root: /mnt/rms_maps
-  # 로컬 동기화 대상. ${LIGO_ROOT} 미설정 시 mqtt_config 가 패키지 루트로 대체
-  local_map_root: "${LIGO_ROOT}/PCD"
+  # 공유(서버) 맵 루트: 고정값 /mnt/rms_maps (코드에 하드코딩)
+  # 로컬 맵 루트: 고정값 <패키지루트>/PCD (코드에 하드코딩)
+  # 경로는 코드에서 직접 참조하므로 여기서는 rsync 옵션만 관리한다.
+
+  # 공유 → 로컬 다운로드 옵션 (synchronization 커맨드)
   rsync_options:
     - "-a"
     - "--delete"
+    - "--info=stats2"
+  # 로컬 → 공유 업로드 옵션 (매핑 완료 후 자동 업로드); --delete 제외
+  rsync_upload_options:
+    - "-a"
     - "--info=stats2"

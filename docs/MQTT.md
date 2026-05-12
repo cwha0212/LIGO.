@@ -6,9 +6,9 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 | 항목 | 설명 |
 |------|------|
-| [`config/mqtt_topics.yaml`](../config/mqtt_topics.yaml) | `mqtt.*` (host, port, topic_prefix, topics 템플릿), `sync.*` (shared_map_root, local_map_root, rsync_options), `orchestrator.*` (stop/start 타임아웃) |
+| [`config/mqtt_topics.yaml`](../config/mqtt_topics.yaml) | `mqtt.*` (host, port, topic_prefix, topics 템플릿), `sync.*` (rsync_options, rsync_upload_options), `orchestrator.*` (stop/start 타임아웃) |
 | 환경 변수 `LIGO_MQTT_CONFIG` | 사용할 YAML 절대 경로 (최우선) |
-| 환경 변수 `LIGO_ROOT` | `sync.local_map_root`의 `${LIGO_ROOT}` 치환 (미설정 시 패키지 루트로 추정) |
+| 환경 변수 `LIGO_ROOT` | 사용하지 않음. 로컬 맵 루트는 `<패키지루트>/PCD` 로 고정. |
 
 ### `orchestrator.*`
 
@@ -175,7 +175,8 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 | `ended` | 하위 launch 프로세스 종료 (`exit_code`) |
 | `control` | 잘못된 제어 JSON (`status=error`) |
 | `sync` | 동기화 시작 (`status=ok`, message만) / 완료 (`status=ok`, `extra.elapsed_sec`) / 실패 (`status=error`, `extra.reason`, `extra.elapsed_sec`) |
-| `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 공유 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`, 원격 `stop` 경유 시 `extra.save_elapsed_sec`) |
+| `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 **로컬** 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`, 원격 `stop` 경유 시 `extra.save_elapsed_sec`) |
+| `map_upload` | `map_saved` 직후 로컬 → 공유(`/mnt/rms_maps`) rsync 업로드 진행 상태. 시작(`status=ok`, `extra.src/dst`), 완료(`status=ok`, `extra.elapsed_sec`), 실패(`status=error`, `extra.reason`, `extra.elapsed_sec`) |
 
 매핑 `stop` 의 `extra.save_elapsed_sec` 은 오케스트레이터가 SIGINT 를 보낸 시점부터 `ros2 launch` 종료까지의 초이며, 사실상 `[pcd] final map save (shutdown) took ... s` 와 거의 일치한다(SIGINT 전파·rclcpp shutdown 오버헤드 포함). `_poll_process_exit` 경로(원격 stop 없이 launch 가 스스로 끝났을 때)에서는 `save_elapsed_sec` 이 포함되지 않는다.
 
@@ -237,7 +238,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 #### 4) 매핑 산출물 검증 — `event="map_saved"`
 
-`event="stop"` 직후 워커가 `sync.shared_map_root/<map>/<sub>/` 의 4종 파일을 확인하고 발행한다. 모두 존재하면 `status="ok"`:
+`event="stop"` 직후 워커가 **로컬** `sync.local_map_root/<map>/<sub>/` 의 4종 파일을 확인하고 발행한다. 모두 존재하면 `status="ok"`:
 
 ```json
 {
@@ -275,6 +276,57 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "files": [{"name": "floor_2.pcd", "size": 5516827}],
   "missing": ["floor_2_ecef.pcd", "floor_2_grid2d.pgm", "floor_2_grid2d.yaml"],
   "save_elapsed_sec": 245.812
+}
+```
+
+#### 4-1) 공유 경로 업로드 — `event="map_upload"`
+
+`event="map_saved"` 직후 로컬 PCD 디렉터리를 `rsync` 로 `/mnt/rms_maps` 에 업로드한다.
+
+시작:
+
+```json
+{
+  "timestamp_unix": 1778477750.200,
+  "event": "map_upload",
+  "status": "ok",
+  "message": "맵 업로드를 시작했습니다.",
+  "mode": "mapping",
+  "map_name": "site_a",
+  "sub_map_name": "floor_2",
+  "src": "/home/chang/.../PCD/site_a/floor_2",
+  "dst": "/mnt/rms_maps/site_a/floor_2"
+}
+```
+
+완료:
+
+```json
+{
+  "timestamp_unix": 1778477760.500,
+  "event": "map_upload",
+  "status": "ok",
+  "message": "맵 업로드가 완료되었습니다.",
+  "mode": "mapping",
+  "map_name": "site_a",
+  "sub_map_name": "floor_2",
+  "elapsed_sec": 10.284
+}
+```
+
+실패:
+
+```json
+{
+  "timestamp_unix": 1778477751.000,
+  "event": "map_upload",
+  "status": "error",
+  "message": "맵 업로드에 실패했습니다.",
+  "mode": "mapping",
+  "map_name": "site_a",
+  "sub_map_name": "floor_2",
+  "reason": "rsync exit=11: No space left on device",
+  "elapsed_sec": 0.812
 }
 ```
 

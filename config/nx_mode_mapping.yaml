@@ -3,8 +3,10 @@
 # 실내 그리드/참조 PCD 경로 비움 → 기동 시 loadIndoorGridMaps/initIndoorGICP 분기 미실행
 /**:
   ros__parameters:
-    # 필요 시 베이스 avia.yaml 의 map_folder 를 여기서 덮어씀 (예: map_folder: "/data/maps")
-    map_folder: "/mnt/rms_maps"
+    # 매핑은 로컬에 먼저 저장하고, stop 완료 후 오케스트레이터가 rsync 로 /mnt/rms_maps 에 업로드한다.
+    # 상대 경로 "PCD" → C++ parameters.cpp 가 빌드 시 ROOT_DIR(패키지 소스 루트)/PCD 로 해석.
+    # 빈 문자열이면 코드에서 /mnt/rms_maps 로 폴백하므로 비우면 안 됨.
+    map_folder: "PCD"
     mapping:
       mapping_mode: true
     indoor:
