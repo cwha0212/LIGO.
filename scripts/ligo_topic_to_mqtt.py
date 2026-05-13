@@ -5,7 +5,7 @@ LIGO ROS2 topic -> MQTT bridge.
 MQTT topic별로 JSON을 분리 발행한다. 토픽 이름·브로커 기본값은 config/mqtt_topics.yaml (또는 LIGO_MQTT_CONFIG).
   - {prefix}/position   : lat, lon
   - {prefix}/heading    : deg_from_north_cw, cardinal
-  - {prefix}/gps        : status, ntrip_connected (/receiver_pvt 기반)
+  - {prefix}/gps        : status(신호없음=PVT 무픽스 유지 / 정상·미약=NavSatFix 위·경도 분산), ntrip_connected (PVT)
   - {prefix}/init_heading_icp : success/status (/ligo/nmea_heading_align_status 기반)
   - {prefix}/ligo_mode  : /ligo/mode(String JSON) 미러
 
@@ -44,6 +44,9 @@ except ImportError as exc:
     raise SystemExit("paho-mqtt가 필요합니다: pip install paho-mqtt") from exc
 
 from mqtt_config import load_mqtt_config
+
+# NavSatFix position_covariance 대각(위도·경도 분산) 중 최댓값이 이 값 이하면 신호정상.
+GPS_LAT_LON_COV_MAX_NORMAL = 5.0
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -174,7 +177,7 @@ class LigoMqttBridge(Node):
         self.ntrip_connected: Optional[bool] = None
         self.icp_heading_aligned: bool = False
         self.icp_status_text: Optional[str] = None  # "UNALIGNED" | "COLLECTING" | "LOCKED"
-        self._pvt_is_gps_fixed: Optional[bool] = None
+        self._lat_lon_cov_max: Optional[float] = None
         self._pvt_is_no_fix: Optional[bool] = None
         self._has_heading_sample: bool = False
         self._last_ligo_mode_payload: Optional[dict] = None
@@ -185,7 +188,9 @@ class LigoMqttBridge(Node):
         if GnssPVTSolnMsg is not None:
             self.create_subscription(GnssPVTSolnMsg, receiver_pvt_topic, self.on_receiver_pvt, 10)
         else:
-            self.get_logger().warn("gnss_comm.msg.GnssPVTSolnMsg import 실패: NTRIP/정상 판정 정밀도 제한")
+            self.get_logger().warn(
+                "gnss_comm.msg.GnssPVTSolnMsg import 실패: 신호없음(PVT)·ntrip_connected 판정 불가"
+            )
         self.create_subscription(NmeaHeadingAlignStatus, align_status_topic, self.on_heading_align_status, 10)
         mode_qos = QoSProfile(
             depth=10,
@@ -287,7 +292,25 @@ class LigoMqttBridge(Node):
     def on_global_position(self, msg: NavSatFix) -> None:
         self.lat = float(msg.latitude)
         self.lon = float(msg.longitude)
+        if msg.position_covariance_type != NavSatFix.COVARIANCE_TYPE_UNKNOWN:
+            c = msg.position_covariance
+            v_lat = float(c[0])
+            v_lon = float(c[4])
+            if (
+                math.isfinite(v_lat)
+                and math.isfinite(v_lon)
+                and v_lat >= 0.0
+                and v_lon >= 0.0
+                and (v_lat > 0.0 or v_lon > 0.0)
+            ):
+                self._lat_lon_cov_max = max(v_lat, v_lon)
+            else:
+                self._lat_lon_cov_max = None
+        else:
+            self._lat_lon_cov_max = None
         self._publish_position()
+        if self._refresh_gps_signal_status():
+            self._publish_gps()
 
     def on_odom(self, msg: Odometry) -> None:
         q = msg.pose.pose.orientation
@@ -303,11 +326,7 @@ class LigoMqttBridge(Node):
             self._publish_heading()
 
     def on_receiver_pvt(self, msg) -> None:
-        # wtrtk_driver fix_state_label:
-        #  - GPS_fixed: valid_fix && fix_type!=0 && carr_soln==2
-        #  - 그 외 valid fix는 미약으로 분류
         self._pvt_is_no_fix = (not bool(msg.valid_fix)) or int(msg.fix_type) == 0
-        self._pvt_is_gps_fixed = (not self._pvt_is_no_fix) and int(msg.carr_soln) == 2
         # NTRIP 연결(실사용) 여부 근사: diff solution 또는 carrier solution 존재
         ntrip_connected = bool(msg.diff_soln) or int(msg.carr_soln) in (1, 2)
         self.ntrip_connected = ntrip_connected
@@ -317,14 +336,17 @@ class LigoMqttBridge(Node):
 
     def _refresh_gps_signal_status(self) -> bool:
         prev = self.gps_signal_status
-        # PVT 기반 3단계 판정
+        # 신호없음: PVT 무픽스 (기존과 동일). 정상/미약: /ligo/global_position NavSatFix 위·경도 분산 대각 최댓값.
         if self._pvt_is_no_fix is True:
             self.gps_signal_status = "신호없음"
-        elif self._pvt_is_gps_fixed is True:
-            self.gps_signal_status = "신호정상"
-        # no_fix가 아니면서 GPS_fixed가 아니면 모두 미약 (2D_fix/GPS_single/GPS_float 포함)
         elif self._pvt_is_no_fix is False:
-            self.gps_signal_status = "신호미약"
+            if (
+                self._lat_lon_cov_max is not None
+                and self._lat_lon_cov_max <= GPS_LAT_LON_COV_MAX_NORMAL
+            ):
+                self.gps_signal_status = "신호정상"
+            else:
+                self.gps_signal_status = "신호미약"
         else:
             self.gps_signal_status = None
         return prev != self.gps_signal_status

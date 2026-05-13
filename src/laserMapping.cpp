@@ -122,18 +122,17 @@ geometry_msgs::msg::PoseStamped nmea_aligned_pose;
 static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr &msg,
                                         double threshold)
 {
+    // Horizontal only: [0],[7] (NavSatFix-backed: lat/lon variance); altitude [14] excluded.
     return msg->pose.covariance[0] >= threshold ||
-           msg->pose.covariance[7] >= threshold ||
-           msg->pose.covariance[14] >= threshold;
+           msg->pose.covariance[7] >= threshold;
 }
 
-// Matches NMEAProcess::processNMEA gate for collecting alignment window (reject if any diagonal > thr).
+// Matches NMEAProcess::processNMEA gate for collecting alignment window (reject if horizontal diagonal > thr).
 static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
                                                         double threshold)
 {
     return msg->pose.covariance[0] <= threshold &&
-           msg->pose.covariance[7] <= threshold &&
-           msg->pose.covariance[14] <= threshold;
+           msg->pose.covariance[7] <= threshold;
 }
 
 static std::string ligo_json_escape(const std::string &s)
@@ -1123,7 +1122,23 @@ static void try_publish_fused_global_nav_sat(
     msg.altitude = lla(2);
     msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
     msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
+    msg.position_covariance.fill(0.0);
     msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
+    if (nmea_cur)
+    {
+        const auto &c = nmea_cur->pose.covariance;
+        const double v_lat = c[0];
+        const double v_lon = c[7];
+        const double v_alt = c[14];
+        if (std::isfinite(v_lat) && std::isfinite(v_lon) && std::isfinite(v_alt) &&
+            (v_lat > 0.0 || v_lon > 0.0))
+        {
+            msg.position_covariance[0] = std::max(0.0, v_lat);
+            msg.position_covariance[4] = std::max(0.0, v_lon);
+            msg.position_covariance[8] = (v_alt > 0.0) ? v_alt : 1.0e6;
+            msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+        }
+    }
     pubGlobalFix->publish(msg);
 }
 

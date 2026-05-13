@@ -100,7 +100,7 @@ class NMEAAssignment
         double outlier_thres = 0.1;
         double outlier_thres_init = 0.1;
         int process_feat_num = 0;
-        double ppp_std_threshold = 30.0;
+        double ppp_std_threshold = 30.0;  // gate vs pose.covariance[0],[7] only (horiz.); not [14]
 
         gtsam::noiseModel::Base::shared_ptr margrotNoise;
         gtsam::noiseModel::Base::shared_ptr margposNoise;

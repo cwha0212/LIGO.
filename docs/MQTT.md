@@ -92,7 +92,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 **`{prefix}/heading`** — `deg_from_north_cw`, `cardinal` (ICP LOCK 이후)
 
-**`{prefix}/gps`** — `status` (`신호없음` / `신호미약` / `신호정상`), `ntrip_connected`
+**`{prefix}/gps`** — `status`: `신호없음`은 PVT 무픽스(기존과 동일). `신호정상`/`신호미약`은 `topic.global_position`의 `NavSatFix.position_covariance` 위·경도 대각(`[0]`,`[4]`) 중 최댓값이 **5 이하**이면 정상, **초과**이면 미약(공분산 없음·알 수 없음도 미약). `ntrip_connected`는 PVT 기준.
 
 **`{prefix}/init_heading_icp`** — `success`, `status` (`UNALIGNED` / `COLLECTING` / `LOCKED`)
 

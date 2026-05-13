@@ -154,16 +154,17 @@ void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_mea
 {
   if (!nmea_ready)
   {
-    // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
-    if (nmea_meas->pose.covariance[0] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[7] > p_assign->ppp_std_threshold || nmea_meas->pose.covariance[14] > p_assign->ppp_std_threshold)
+    // Horizontal position diagonal [0],[7] only (lat/lon variance); altitude [14] excluded vs ppp_std_threshold.
+    if (nmea_meas->pose.covariance[0] > p_assign->ppp_std_threshold ||
+        nmea_meas->pose.covariance[7] > p_assign->ppp_std_threshold)
     {
       static int rej_cov_log_count = 0;
       if (++rej_cov_log_count <= 5 || rej_cov_log_count % 50 == 0)
       {
         RCLCPP_WARN(
             rclcpp::get_logger("ligo"),
-            "[nmea/init] reject by covariance: cov=(%.3f, %.3f, %.3f) th=%.3f",
-            nmea_meas->pose.covariance[0], nmea_meas->pose.covariance[7], nmea_meas->pose.covariance[14],
+            "[nmea/init] reject by covariance: cov_horiz=(%.3f, %.3f) th=%.3f",
+            nmea_meas->pose.covariance[0], nmea_meas->pose.covariance[7],
             p_assign->ppp_std_threshold);
       }
       return;
@@ -623,11 +624,10 @@ bool NMEAProcess::Evaluate(state_output &state)
 {
   // After /ligo/indoor_mode: use GICP (IndoorLocalizationFactor) for global ENU — do not reject this step on GNSS covariance.
   const bool indoor_gicp_replaces_nmea = indoor_flag_dynamic;
-  // Use position diagonal [0],[7],[14] to match Odometry covariance layout (e.g. Septentrio bridge)
+  // Horizontal diagonal [0],[7] only vs ppp_std_threshold; altitude [14] excluded.
   if (!indoor_gicp_replaces_nmea &&
       (nmea_meas_[0]->pose.covariance[0] > p_assign->ppp_std_threshold ||
-       nmea_meas_[0]->pose.covariance[7] > p_assign->ppp_std_threshold ||
-       nmea_meas_[0]->pose.covariance[14] > p_assign->ppp_std_threshold))
+       nmea_meas_[0]->pose.covariance[7] > p_assign->ppp_std_threshold))
   {
     return false;
   }

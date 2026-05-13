@@ -85,7 +85,7 @@
       nmea_enable: true
       posit_odo_topic: "/ublox_driver/receiver_lla"
       nmea_input_type: "navsatfix"
-      ppp_std_thres: 0.01
+      ppp_std_thres: 20.0
       # 높은 NMEA 공분산(실내 등)일 때 indoor reloc 트리거 허용 (기존 하드코딩 상수 대체)
       force_indoor_on_high_cov: true
       indoor_high_cov_threshold: 50.0
