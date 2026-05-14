@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 try:
     import paho.mqtt.client as mqtt
@@ -221,7 +221,7 @@ class ModeOrchestrator:
             payload.update(extra)
         payload_str = json.dumps(payload, ensure_ascii=False)
         # 연결 상태와 관계없이 큐에 넣어두고, 연결돼 있으면 즉시 flush.
-        # 끊긴 사이에 발생한 stop/map_saved/sync 같은 결과 메시지를 잃지 않도록 한다.
+        # 끊긴 사이에 발생한 stop/map_saved/sync/sync_verify/map_upload_verify 같은 결과 메시지를 잃지 않도록 한다.
         with self._pending_lock:
             self._pending_status.append(payload_str)
             if self._mqtt_connected:
@@ -452,15 +452,131 @@ class ModeOrchestrator:
             text = "…" + text[-(max_chars - 1) :]
         return f"rsync exit={exit_code}: {text}"
 
+    @staticmethod
+    def _verify_rsync_mirror(reference: Path, mirror: Path) -> tuple[bool, dict[str, Any]]:
+        """reference 아래의 모든 일반 파일이 mirror에 동일 크기로 존재하는지 검사한다."""
+        out: dict[str, Any] = {
+            "ok": False,
+            "reference": str(reference),
+            "mirror": str(mirror),
+            "file_count": 0,
+            "bytes_total": 0,
+            "matched_samples": [],
+            "mismatches": [],
+        }
+        max_samples = 40
+        max_mismatch = 50
+
+        if not reference.is_dir():
+            out["mismatches"] = [
+                {"path": ".", "reference_bytes": None, "mirror_bytes": None, "error": "기준 경로가 디렉터리가 아닙니다."}
+            ]
+            return False, out
+        if not mirror.is_dir():
+            out["mismatches"] = [
+                {"path": ".", "reference_bytes": None, "mirror_bytes": None, "error": "대상 경로가 디렉터리가 아닙니다."}
+            ]
+            return False, out
+
+        mismatches: list[dict[str, Any]] = []
+        matched_samples: list[dict[str, Any]] = []
+        bytes_total = 0
+        file_count = 0
+
+        try:
+            paths = sorted(reference.rglob("*"))
+        except OSError as exc:
+            mismatches.append(
+                {
+                    "path": ".",
+                    "reference_bytes": None,
+                    "mirror_bytes": None,
+                    "error": f"기준 경로 순회 실패: {exc}",
+                }
+            )
+            out["mismatches"] = mismatches
+            return False, out
+
+        for p in paths:
+            if not p.is_file():
+                continue
+            try:
+                rel = p.relative_to(reference).as_posix()
+            except ValueError:
+                continue
+            try:
+                ref_sz = int(p.stat().st_size)
+            except OSError as exc:
+                mismatches.append(
+                    {
+                        "path": rel,
+                        "reference_bytes": None,
+                        "mirror_bytes": None,
+                        "error": f"기준 파일 stat 실패: {exc}",
+                    }
+                )
+                continue
+            file_count += 1
+            bytes_total += ref_sz
+            dest = mirror / rel
+            if not dest.is_file():
+                mismatches.append({"path": rel, "reference_bytes": ref_sz, "mirror_bytes": None})
+                continue
+            try:
+                mir_sz = int(dest.stat().st_size)
+            except OSError as exc:
+                mismatches.append(
+                    {
+                        "path": rel,
+                        "reference_bytes": ref_sz,
+                        "mirror_bytes": None,
+                        "error": f"대상 파일 stat 실패: {exc}",
+                    }
+                )
+                continue
+            if mir_sz != ref_sz:
+                mismatches.append({"path": rel, "reference_bytes": ref_sz, "mirror_bytes": mir_sz})
+            elif len(matched_samples) < max_samples:
+                matched_samples.append({"path": rel, "bytes": ref_sz})
+
+        out["file_count"] = file_count
+        out["bytes_total"] = bytes_total
+        out["matched_samples"] = matched_samples
+        total_mismatch = len(mismatches)
+        matched_files = file_count - total_mismatch
+        out["samples_truncated"] = matched_files > max_samples
+        if total_mismatch > max_mismatch:
+            out["mismatches_truncated"] = True
+            out["mismatches"] = mismatches[:max_mismatch]
+        else:
+            out["mismatches"] = list(mismatches)
+        out["ok"] = total_mismatch == 0
+        return bool(out["ok"]), out
+
+    @staticmethod
+    def _verify_status_extra(
+        verify_report: dict[str, Any],
+        *,
+        rsync_elapsed_sec: Optional[float] = None,
+        verify_elapsed_sec: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """MQTT 페이로드용: 검증 dict에서 ok 제외, 경과 시간 필드 추가."""
+        extra: dict[str, Any] = {k: v for k, v in verify_report.items() if k != "ok"}
+        if rsync_elapsed_sec is not None:
+            extra["rsync_elapsed_sec"] = rsync_elapsed_sec
+        if verify_elapsed_sec is not None:
+            extra["verify_elapsed_sec"] = verify_elapsed_sec
+        return extra
+
     def _run_sync_in_thread(self, map_name: str, src: Path, dst: Path, opts: list[str]) -> None:
         t0 = time.time()
-        ok = False
+        rsync_ok = False
         reason: Optional[str] = None
         try:
             cmd = ["rsync", *opts, f"{src}/", f"{dst}/"]
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
             if completed.returncode == 0:
-                ok = True
+                rsync_ok = True
             else:
                 reason = self._summarize_rsync_failure(
                     completed.returncode,
@@ -474,17 +590,49 @@ class ModeOrchestrator:
         except Exception as exc:
             reason = f"동기화 중 예외: {exc}"
 
-        elapsed_sec = round(time.time() - t0, 3)
-        if ok:
+        t_after_rsync = time.time()
+        rsync_elapsed_sec = round(t_after_rsync - t0, 3)
+
+        if rsync_ok:
             self._publish_status(
                 event="sync",
                 status="ok",
                 message="맵 동기화가 완료되었습니다.",
                 mode="idle",
                 map_name=map_name,
-                extra={"elapsed_sec": elapsed_sec},
+                extra={"elapsed_sec": rsync_elapsed_sec},
             )
-            print(f"[INFO] sync done: map_name={map_name}, elapsed={elapsed_sec}s")
+            print(f"[INFO] sync rsync done: map_name={map_name}, elapsed={rsync_elapsed_sec}s")
+            t_v0 = time.time()
+            v_ok, verify_report = self._verify_rsync_mirror(src, dst)
+            verify_elapsed_sec = round(time.time() - t_v0, 3)
+            v_extra = self._verify_status_extra(
+                verify_report,
+                rsync_elapsed_sec=rsync_elapsed_sec,
+                verify_elapsed_sec=verify_elapsed_sec,
+            )
+            if not v_ok:
+                n_show = len(verify_report.get("mismatches") or [])
+                truncated = bool(verify_report.get("mismatches_truncated"))
+                v_extra["reason"] = (
+                    f"불일치·누락 {n_show}건" + (" (일부만 표시)" if truncated else "")
+                )
+            self._publish_status(
+                event="sync_verify",
+                status="ok" if v_ok else "error",
+                message=(
+                    "맵 동기화 후 파일 용량 검증을 통과했습니다."
+                    if v_ok
+                    else "맵 동기화 후 파일 용량 검증에 실패했습니다."
+                ),
+                mode="idle",
+                map_name=map_name,
+                extra=v_extra,
+            )
+            print(
+                f"[INFO] sync_verify: map_name={map_name}, ok={v_ok}, "
+                f"verify_elapsed={verify_elapsed_sec}s"
+            )
         else:
             self._publish_status(
                 event="sync",
@@ -492,9 +640,9 @@ class ModeOrchestrator:
                 message="맵 동기화에 실패했습니다.",
                 mode="idle",
                 map_name=map_name,
-                extra={"reason": reason or "알 수 없는 오류", "elapsed_sec": elapsed_sec},
+                extra={"reason": reason or "알 수 없는 오류", "elapsed_sec": rsync_elapsed_sec},
             )
-            print(f"[ERROR] sync failed: map_name={map_name}, reason={reason}, elapsed={elapsed_sec}s")
+            print(f"[ERROR] sync failed: map_name={map_name}, reason={reason}, elapsed={rsync_elapsed_sec}s")
         with self._lock:
             self._sync_thread = None
 
@@ -770,9 +918,15 @@ class ModeOrchestrator:
             if st == "ok"
             else f"일부 산출물이 없습니다: {', '.join(missing)}"
         )
-        extra: dict = {"save_root": str(save_dir), "files": files_out, "missing": missing}
+        extra: dict[str, Any] = {"save_root": str(save_dir), "files": files_out, "missing": missing}
         if save_elapsed_sec is not None:
             extra["save_elapsed_sec"] = save_elapsed_sec
+        sz_sum = 0
+        for item in files_out:
+            s = item.get("size")
+            if isinstance(s, int):
+                sz_sum += s
+        extra["artifact_bytes_total"] = sz_sum
         self._publish_status(
             event="map_saved",
             status=st,
@@ -804,7 +958,8 @@ class ModeOrchestrator:
             dst.mkdir(parents=True, exist_ok=True)
             cmd = ["rsync", *opts, f"{src}/", f"{dst}/"]
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
-            elapsed_sec = round(time.time() - t0, 3)
+            t_after_rsync = time.time()
+            rsync_elapsed_sec = round(t_after_rsync - t0, 3)
             if completed.returncode == 0:
                 self._publish_status(
                     event="map_upload",
@@ -813,10 +968,42 @@ class ModeOrchestrator:
                     mode="mapping",
                     map_name=map_name,
                     sub_map_name=sub_map_name,
-                    extra={"elapsed_sec": elapsed_sec},
+                    extra={"elapsed_sec": rsync_elapsed_sec},
                 )
-                print(f"[INFO] map_upload done: map={map_name}/{sub_map_name}, elapsed={elapsed_sec}s")
+                print(f"[INFO] map_upload rsync done: map={map_name}/{sub_map_name}, elapsed={rsync_elapsed_sec}s")
+                t_v0 = time.time()
+                v_ok, verify_report = self._verify_rsync_mirror(src, dst)
+                verify_elapsed_sec = round(time.time() - t_v0, 3)
+                v_extra = self._verify_status_extra(
+                    verify_report,
+                    rsync_elapsed_sec=rsync_elapsed_sec,
+                    verify_elapsed_sec=verify_elapsed_sec,
+                )
+                if not v_ok:
+                    n_show = len(verify_report.get("mismatches") or [])
+                    truncated = bool(verify_report.get("mismatches_truncated"))
+                    v_extra["reason"] = (
+                        f"불일치·누락 {n_show}건" + (" (일부만 표시)" if truncated else "")
+                    )
+                self._publish_status(
+                    event="map_upload_verify",
+                    status="ok" if v_ok else "error",
+                    message=(
+                        "맵 업로드 후 공유 경로 파일 용량 검증을 통과했습니다."
+                        if v_ok
+                        else "맵 업로드 후 공유 경로 파일 용량 검증에 실패했습니다."
+                    ),
+                    mode="mapping",
+                    map_name=map_name,
+                    sub_map_name=sub_map_name,
+                    extra=v_extra,
+                )
+                print(
+                    f"[INFO] map_upload_verify: map={map_name}/{sub_map_name}, ok={v_ok}, "
+                    f"verify_elapsed={verify_elapsed_sec}s"
+                )
             else:
+                elapsed_sec = rsync_elapsed_sec
                 stderr = completed.stderr or ""
                 stdout = completed.stdout or ""
                 reason = self._summarize_rsync_failure(

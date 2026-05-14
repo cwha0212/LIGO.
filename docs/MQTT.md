@@ -174,9 +174,11 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 | `stop` | stop 또는 서비스 종료로 프로세스 종료 시도 완료 |
 | `ended` | 하위 launch 프로세스 종료 (`exit_code`) |
 | `control` | 잘못된 제어 JSON (`status=error`) |
-| `sync` | 동기화 시작 (`status=ok`, message만) / 완료 (`status=ok`, `extra.elapsed_sec`) / 실패 (`status=error`, `extra.reason`, `extra.elapsed_sec`) |
-| `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 **로컬** 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`, 원격 `stop` 경유 시 `extra.save_elapsed_sec`) |
-| `map_upload` | `map_saved` 직후 로컬 → 공유(`/mnt/rms_maps`) rsync 업로드. 시작(`status=ok`, `extra.src/dst`), 완료(`status=ok`, `extra.elapsed_sec`), 실패(`status=error`, `extra.reason`, `extra.elapsed_sec`, `extra.exit_code`). 업로드 옵션은 `sync.rsync_upload_options`(기본 `-a --no-owner --no-group`)로 조정한다. |
+| `sync` | 동기화 시작 (`status=ok`, message만) / **rsync** 완료 (`status=ok`, `extra.elapsed_sec` = rsync 소요 초) / 실패 (`status=error`, `extra.reason`, `extra.elapsed_sec`) |
+| `sync_verify` | `sync`의 rsync 성공 직후 **별도 메시지**로 공유→로컬 디렉터리 트리 파일 크기 일치 여부 검사. `status=ok` 또는 `error` (`extra.reason`, `mismatches`, `reference`, `mirror`, `file_count`, `bytes_total`, `rsync_elapsed_sec`, `verify_elapsed_sec` 등) |
+| `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 **로컬** 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`, `extra.artifact_bytes_total`, 원격 `stop` 경유 시 `extra.save_elapsed_sec`) |
+| `map_upload` | `map_saved` 직후 로컬 → 공유(`/mnt/rms_maps`) rsync. 시작(`extra.src/dst`), **rsync** 완료(`status=ok`, `extra.elapsed_sec`), rsync 실패(`status=error`, `extra.reason`, `extra.exit_code`). 업로드 옵션은 `sync.rsync_upload_options`(기본 `-a --no-owner --no-group`). 바이트 검증은 `map_upload_verify` 참고. |
+| `map_upload_verify` | `map_upload`의 rsync 성공 직후 **별도 메시지**. 로컬 `src`와 공유 `dst` 트리의 파일 크기 일치 검사. 필드는 `sync_verify`와 유사하며 `sub_map_name`이 포함된다. |
 
 매핑 `stop` 의 `extra.save_elapsed_sec` 은 오케스트레이터가 SIGINT 를 보낸 시점부터 `ros2 launch` 종료까지의 초이며, 사실상 `[pcd] final map save (shutdown) took ... s` 와 거의 일치한다(SIGINT 전파·rclcpp shutdown 오버헤드 포함). `_poll_process_exit` 경로(원격 stop 없이 launch 가 스스로 끝났을 때)에서는 `save_elapsed_sec` 이 포함되지 않는다.
 
@@ -279,9 +281,11 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 }
 ```
 
-#### 4-1) 공유 경로 업로드 — `event="map_upload"`
+#### 4-1) 공유 경로 업로드 — `event="map_upload"` + `event="map_upload_verify"`
 
-`event="map_saved"` 직후 로컬 PCD 디렉터리를 `rsync` 로 `/mnt/rms_maps` 에 업로드한다. 기본 옵션은 NFS/CIFS 에서 흔한 **exit 23**(일부 파일·속성 전송 실패)을 줄이기 위해 `--no-owner --no-group` 을 포함한다. 실패 시 `extra.reason` 에 stderr 요약이 들어가며, 상세는 오케스트레이터 `journalctl` 로그에 전체 stderr/stdout 이 출력된다.
+`event="map_saved"` 직후 로컬 PCD 디렉터리를 `rsync` 로 `/mnt/rms_maps` 에 업로드한다. 기본 옵션은 NFS/CIFS 에서 흔한 **exit 23**(일부 파일·속성 전송 실패)을 줄이기 위해 `--no-owner --no-group` 을 포함한다. **rsync 실패** 시 `extra.reason` 에 stderr 요약이 들어가며, 상세는 오케스트레이터 `journalctl` 로그에 전체 stderr/stdout 이 출력된다.
+
+**rsync가 성공하면** 바로 이어서 용량 검증 결과만 담은 **`map_upload_verify`** 메시지가 **별도로** 한 번 더 발행된다(`map_upload` 완료 페이로드에는 검증 필드를 넣지 않음).
 
 시작:
 
@@ -311,6 +315,29 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "map_name": "site_a",
   "sub_map_name": "floor_2",
   "elapsed_sec": 10.284
+}
+```
+
+rsync 완료 직후 — 용량 검증 (`map_upload`와 분리된 메시지):
+
+```json
+{
+  "timestamp_unix": 1778477760.510,
+  "event": "map_upload_verify",
+  "status": "ok",
+  "message": "맵 업로드 후 공유 경로 파일 용량 검증을 통과했습니다.",
+  "mode": "mapping",
+  "map_name": "site_a",
+  "sub_map_name": "floor_2",
+  "reference": "/home/chang/.../PCD/site_a/floor_2",
+  "mirror": "/mnt/rms_maps/site_a/floor_2",
+  "file_count": 4,
+  "bytes_total": 11265456,
+  "matched_samples": [{"path": "floor_2.pcd", "bytes": 5516827}],
+  "mismatches": [],
+  "samples_truncated": false,
+  "rsync_elapsed_sec": 10.284,
+  "verify_elapsed_sec": 0.012
 }
 ```
 
@@ -347,7 +374,9 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 }
 ```
 
-#### 6) 맵 동기화 — `event="sync"` 시작 → 완료
+#### 6) 맵 동기화 — `event="sync"` 시작 → rsync 완료 → `event="sync_verify"`
+
+**rsync가 성공하면** `sync` 완료 메시지 다음에 **`sync_verify`** 가 **별도 메시지**로 발행되어 공유→로컬 파일 크기 일치를 보고한다.
 
 시작:
 
@@ -373,6 +402,28 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
   "mode": "idle",
   "map_name": "site_a",
   "elapsed_sec": 12.345
+}
+```
+
+rsync 완료 직후 — 용량 검증 (`sync`와 분리된 메시지):
+
+```json
+{
+  "timestamp_unix": 1778477032.360,
+  "event": "sync_verify",
+  "status": "ok",
+  "message": "맵 동기화 후 파일 용량 검증을 통과했습니다.",
+  "mode": "idle",
+  "map_name": "site_a",
+  "reference": "/mnt/rms_maps/site_a",
+  "mirror": "/path/to/LIGO/PCD/site_a",
+  "file_count": 12,
+  "bytes_total": 45000000,
+  "matched_samples": [],
+  "mismatches": [],
+  "samples_truncated": true,
+  "rsync_elapsed_sec": 12.345,
+  "verify_elapsed_sec": 0.045
 }
 ```
 
