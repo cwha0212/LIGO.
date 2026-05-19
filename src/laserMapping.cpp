@@ -3052,7 +3052,7 @@ int main(int argc, char** argv)
                     ligo::indoor::ensureIndoorGICPMapFromGridEcef(p_ecef);
                 }
             }
-            // Indoor GICP first when possible so reference map can latch T^{-1} before first /indoor/map_cloud.
+            // Indoor GICP when icp_tf_ready: optional one-shot LIO→ENU snap after first converged+quality pass.
             if (!mapping_mode && indoor_flag_dynamic &&
                 indoor_gicp_map_loaded && p_nmea && p_nmea->icp_tf_ready &&
                 feats_down_world && !feats_down_world->empty())
@@ -3072,6 +3072,24 @@ int main(int argc, char** argv)
                     indoor_gicp_T_map_lidar,
                     lidar_end_time,
                     pubIndoorMap2d);
+
+                if (indoor_gicp_lio_enu_snap_requested && p_nmea->icp_tf_ready && indoor_pose_valid) {
+                    const Eigen::Matrix3d R_g =
+                        indoor_rot_enu_meas.normalized().toRotationMatrix();
+                    const Eigen::Vector3d p_g = indoor_pos_enu_meas;
+                    const Eigen::Matrix3d R_l = kf_output.x_.rot;
+                    const Eigen::Vector3d p_l = kf_output.x_.pos;
+                    p_nmea->icp_R_local_to_enu = R_g * R_l.transpose();
+                    p_nmea->icp_t_local_to_enu =
+                        p_g - p_nmea->icp_R_local_to_enu * p_l;
+                    indoor_gicp_lio_enu_snap_applied = true;
+                    indoor_gicp_lio_enu_snap_requested = false;
+                    RCLCPP_WARN(
+                        rclcpp::get_logger("ligo"),
+                        "[indoor/gicp] LIO→ENU ICP one-shot snap: first converged+quality GICP "
+                        "(ENU %.2f, %.2f, %.2f m)",
+                        p_g.x(), p_g.y(), p_g.z());
+                }
 
             }
             else

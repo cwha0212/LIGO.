@@ -108,6 +108,7 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 실내 플래그, 그리드 맵 경로, GICP 임계·복셀·반복 횟수, GTSAM 실내 포즈 노이즈 등. `indoor.grid_map_dir`은 상대 경로일 때 패키지 소스 또는 `share/ligo`로 해석된다. 실내 scan-to-map GICP는 **`ligo_mapping`** 바이너리에서 C++로 수행한다 (별도 Python 노드 없음).
 
 - **odometry 모드**에서는 기본적으로 `indoor.grid_map_dir`·수동 `indoor.map_pcd_path` 대신 map 그룹 디렉터리 **`PCD/<map_name>/`** 를 사용합니다. `indoor.map_name_for_odometry`(런치 인자 `indoor_map_name`)가 우선이며, 비어 있으면 `pcd_save.map_name`을 사용합니다. 해당 디렉터리 아래 sub-map(`*_grid2d.yaml`)들을 재귀로 전부 로드합니다.
+- **`gicp_snap_lio_enu_on_first_convergence`** (기본 `true`): small_gicp가 처음으로 **수렴(`converged`)이면서** 품질 게이트(`gicp_max_factor_error`, `gicp_min_factor_inliers`)를 통과할 때, `NMEAProcess`의 LIO→ENU 변환(`icp_R_local_to_enu`, `icp_t_local_to_enu`)을 한 번 갱신하여 `/aft_mapped_to_init` 등 **ENU로 나가는 LIO 포즈**가 그 시점의 GICP ENU 측정과 일치하도록 맞춘다. 세션당 1회이며 `resetIndoorGICP()`·새 PCD 로드 시 초기화된다.
 
 ## 루트 파라미터 (YAML에 평탄하게 둘 수 있음)
 

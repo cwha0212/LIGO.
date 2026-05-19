@@ -223,6 +223,9 @@ double indoor_gicp_map_voxel_m = 0.5;
 double indoor_gicp_scan_voxel_m = 0.5;
 int    indoor_gicp_max_iterations_reg = 50;
 bool indoor_gicp_align_reference_map_to_lio = true;
+bool indoor_gicp_snap_lio_enu_on_first_convergence = true;
+bool indoor_gicp_lio_enu_snap_applied = false;
+bool indoor_gicp_lio_enu_snap_requested = false;
 double indoor_gicp_factor_sqrt_info_scale = 1.0;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
@@ -477,6 +480,8 @@ void readParameters(rclcpp::Node * node)
     indoor_gicp_max_iterations_reg = get_param("indoor.gicp_max_iterations", 50);
     indoor_gicp_align_reference_map_to_lio =
         get_param("indoor.gicp_align_reference_map_to_lio", true);
+    indoor_gicp_snap_lio_enu_on_first_convergence =
+        get_param("indoor.gicp_snap_lio_enu_on_first_convergence", true);
     indoor_gicp_factor_sqrt_info_scale = get_param("indoor.gicp_factor_sqrt_info_scale", 1.0);
     if (indoor_gicp_factor_sqrt_info_scale < 1e-9) indoor_gicp_factor_sqrt_info_scale = 1e-9;
     cout << "indoor.gicp_factor_sqrt_info_scale: " << indoor_gicp_factor_sqrt_info_scale << endl;
