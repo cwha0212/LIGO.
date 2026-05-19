@@ -27,9 +27,13 @@ topic = resolve_topic("control_mode")
 #     "command": "stop",
 # }
 
+# payload = {
+#   "command": "synchronization",
+#   "map_name": "site_a"
+# }
+
 payload = {
-  "command": "synchronization",
-  "map_name": "site_a"
+  "command": "ready"
 }
 
 # payload = {"command": "stop"}

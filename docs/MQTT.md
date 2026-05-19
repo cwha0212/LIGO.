@@ -151,9 +151,31 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 { "command": "stop" }
 ```
 
+#### 보드 준비 확인
+
+`control/mode`에 publish하면 `mode_status`로 응답한다. idle이면 `ready=true`, mapping·odometry·sync 진행 중이면 `ready=false`(`status=busy`). **작업 중에도 거부되지 않는다.**
+
+```json
+{ "command": "ready" }
+```
+
+응답 예 (idle):
+
+```json
+{
+  "timestamp_unix": 1778477000.0,
+  "event": "ready",
+  "status": "ok",
+  "message": "보드가 준비되었습니다.",
+  "mode": "idle",
+  "map_name": "",
+  "ready": true
+}
+```
+
 ### 단일 작업 정책 (running 중 거부)
 
-오케스트레이터는 동시에 **하나의 작업**만 수행한다. mapping·odometry 실행 중이거나 동기화(`sync`)가 진행 중이면, **`stop`을 제외한 모든 명령**(`start`(mapping/odometry), `synchronization`)은 즉시 거부되고 다음 형태의 에러가 발행된다.
+오케스트레이터는 동시에 **하나의 작업**만 수행한다. mapping·odometry 실행 중이거나 동기화(`sync`)가 진행 중이면, **`stop`·`ready`를 제외한 명령**(`start`(mapping/odometry), `synchronization`)은 즉시 거부되고 다음 형태의 에러가 발행된다.
 
 - `event`: 거부 대상에 따라 `start` 또는 `sync`
 - `status`: `error`
@@ -169,7 +191,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 | `event` | 의미 |
 |---------|------|
-| `ready` | 구독 완료, 제어 대기 |
+| `ready` | `{"command":"ready"}` 요청에 대한 보드 준비 상태 (`ready` 필드, 작업 중이면 `running`) |
 | `start` | 런치 시작 |
 | `stop` | stop 또는 서비스 종료로 프로세스 종료 시도 완료 |
 | `ended` | 하위 launch 프로세스 종료 (`exit_code`) |
@@ -188,20 +210,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 오케스트레이터 기동부터 mapping → 종료까지 시간순으로 발행되는 `mode_status` 메시지 예시. `timestamp_unix` 는 가독성을 위해 짧게 표기.
 
-#### 1) 오케스트레이터 기동 직후 — `event="ready"`
-
-```json
-{
-  "timestamp_unix": 1778477000.000,
-  "event": "ready",
-  "status": "ok",
-  "message": "모드 제어 대기 중입니다.",
-  "mode": "idle",
-  "map_name": ""
-}
-```
-
-#### 2) Mapping 시작 — `event="start"`
+#### 1) Mapping 시작 — `event="start"`
 
 `extra.pid`는 `ros2 launch` 프로세스, `extra.command`는 실제 실행된 커맨드.
 

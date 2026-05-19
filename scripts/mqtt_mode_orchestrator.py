@@ -287,20 +287,18 @@ class ModeOrchestrator:
         sub_rc = sub_result[0] if isinstance(sub_result, tuple) and sub_result else sub_result
         if int(sub_rc) != int(mqtt.MQTT_ERR_SUCCESS):
             self._publish_status(
-                event="ready",
+                event="control",
                 status="error",
                 message=f"제어 토픽 구독 실패: rc={sub_rc}",
             )
             print(f"[ERROR] MQTT subscribe 실패: topic={self.mqtt_control_topic}, rc={sub_rc}")
             return
         print(f"[INFO] MQTT 구독 완료: {self.mqtt_control_topic}")
-        # 재연결이라면 끊긴 동안 쌓인 상태 메시지를 먼저 flush. 그 뒤 ready 발행.
         with self._pending_lock:
             pending_count = len(self._pending_status)
             self._flush_pending_status_locked()
         if pending_count > 0:
             print(f"[INFO] 끊김 동안 쌓인 상태 메시지 {pending_count}건 flush 시도")
-        self._publish_status(event="ready", status="ok", message="모드 제어 대기 중입니다.")
 
     def _on_disconnect(self, client, userdata, *args) -> None:
         reason_code = args[1] if len(args) >= 2 else (args[0] if len(args) == 1 else None)
@@ -831,6 +829,9 @@ class ModeOrchestrator:
         if command == "stop":
             return ParsedControl(kind="stop")
 
+        if command == "ready":
+            return ParsedControl(kind="ready")
+
         if command == "synchronization":
             map_name = obj.get("map_name")
             if not _is_valid_map_name(map_name):
@@ -843,7 +844,7 @@ class ModeOrchestrator:
         if command not in ("", "start"):
             return ParsedControl(
                 kind="error",
-                error="command는 start, stop, synchronization 중 하나여야 합니다.",
+                error="command는 start, stop, ready, synchronization 중 하나여야 합니다.",
             )
 
         mapping_mode = obj.get("mapping_mode")
@@ -1088,12 +1089,62 @@ class ModeOrchestrator:
         )
         print(f"[WARN] rejected {parsed.kind!r}: busy={busy}")
 
+    def _build_ready_payload(self) -> dict:
+        """보드 준비 상태 스냅샷. idle 이면 ready=true, 작업 중이면 ready=false."""
+        busy = self._busy_snapshot()
+        with self._lock:
+            mode = self.state.mode
+            map_name = self.state.map_name
+        if busy is None:
+            return {
+                "timestamp_unix": time.time(),
+                "event": "ready",
+                "status": "ok",
+                "message": "보드가 준비되었습니다.",
+                "ready": True,
+                "mode": mode,
+                "map_name": map_name,
+            }
+        running = str(busy.get("running", "unknown"))
+        return {
+            "timestamp_unix": time.time(),
+            "event": "ready",
+            "status": "busy",
+            "message": f"현재 {running} 작업이 진행 중입니다.",
+            "ready": False,
+            "mode": running if running in ("mapping", "odometry") else mode,
+            "map_name": busy.get("map_name", map_name),
+            "running": busy,
+        }
+
+    def _publish_ready_response(self) -> None:
+        payload = self._build_ready_payload()
+        extra: dict[str, Any] = {"ready": payload["ready"]}
+        if "running" in payload:
+            extra["running"] = payload["running"]
+        self._publish_status(
+            event="ready",
+            status=payload["status"],
+            message=payload["message"],
+            mode=str(payload.get("mode", "idle")),
+            map_name=str(payload.get("map_name", "")),
+            extra=extra,
+        )
+        print(
+            f"[INFO] ready 응답 발행: ready={payload.get('ready')}, status={payload.get('status')}"
+        )
+
     def _on_message(self, client, userdata, msg) -> None:
         payload = msg.payload.decode("utf-8", errors="replace")
         parsed = self._parse_control(payload)
         if parsed.error:
             self._publish_status(event="control", status="error", message=parsed.error)
             print(f"[WARN] invalid control message: {parsed.error}, payload={payload}")
+            return
+
+        if parsed.kind == "ready":
+            print(f"[INFO] ready 확인 요청 수신: payload={payload!r}")
+            self._publish_ready_response()
             return
 
         if parsed.kind == "stop":
