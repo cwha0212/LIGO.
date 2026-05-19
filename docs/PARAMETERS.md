@@ -81,6 +81,9 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 |----|------|
 | `force_indoor_on_high_cov` | NMEA 공분산이 `indoor_high_cov_threshold` 이상이면 실내 reloc 트리거 허용 (기본 `true`) |
 | `indoor_high_cov_threshold` | 위 판정에 쓰는 공분산 임계 (대각 `pose.covariance` 스케일, 기본 `50`) |
+| `factor_sqrt_info_scale` | `NMEAFactor`의 `relative_sqrt_info` 스케일 (≥0). **`indoor.gicp_factor_sqrt_info_scale`과 동일한 “sqrt 정보 행렬 스케일” 의미** |
+| `nmea_weight` | (레거시) `factor_sqrt_info_scale`이 비어 있거나 음수일 때만 사용. 신규 설정은 `factor_sqrt_info_scale` 권장 |
+| NavSatFix 고도 | `nmea_input_type: navsatfix`일 때 전역 고도는 **0 m로 처리** (ENU/ECEF 변환·그래프 관측). LIO 상태의 z는 LiDAR/IMU로 유지 |
 | 기타 | `nmea_enable`, `posit_odo_topic`, `ppp_std_thres`, 앵커/ICP 초기화 등 — `config/avia.yaml` 및 `readParameters()` 참고 |
 
 - **제거됨**: 미사용 프로파일 버퍼 `s_plot` / `s_plot3` / `MAXN` (런타임에 읽지 않음).

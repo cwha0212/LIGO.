@@ -85,10 +85,11 @@
       nmea_enable: true
       posit_odo_topic: "/ublox_driver/receiver_lla"
       nmea_input_type: "navsatfix"
-      ppp_std_thres: 20.0
+      # NavSatFix→ENU: 전역 고도는 사용하지 않음(0 m). LIO 맵의 z는 LiDAR/IMU 기준 유지.
+      ppp_std_thres: 100.0
       # 높은 NMEA 공분산(실내 등)일 때 indoor reloc 트리거 허용 (기존 하드코딩 상수 대체)
       force_indoor_on_high_cov: true
-      indoor_high_cov_threshold: 50.0
+      indoor_high_cov_threshold: 300.0
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
       init_min_lio_total_move_m: 10.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
       init_min_nmea_total_move_m: 10.0
@@ -102,7 +103,8 @@
       pos_noise_z: 0.1
       rot_noise: 1.0
       vel_noise: 1.0
-      nmea_weight: 2000.0 
+      # NMEAFactor relative_sqrt_info; 실내 `indoor.gicp_factor_sqrt_info_scale`와 동일한 스케일 의미
+      factor_sqrt_info_scale: 5.0
       nmea_local_time_diff: 0.0
       nmea_gps_latency: 0.0
       ppp_file_name: "deg2.pos"
@@ -144,7 +146,7 @@
       # GTSAM IndoorLocalizationFactor 잔차 스케일(values[16] relative_sqrt_info). 1.0=기본, 크게 할수록 GICP 측위를 그래프에서 더 강하게 반영(비용은 대략 스케일²).
       gicp_factor_sqrt_info_scale: 5.0
       # true: 첫 GICP 후 참조 PCD/2D맵을 T^{-1}로 밀어 raw LIO(map)와 겹침; GICP 전에는 /indoor/map_cloud 미발행(icp 준비 시).
-      gicp_align_reference_map_to_lio: false
+      gicp_align_reference_map_to_lio: true
       # Noise models for IndoorLocalizationFactor in the GTSAM graph.
       pos_noise: 0.2         # (m) horizontal
       pos_noise_z: 0.5       # (m) vertical

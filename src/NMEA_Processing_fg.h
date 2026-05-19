@@ -132,6 +132,7 @@ class NMEAProcess
   bool graphAnchorEnu(Eigen::Vector3d &out) const;
   state_output state_const_;
   state_output state_const_last;
+  /** NMEAFactor `relative_sqrt_info`; YAML `nmea.factor_sqrt_info_scale` (fallback: `nmea.nmea_weight`). */
   double nmea_weight = 1.0;
   // NMEA-LIO init guard: run ICP only after cumulative motion from start.
   bool init_start_set = false;

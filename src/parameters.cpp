@@ -367,7 +367,26 @@ void readParameters(rclcpp::Node * node)
   if (NMEA_ENABLE)
   {
     p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
-    p_nmea->nmea_weight = get_param("nmea.nmea_weight", 0.1);
+    {
+      const double factor_scale = get_param("nmea.factor_sqrt_info_scale", -1.0);
+      if (factor_scale >= 0.0)
+      {
+        p_nmea->nmea_weight = std::max(1e-9, factor_scale);
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "nmea.factor_sqrt_info_scale: %.6f (NMEAFactor relative_sqrt_info; same role as indoor.gicp_factor_sqrt_info_scale)",
+            p_nmea->nmea_weight);
+      }
+      else
+      {
+        p_nmea->nmea_weight = std::max(1e-9, get_param("nmea.nmea_weight", 0.1));
+        RCLCPP_WARN(
+            rclcpp::get_logger("ligo"),
+            "nmea.factor_sqrt_info_scale unset or negative: using legacy nmea.nmea_weight=%.6f. "
+            "Set nmea.factor_sqrt_info_scale (>=0) to match indoor.gicp_factor_sqrt_info_scale naming.",
+            p_nmea->nmea_weight);
+      }
+    }
     nmea_meas_topic = get_param("nmea.posit_odo_topic", std::string("/mavros/local_position/odom"));
     nmea_input_type = get_param("nmea.nmea_input_type", std::string("odometry"));
     nmea_publish_stamp_diag = get_param("nmea.publish_stamp_diag", false);
