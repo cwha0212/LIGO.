@@ -85,17 +85,17 @@
       nmea_enable: true
       posit_odo_topic: "/ublox_driver/receiver_lla"
       nmea_input_type: "navsatfix"
-      ppp_std_thres: 20.0
+      ppp_std_thres: 300.0
       # 높은 NMEA 공분산(실내 등)일 때 indoor reloc 트리거 허용 (기존 하드코딩 상수 대체)
       force_indoor_on_high_cov: true
-      indoor_high_cov_threshold: 50.0
+      indoor_high_cov_threshold: 500.0
       # NMEA-LIO init guard: 누적 시작점 기준 이동거리 (둘 다 넘으면 ICP 1회 초기화)
       init_min_lio_total_move_m: 10.0   # 3m 조건 비활성화 - 처음~끝 전체 pair 확인용
       init_min_nmea_total_move_m: 10.0
       init_icp_max_iterations: 80
       init_icp_max_fitness: 50.0
       # LIO–NMEA init rotation: yaw_only (2D, default) | weighted_3d (Z-downweighted Kabsch; see z_weight / max_tilt_deg)
-      lio_align_rotation_mode: "weighted_3d"
+      lio_align_rotation_mode: "yaw_only"
       lio_align_z_weight: 1.0
       lio_align_max_tilt_deg: 10.0
       pos_noise: 0.1
