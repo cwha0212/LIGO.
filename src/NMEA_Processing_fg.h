@@ -55,8 +55,6 @@ class NMEAProcess
   ~NMEAProcess();
   
   void Reset();
-  /** Clear ISAM graph and init buffers for outdoor re-align; keep ICP local→ENU until NMEALIAlign replaces it. */
-  void ResetGraphClearingInitRetainIcp();
   void processNMEA(const nav_msgs::msg::Odometry::SharedPtr &gnss_meas, state_output &state);
   void SetInitFromLocalization(const Eigen::Vector3d &indoor_pos_enu,
                                const Eigen::Matrix3d &indoor_rot_enu,

@@ -119,45 +119,6 @@ void NMEAProcess::Reset()
   p_assign->isam = gtsam::ISAM2(parameters);
 }
 
-void NMEAProcess::ResetGraphClearingInitRetainIcp()
-{
-  RCLCPP_WARN(rclcpp::get_logger("ligo"),
-              "Reset NMEA graph for outdoor re-align (retain ICP local→ENU until new alignment)");
-  p_assign->change_ext = 1;
-  p_assign->gtSAMgraph.resize(0);
-  p_assign->initialEstimate.clear();
-  p_assign->isamCurrentEstimate.clear();
-  frame_delete = 0;
-  nmea_meas_.resize(WINDOW_SIZE + 1);
-  p_assign->factor_id_frame.clear();
-  id_accumulate = 0;
-  frame_num = 0;
-  last_nmea_time = 0.0;
-  frame_count = 0;
-  invalid_lidar = false;
-  // Keep: icp_R_local_to_enu, icp_t_local_to_enu, icp_tf_ready, anc_enu, anc_local, Rot_nmea_init, yaw_enu_local
-  sum_nmea_lio_err_sq_xy = 0.0;
-  n_nmea_fusion_count = 0;
-  diag_03m_valid = false;
-  icp_pairs_lio.clear();
-  icp_pairs_nmea_local.clear();
-  init_start_set = false;
-  init_start_lio.setZero();
-  init_start_nmea.setZero();
-  p_assign->process_feat_num = 0;
-  nmea_ready = false;
-  init_pos_buf.clear();
-  init_rot_buf.clear();
-  init_vel_buf.clear();
-  init_nmea_buf.clear();
-  init_lio_time_buf.clear();
-
-  gtsam::ISAM2Params parameters;
-  parameters.relinearizeThreshold = 0.1;
-  parameters.relinearizeSkip = 5;
-  p_assign->isam = gtsam::ISAM2(parameters);
-}
-
 void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_meas, state_output &state)
 {
   if (!nmea_ready)

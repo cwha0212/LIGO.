@@ -127,14 +127,6 @@ static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr
            msg->pose.covariance[7] >= threshold;
 }
 
-// Matches NMEAProcess::processNMEA gate for collecting alignment window (reject if horizontal diagonal > thr).
-static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
-                                                        double threshold)
-{
-    return msg->pose.covariance[0] <= threshold &&
-           msg->pose.covariance[7] <= threshold;
-}
-
 /** NMEA Odometry 위치: 전역 고도 미사용(xy, z=0). LIO z는 별도. */
 static inline Eigen::Vector3d ligo_nmea_odom_pos_xy_alt0(const nav_msgs::msg::Odometry &odom)
 {
@@ -175,49 +167,43 @@ static std::string ligo_json_escape(const std::string &s)
     return o;
 }
 
-static int nmea_outdoor_good_streak = 0;
-static bool nmea_cycle_reopen_pending = false;
-static std::atomic<bool> pending_outdoor_realign_ivox_reset{false};
+// Matches NMEAProcess::processNMEA init gate (horizontal [0],[7] vs ppp_std_threshold).
+static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
+                                                       double threshold)
+{
+    return msg->pose.covariance[0] <= threshold && msg->pose.covariance[7] <= threshold;
+}
 
-static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
+static int nmea_outdoor_gnss_good_streak = 0;
+
+/** When GNSS covariance is good outdoors, leave dynamic-indoor so AddFactor inserts NMEA obs again (no graph/IVox reset). */
+static void nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
 {
     if (!NMEA_ENABLE)
         return;
-    if (!p_nmea->nmea_ready || !indoor_reloc_applied_once)
+    if (!p_nmea->nmea_ready || !indoor_flag_dynamic)
+    {
+        nmea_outdoor_gnss_good_streak = 0;
         return;
+    }
     const double thr = p_nmea->p_assign->ppp_std_threshold;
     const int need = p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size;
     if (!nmeaCovarianceAcceptableForNmeaInit(nmea_cur, thr))
     {
-        nmea_outdoor_good_streak = 0;
+        nmea_outdoor_gnss_good_streak = 0;
         return;
     }
-    nmea_outdoor_good_streak++;
-    if (nmea_outdoor_good_streak >= need)
+    nmea_outdoor_gnss_good_streak++;
+    if (nmea_outdoor_gnss_good_streak >= need)
     {
-        RCLCPP_WARN(rclcpp::get_logger("ligo"),
-                    "NMEA outdoor re-align: graph reset after %d good-covariance samples (ICP retained; IVox reset deferred)",
-                    nmea_outdoor_good_streak);
-        p_nmea->ResetGraphClearingInitRetainIcp();
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "[nmea/outdoor] end dynamic indoor after %d good-covariance GNSS samples — NMEA factors resume (no NMEA graph/IVox reset)",
+            nmea_outdoor_gnss_good_streak);
         indoor_flag_dynamic = false;
         ligo::indoor::resetIndoorGICP();
-        nmea_cycle_reopen_pending = true;
-        nmea_outdoor_good_streak = 0;
+        nmea_outdoor_gnss_good_streak = 0;
     }
-}
-
-static void nmeaClearCycleIfRealignComplete()
-{
-    if (!nmea_cycle_reopen_pending || !p_nmea->nmea_ready)
-        return;
-    indoor_reloc_applied_once = false;
-    nmea_cycle_reopen_pending = false;
-    nmea_outdoor_good_streak = 0;
-    indoor_flag_dynamic = false;
-    ligo::indoor::resetIndoorGICP();
-    pending_outdoor_realign_ivox_reset.store(true, std::memory_order_release);
-    RCLCPP_INFO(rclcpp::get_logger("ligo"),
-                "Outdoor re-align complete: scheduling deferred IVox/traj reset; indoor GICP cleared");
 }
 
 void pointBodyLidarToIMU(PointType const * const pi, PointType * const po)
@@ -1945,17 +1931,6 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
-            if (pending_outdoor_realign_ivox_reset.exchange(false, std::memory_order_acq_rel))
-            {
-                RCLCPP_WARN(rclcpp::get_logger("ligo"),
-                            "Outdoor re-align: applying deferred IVox + trajectory map reset (LIO/KF/IMU unchanged)");
-                if (NMEA_ENABLE && traj_manager)
-                    traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
-                ivox_ = std::make_shared<IVoxType>(ivox_options_);
-                ivox_last_ = std::make_shared<IVoxType>(ivox_options_);
-                traj_manager.reset(new curvefitter::TrajectoryManager<4>());
-                init_map = false;
-            }
             if (g_pending_indoor_topic_snap.load(std::memory_order_acquire) && !flg_reset && !mapping_mode)
             {
                 if (ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
@@ -2371,7 +2346,7 @@ int main(int argc, char** argv)
                                     double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat - time_predict_last_const;
                                     double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat - time_update_last;
 
-                                    nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+                                    nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(nmea_cur);
 
                                     if (!p_nmea->nmea_ready)
                                     {
@@ -2384,7 +2359,6 @@ int main(int argc, char** argv)
                                         time_update_last = time_predict_last_const;
                                         state_out = kf_output.x_;
                                         p_nmea->processNMEA(nmea_cur, state_out);
-                                        nmeaClearCycleIfRealignComplete();
                                     }
                                     else
                                     {
@@ -2562,7 +2536,7 @@ int main(int argc, char** argv)
                             double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_predict_last_const;
                             double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_update_last;
 
-                            nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+                            nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(nmea_cur);
 
                             if (!p_nmea->nmea_ready)
                             {
@@ -2575,7 +2549,6 @@ int main(int argc, char** argv)
                                 time_update_last = time_predict_last_const;
                                 state_out = kf_output.x_;
                                 p_nmea->processNMEA(nmea_cur, state_out);
-                                nmeaClearCycleIfRealignComplete();
                             }
                             else
                             {
@@ -2856,7 +2829,7 @@ int main(int argc, char** argv)
                             double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 - time_predict_last_const;
                             double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 - time_update_last;
 
-                            nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+                            nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(nmea_cur);
 
                             if (!p_nmea->nmea_ready)
                             {
@@ -2868,7 +2841,6 @@ int main(int argc, char** argv)
                                 kf_output.predict(dt, Q_output, input_in, true, false);
                                 time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
-                                nmeaClearCycleIfRealignComplete();
                             }
                             else
                             {
