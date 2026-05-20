@@ -144,15 +144,15 @@
       gicp_scan_voxel_m: 0.5
       gicp_max_iterations: 50
       # GTSAM IndoorLocalizationFactor 잔차 스케일(values[16] relative_sqrt_info). 1.0=기본, 크게 할수록 GICP 측위를 그래프에서 더 강하게 반영(비용은 대략 스케일²).
-      gicp_factor_sqrt_info_scale: 5.0
+      gicp_factor_sqrt_info_scale: 200.0
       # true: GICP가 수렴(또는 충분한 시도)될 때까지 /indoor/map_cloud 지연; 참조 맵은 고정 좌표, 포즈·정렬 스캔은 GICP 결과로 이동.
       gicp_align_reference_map_to_lio: true
       # true: small_gicp가 처음으로 converged+품질통과할 때 LIO→ENU(icp_R/icp_t)를 한 번 맞춤 → ENU odometry가 GICP 포즈와 일치.
       gicp_snap_lio_enu_on_first_convergence: true
       # Noise models for IndoorLocalizationFactor in the GTSAM graph.
-      pos_noise: 0.2         # (m) horizontal
-      pos_noise_z: 0.5       # (m) vertical
-      rot_noise: 0.05        # (rad)
+      pos_noise: 0.002         # (m) horizontal
+      pos_noise_z: 0.005       # (m) vertical
+      rot_noise: 0.005        # (rad)
       # Outlier rejection (Cauchy robust kernel)
       outlier_rejection: false
       outlier_thres: 0.3
