@@ -53,7 +53,7 @@ namespace ligo {
  *
  * Input format is typed (same style as NmeaLioGravRelFactor / IndoorLocalizationFactor):
  *   Tex_imu_r, anc_local, pos_meas (ENU), vel_meas (ENU), rot_meas (ENU, Eigen::Matrix3d),
- *   relative_sqrt_info, hat_omg_T, Rex_imu_r.
+ *   relative_sqrt_info (YAML: nmea.factor_sqrt_info_scale, stored in NMEAProcess::nmea_weight), hat_omg_T, Rex_imu_r.
  *
  * Predicted ENU pose (identical chain to IndoorLocalizationFactor):
  *   P_enu = R_enu_local * (R * Tex_imu_r + p_body - anc_local) + ref_enu

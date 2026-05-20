@@ -97,7 +97,7 @@
       pos_noise_z: 1.0
       rot_noise: 5.0
       vel_noise: 5.0
-      nmea_weight: 20000.0 
+      factor_sqrt_info_scale: 20000.0
       nmea_local_time_diff: 0.0
       nmea_gps_latency: 0.0
       ppp_file_name: "deg2.pos"

@@ -174,8 +174,16 @@ extern double indoor_gicp_max_correspondence_m;
 extern double indoor_gicp_map_voxel_m;
 extern double indoor_gicp_scan_voxel_m;
 extern int    indoor_gicp_max_iterations_reg;
-/** If true: defer first /indoor/map_cloud until one GICP result, then shift PCD by T_map_lidar^{-1} so it matches raw LIO in map (same frame as pre-indoor map). */
+/** If true: defer first /indoor/map_cloud until GICP warms up (converged or enough frames).
+ *  Reference PCD/2D map stay in native map frame; GICP drives pose and aligned-scan viz (no T^{-1} map shift). */
 extern bool indoor_gicp_align_reference_map_to_lio;
+/** If true: first small_gicp converged+quality pass requests a one-shot update of NMEAProcess LIO→ENU
+ *  (icp_R_local_to_enu / icp_t_local_to_enu) so published ENU pose matches GICP (same frame as factor meas). */
+extern bool indoor_gicp_snap_lio_enu_on_first_convergence;
+/** Runtime: snap already applied this indoor GICP session (cleared by resetIndoorGICP / new map load). */
+extern bool indoor_gicp_lio_enu_snap_applied;
+/** Set by runIndoorGICPUpdate; laserMapping applies and clears. */
+extern bool indoor_gicp_lio_enu_snap_requested;
 /** IndoorLocalizationFactor `relative_sqrt_info` (values[16]); measurement is GICP-refined ENU pose only. */
 extern double indoor_gicp_factor_sqrt_info_scale;
 extern MeasureGroup Measures;

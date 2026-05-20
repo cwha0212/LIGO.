@@ -81,6 +81,9 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 |----|------|
 | `force_indoor_on_high_cov` | NMEA 공분산이 `indoor_high_cov_threshold` 이상이면 실내 reloc 트리거 허용 (기본 `true`) |
 | `indoor_high_cov_threshold` | 위 판정에 쓰는 공분산 임계 (대각 `pose.covariance` 스케일, 기본 `50`) |
+| `factor_sqrt_info_scale` | `NMEAFactor`의 `relative_sqrt_info` 스케일 (≥0). **`indoor.gicp_factor_sqrt_info_scale`과 동일한 “sqrt 정보 행렬 스케일” 의미** |
+| `nmea_weight` | (레거시) `factor_sqrt_info_scale`이 비어 있거나 음수일 때만 사용. 신규 설정은 `factor_sqrt_info_scale` 권장 |
+| NavSatFix 고도 | `nmea_input_type: navsatfix`일 때 전역 고도는 **0 m로 처리** (ENU/ECEF 변환·그래프 관측). LIO 상태의 z는 LiDAR/IMU로 유지 |
 | 기타 | `nmea_enable`, `posit_odo_topic`, `ppp_std_thres`, 앵커/ICP 초기화 등 — `config/avia.yaml` 및 `readParameters()` 참고 |
 
 - **제거됨**: 미사용 프로파일 버퍼 `s_plot` / `s_plot3` / `MAXN` (런타임에 읽지 않음).
@@ -105,6 +108,7 @@ YAML 네임스페이스 이름은 `gnss`이지만, **raw GNSS obs 파이프라�
 실내 플래그, 그리드 맵 경로, GICP 임계·복셀·반복 횟수, GTSAM 실내 포즈 노이즈 등. `indoor.grid_map_dir`은 상대 경로일 때 패키지 소스 또는 `share/ligo`로 해석된다. 실내 scan-to-map GICP는 **`ligo_mapping`** 바이너리에서 C++로 수행한다 (별도 Python 노드 없음).
 
 - **odometry 모드**에서는 기본적으로 `indoor.grid_map_dir`·수동 `indoor.map_pcd_path` 대신 map 그룹 디렉터리 **`PCD/<map_name>/`** 를 사용합니다. `indoor.map_name_for_odometry`(런치 인자 `indoor_map_name`)가 우선이며, 비어 있으면 `pcd_save.map_name`을 사용합니다. 해당 디렉터리 아래 sub-map(`*_grid2d.yaml`)들을 재귀로 전부 로드합니다.
+- **`gicp_snap_lio_enu_on_first_convergence`** (기본 `true`): small_gicp가 처음으로 **수렴(`converged`)이면서** 품질 게이트(`gicp_max_factor_error`, `gicp_min_factor_inliers`)를 통과할 때, `NMEAProcess`의 LIO→ENU 변환(`icp_R_local_to_enu`, `icp_t_local_to_enu`)을 한 번 갱신하여 `/aft_mapped_to_init` 등 **ENU로 나가는 LIO 포즈**가 그 시점의 GICP ENU 측정과 일치하도록 맞춘다. 세션당 1회이며 `resetIndoorGICP()`·새 PCD 로드 시 초기화된다.
 
 ## 루트 파라미터 (YAML에 평탄하게 둘 수 있음)
 

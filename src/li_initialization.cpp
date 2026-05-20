@@ -143,7 +143,8 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         return;
     }
 
-    nmea_last_raw_lla << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
+    // NMEA 전역 입력: 고도는 사용하지 않음(0 m 가정). LIO 추정 z는 별도 경로에서 유지.
+    nmea_last_raw_lla << gpsMsg->latitude, gpsMsg->longitude, 0.0;
     nmea_last_raw_lla_valid = true;
 
     // Align NavSatFix timestamp base to LiDAR/IMU ROS(bag) time if needed.
@@ -167,7 +168,7 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
     if (!first_gps) {
         first_gps = true;
         Eigen::Vector3d geo;
-        geo << gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude;
+        geo << gpsMsg->latitude, gpsMsg->longitude, 0.0;
         first_gps_lla = geo;
         first_gps_ecef = gnss_comm::geo2ecef(geo);
         nmea_global_anchor_lla = first_gps_lla;
@@ -176,8 +177,10 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
             gnss_comm::geo2ecef(first_gps_lla),
             gnss_comm::geo2rotation(first_gps_lla));
     }
-    Eigen::Vector3d cur_ecef = gnss_comm::geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, gpsMsg->altitude));
+    Eigen::Vector3d cur_ecef =
+        gnss_comm::geo2ecef(Eigen::Vector3d(gpsMsg->latitude, gpsMsg->longitude, 0.0));
     trans_local_ = gnss_comm::ecef2enu(first_gps_lla, cur_ecef - first_gps_ecef);
+    trans_local_.z() = 0.0;
 
     nav_msgs::msg::Odometry gps_odom;
     if (nmea_stamp_offset_inited)

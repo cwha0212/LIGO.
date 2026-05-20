@@ -167,7 +167,7 @@ GNSS-only 모드(LiDAR 미사용)는 더 이상 지원하지 않는다. LIO 사�
 | `pos_meas` (`Vector3d`)       | `pos_lio` (LIO 상태)  | NMEA 측정(ENU)       | GICP 측정(ENU)             |
 | `vel_meas` (`Vector3d`)       | `vel_lio`             | NMEA 측정(또는 0)    | **인자 없음(미사용)**     |
 | `rot_meas` (`Matrix3d`)       | `rot_lio`             | NMEA 측정(또는 0)    | GICP 측정                  |
-| `relative_sqrt_info` (`double`) | 별도(`sqrt_lidar`)  | `nmea_weight`        | `indoor_gicp_factor_sqrt_info_scale` |
+| `relative_sqrt_info` (`double`) | 별도(`sqrt_lidar`)  | `nmea.factor_sqrt_info_scale` → `NMEAProcess::nmea_weight` | `indoor.gicp_factor_sqrt_info_scale` |
 | `Rex_imu_r` (`Matrix3d`)      | 미사용                | ✓                    | ✓                          |
 
 > NMEA(navsatfix)는 NavSatFix → Odometry 브리지에서 twist/orientation을 채우지 못하므로 `position_only=true`로 설정되어 `vel_meas`, `rot_meas`가 잔차에서 제외된다. 즉 "회전이 없다"는 의미는 잔차에 들어가지 않는다는 뜻이며, 함수 시그니처상으로는 입력 슬롯이 동일하게 유지된다.

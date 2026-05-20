@@ -44,6 +44,14 @@
 #include <gtsam/linear/linearExceptions.h>
 #include <chrono>
 
+namespace {
+/** NMEA 전역 위치: 고도 미사용(0 m). xy만 관측으로 사용한다. */
+static Eigen::Vector3d nmea_position_meas_xy_alt0(const nav_msgs::msg::Odometry &odom)
+{
+  return Eigen::Vector3d(odom.pose.pose.position.x, odom.pose.pose.position.y, 0.0);
+}
+}  // namespace
+
 NMEAProcess::NMEAProcess()
 {
   Reset();
@@ -111,45 +119,6 @@ void NMEAProcess::Reset()
   p_assign->isam = gtsam::ISAM2(parameters);
 }
 
-void NMEAProcess::ResetGraphClearingInitRetainIcp()
-{
-  RCLCPP_WARN(rclcpp::get_logger("ligo"),
-              "Reset NMEA graph for outdoor re-align (retain ICP local→ENU until new alignment)");
-  p_assign->change_ext = 1;
-  p_assign->gtSAMgraph.resize(0);
-  p_assign->initialEstimate.clear();
-  p_assign->isamCurrentEstimate.clear();
-  frame_delete = 0;
-  nmea_meas_.resize(WINDOW_SIZE + 1);
-  p_assign->factor_id_frame.clear();
-  id_accumulate = 0;
-  frame_num = 0;
-  last_nmea_time = 0.0;
-  frame_count = 0;
-  invalid_lidar = false;
-  // Keep: icp_R_local_to_enu, icp_t_local_to_enu, icp_tf_ready, anc_enu, anc_local, Rot_nmea_init, yaw_enu_local
-  sum_nmea_lio_err_sq_xy = 0.0;
-  n_nmea_fusion_count = 0;
-  diag_03m_valid = false;
-  icp_pairs_lio.clear();
-  icp_pairs_nmea_local.clear();
-  init_start_set = false;
-  init_start_lio.setZero();
-  init_start_nmea.setZero();
-  p_assign->process_feat_num = 0;
-  nmea_ready = false;
-  init_pos_buf.clear();
-  init_rot_buf.clear();
-  init_vel_buf.clear();
-  init_nmea_buf.clear();
-  init_lio_time_buf.clear();
-
-  gtsam::ISAM2Params parameters;
-  parameters.relinearizeThreshold = 0.1;
-  parameters.relinearizeSkip = 5;
-  p_assign->isam = gtsam::ISAM2(parameters);
-}
-
 void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_meas, state_output &state)
 {
   if (!nmea_ready)
@@ -183,9 +152,7 @@ void NMEAProcess::processNMEA(const nav_msgs::msg::Odometry::SharedPtr &nmea_mea
     {
       init_start_set = true;
       init_start_lio = init_pos_buf.back();
-      init_start_nmea << nmea_meas->pose.pose.position.x,
-                         nmea_meas->pose.pose.position.y,
-                         nmea_meas->pose.pose.position.z;
+      init_start_nmea = nmea_position_meas_xy_alt0(*nmea_meas);
       RCLCPP_INFO(
           rclcpp::get_logger("ligo"),
           "[nmea/init] start set: lio=(%.3f,%.3f,%.3f) nmea=(%.3f,%.3f,%.3f)",
@@ -320,10 +287,7 @@ bool NMEAProcess::NMEALIAlign()
   if (n_valid < 2) return false;
 
   const Eigen::Vector3d lio_cur = init_pos_buf.back();
-  const Eigen::Vector3d nmea_cur(
-      init_nmea_buf.back()->pose.pose.position.x,
-      init_nmea_buf.back()->pose.pose.position.y,
-      init_nmea_buf.back()->pose.pose.position.z);
+  const Eigen::Vector3d nmea_cur = nmea_position_meas_xy_alt0(*init_nmea_buf.back());
   const double lio_total_move = (lio_cur - init_start_lio).norm();
   const double nmea_total_move = (nmea_cur - init_start_nmea).norm();
   if (lio_total_move < init_min_lio_total_move_m || nmea_total_move < init_min_nmea_total_move_m)
@@ -336,9 +300,7 @@ bool NMEAProcess::NMEALIAlign()
   for (int i = 0; i < n_valid; ++i)
   {
     lio_disp[i] = (init_pos_buf[i] - init_start_lio).norm();
-    const Eigen::Vector3d gv(init_nmea_buf[i]->pose.pose.position.x,
-                             init_nmea_buf[i]->pose.pose.position.y,
-                             init_nmea_buf[i]->pose.pose.position.z);
+    const Eigen::Vector3d gv = nmea_position_meas_xy_alt0(*init_nmea_buf[i]);
     gps_disp[i] = (gv - init_start_nmea).norm();
   }
   int first_lio_03 = -1, first_gps_03 = -1;
@@ -364,13 +326,9 @@ bool NMEAProcess::NMEALIAlign()
     auto get_nmea_at_time = [&](double t_want) -> Eigen::Vector3d {
       if (n_valid < 1) return Eigen::Vector3d::Zero();
       if (t_want <= rclcpp::Time(init_nmea_buf.front()->header.stamp).seconds())
-        return Eigen::Vector3d(init_nmea_buf.front()->pose.pose.position.x,
-                               init_nmea_buf.front()->pose.pose.position.y,
-                               init_nmea_buf.front()->pose.pose.position.z);
+        return nmea_position_meas_xy_alt0(*init_nmea_buf.front());
       if (t_want >= rclcpp::Time(init_nmea_buf.back()->header.stamp).seconds())
-        return Eigen::Vector3d(init_nmea_buf.back()->pose.pose.position.x,
-                               init_nmea_buf.back()->pose.pose.position.y,
-                               init_nmea_buf.back()->pose.pose.position.z);
+        return nmea_position_meas_xy_alt0(*init_nmea_buf.back());
       for (int j = 0; j + 1 < n_valid; ++j)
       {
         const double t0 = rclcpp::Time(init_nmea_buf[j]->header.stamp).seconds();
@@ -378,14 +336,12 @@ bool NMEAProcess::NMEALIAlign()
         if (t0 <= t_want && t_want <= t1)
         {
           const double alpha = (t1 - t0) > 1e-9 ? (t_want - t0) / (t1 - t0) : 0.0;
-          Eigen::Vector3d p0(init_nmea_buf[j]->pose.pose.position.x, init_nmea_buf[j]->pose.pose.position.y, init_nmea_buf[j]->pose.pose.position.z);
-          Eigen::Vector3d p1(init_nmea_buf[j + 1]->pose.pose.position.x, init_nmea_buf[j + 1]->pose.pose.position.y, init_nmea_buf[j + 1]->pose.pose.position.z);
+          const Eigen::Vector3d p0 = nmea_position_meas_xy_alt0(*init_nmea_buf[j]);
+          const Eigen::Vector3d p1 = nmea_position_meas_xy_alt0(*init_nmea_buf[j + 1]);
           return (1.0 - alpha) * p0 + alpha * p1;
         }
       }
-      return Eigen::Vector3d(init_nmea_buf.back()->pose.pose.position.x,
-                             init_nmea_buf.back()->pose.pose.position.y,
-                             init_nmea_buf.back()->pose.pose.position.z);
+      return nmea_position_meas_xy_alt0(*init_nmea_buf.back());
     };
     const double t_lio = init_lio_time_buf[first_lio_03];
     diag_03m_lio_pos = init_pos_buf[first_lio_03];
@@ -416,9 +372,7 @@ bool NMEAProcess::NMEALIAlign()
     return init_pos_buf.back();
   };
   auto get_nmea_pos = [&](int i) -> Eigen::Vector3d {
-    return Eigen::Vector3d(init_nmea_buf[i]->pose.pose.position.x,
-                           init_nmea_buf[i]->pose.pose.position.y,
-                           init_nmea_buf[i]->pose.pose.position.z);
+    return nmea_position_meas_xy_alt0(*init_nmea_buf[i]);
   };
   // 0.3m 이후 pair만: 보정된 시각(stamp-L)으로 LIO 보간 → 비슷한 시간대 (LIO(T-L), NMEA(stamp T))
   auto get_lio_corrected = [&](int i) -> Eigen::Vector3d {
@@ -783,10 +737,7 @@ bool NMEAProcess::AddFactor(Eigen::Vector3d state_gravity, double delta_t, doubl
     if (!indoor_gicp_replaces_nmea)
     {
       const bool nmea_navsatfix_pos_only = (nmea_input_type == "navsatfix");
-      const Eigen::Vector3d pos_meas(
-          nmea_meas_[0]->pose.pose.position.x,
-          nmea_meas_[0]->pose.pose.position.y,
-          nmea_meas_[0]->pose.pose.position.z);
+      const Eigen::Vector3d pos_meas = nmea_position_meas_xy_alt0(*nmea_meas_[0]);
       const Eigen::Vector3d vel_meas(
           nmea_meas_[0]->twist.twist.linear.x,
           nmea_meas_[0]->twist.twist.linear.y,

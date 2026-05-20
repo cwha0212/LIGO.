@@ -223,6 +223,9 @@ double indoor_gicp_map_voxel_m = 0.5;
 double indoor_gicp_scan_voxel_m = 0.5;
 int    indoor_gicp_max_iterations_reg = 50;
 bool indoor_gicp_align_reference_map_to_lio = true;
+bool indoor_gicp_snap_lio_enu_on_first_convergence = true;
+bool indoor_gicp_lio_enu_snap_applied = false;
+bool indoor_gicp_lio_enu_snap_requested = false;
 double indoor_gicp_factor_sqrt_info_scale = 1.0;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
@@ -367,7 +370,26 @@ void readParameters(rclcpp::Node * node)
   if (NMEA_ENABLE)
   {
     p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
-    p_nmea->nmea_weight = get_param("nmea.nmea_weight", 0.1);
+    {
+      const double factor_scale = get_param("nmea.factor_sqrt_info_scale", -1.0);
+      if (factor_scale >= 0.0)
+      {
+        p_nmea->nmea_weight = std::max(1e-9, factor_scale);
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "nmea.factor_sqrt_info_scale: %.6f (NMEAFactor relative_sqrt_info; same role as indoor.gicp_factor_sqrt_info_scale)",
+            p_nmea->nmea_weight);
+      }
+      else
+      {
+        p_nmea->nmea_weight = std::max(1e-9, get_param("nmea.nmea_weight", 0.1));
+        RCLCPP_WARN(
+            rclcpp::get_logger("ligo"),
+            "nmea.factor_sqrt_info_scale unset or negative: using legacy nmea.nmea_weight=%.6f. "
+            "Set nmea.factor_sqrt_info_scale (>=0) to match indoor.gicp_factor_sqrt_info_scale naming.",
+            p_nmea->nmea_weight);
+      }
+    }
     nmea_meas_topic = get_param("nmea.posit_odo_topic", std::string("/mavros/local_position/odom"));
     nmea_input_type = get_param("nmea.nmea_input_type", std::string("odometry"));
     nmea_publish_stamp_diag = get_param("nmea.publish_stamp_diag", false);
@@ -458,6 +480,8 @@ void readParameters(rclcpp::Node * node)
     indoor_gicp_max_iterations_reg = get_param("indoor.gicp_max_iterations", 50);
     indoor_gicp_align_reference_map_to_lio =
         get_param("indoor.gicp_align_reference_map_to_lio", true);
+    indoor_gicp_snap_lio_enu_on_first_convergence =
+        get_param("indoor.gicp_snap_lio_enu_on_first_convergence", true);
     indoor_gicp_factor_sqrt_info_scale = get_param("indoor.gicp_factor_sqrt_info_scale", 1.0);
     if (indoor_gicp_factor_sqrt_info_scale < 1e-9) indoor_gicp_factor_sqrt_info_scale = 1e-9;
     cout << "indoor.gicp_factor_sqrt_info_scale: " << indoor_gicp_factor_sqrt_info_scale << endl;

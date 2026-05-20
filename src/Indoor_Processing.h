@@ -69,7 +69,7 @@ void publishIndoorMapCloudOnly(
     const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub_map,
     double timestamp_sec,
     const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr& pub_occ_grid = nullptr,
-    /** When align_reference_map_to_lio: skip publish until GICP runs if this is true (same frame will publish after runIndoorGICPUpdate). */
+    /** When align_reference_map_to_lio: skip publish until GICP warms up if this is true (same frame can publish after runIndoorGICPUpdate). */
     bool defer_until_gicp_if_align = false);
 
 /** Publish indoor map (latched, first call or after map change) and GICP-aligned scan.

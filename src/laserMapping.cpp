@@ -127,12 +127,16 @@ static inline bool nmeaCovarianceIsHigh(const nav_msgs::msg::Odometry::SharedPtr
            msg->pose.covariance[7] >= threshold;
 }
 
-// Matches NMEAProcess::processNMEA gate for collecting alignment window (reject if horizontal diagonal > thr).
-static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
-                                                        double threshold)
+/** NMEA Odometry 위치: 전역 고도 미사용(xy, z=0). LIO z는 별도. */
+static inline Eigen::Vector3d ligo_nmea_odom_pos_xy_alt0(const nav_msgs::msg::Odometry &odom)
 {
-    return msg->pose.covariance[0] <= threshold &&
-           msg->pose.covariance[7] <= threshold;
+    return Eigen::Vector3d(odom.pose.pose.position.x, odom.pose.pose.position.y, 0.0);
+}
+
+/** ENU→ECEF 회전: 앵커 LLA 기준 (grid2d 메타·companion PCD와 일치). */
+static inline Eigen::Matrix3d ligo_map_R_ecef_enu_from_first_gps_anchor()
+{
+    return gnss_comm::geo2rotation(first_gps_lla);
 }
 
 static std::string ligo_json_escape(const std::string &s)
@@ -163,49 +167,43 @@ static std::string ligo_json_escape(const std::string &s)
     return o;
 }
 
-static int nmea_outdoor_good_streak = 0;
-static bool nmea_cycle_reopen_pending = false;
-static std::atomic<bool> pending_outdoor_realign_ivox_reset{false};
+// Matches NMEAProcess::processNMEA init gate (horizontal [0],[7] vs ppp_std_threshold).
+static inline bool nmeaCovarianceAcceptableForNmeaInit(const nav_msgs::msg::Odometry::SharedPtr &msg,
+                                                       double threshold)
+{
+    return msg->pose.covariance[0] <= threshold && msg->pose.covariance[7] <= threshold;
+}
 
-static void nmeaMaybeTriggerOutdoorRealignAfterIndoor(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
+static int nmea_outdoor_gnss_good_streak = 0;
+
+/** When GNSS covariance is good outdoors, leave dynamic-indoor so AddFactor inserts NMEA obs again (no graph/IVox reset). */
+static void nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(const nav_msgs::msg::Odometry::SharedPtr &nmea_cur)
 {
     if (!NMEA_ENABLE)
         return;
-    if (!p_nmea->nmea_ready || !indoor_reloc_applied_once)
+    if (!p_nmea->nmea_ready || !indoor_flag_dynamic)
+    {
+        nmea_outdoor_gnss_good_streak = 0;
         return;
+    }
     const double thr = p_nmea->p_assign->ppp_std_threshold;
     const int need = p_nmea->wind_size < 1 ? 1 : p_nmea->wind_size;
     if (!nmeaCovarianceAcceptableForNmeaInit(nmea_cur, thr))
     {
-        nmea_outdoor_good_streak = 0;
+        nmea_outdoor_gnss_good_streak = 0;
         return;
     }
-    nmea_outdoor_good_streak++;
-    if (nmea_outdoor_good_streak >= need)
+    nmea_outdoor_gnss_good_streak++;
+    if (nmea_outdoor_gnss_good_streak >= need)
     {
-        RCLCPP_WARN(rclcpp::get_logger("ligo"),
-                    "NMEA outdoor re-align: graph reset after %d good-covariance samples (ICP retained; IVox reset deferred)",
-                    nmea_outdoor_good_streak);
-        p_nmea->ResetGraphClearingInitRetainIcp();
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "[nmea/outdoor] end dynamic indoor after %d good-covariance GNSS samples — NMEA factors resume (no NMEA graph/IVox reset)",
+            nmea_outdoor_gnss_good_streak);
         indoor_flag_dynamic = false;
         ligo::indoor::resetIndoorGICP();
-        nmea_cycle_reopen_pending = true;
-        nmea_outdoor_good_streak = 0;
+        nmea_outdoor_gnss_good_streak = 0;
     }
-}
-
-static void nmeaClearCycleIfRealignComplete()
-{
-    if (!nmea_cycle_reopen_pending || !p_nmea->nmea_ready)
-        return;
-    indoor_reloc_applied_once = false;
-    nmea_cycle_reopen_pending = false;
-    nmea_outdoor_good_streak = 0;
-    indoor_flag_dynamic = false;
-    ligo::indoor::resetIndoorGICP();
-    pending_outdoor_realign_ivox_reset.store(true, std::memory_order_release);
-    RCLCPP_INFO(rclcpp::get_logger("ligo"),
-                "Outdoor re-align complete: scheduling deferred IVox/traj reset; indoor GICP cleared");
 }
 
 void pointBodyLidarToIMU(PointType const * const pi, PointType * const po)
@@ -846,7 +844,7 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
 
                 const Eigen::Matrix3d R_local_to_enu = p_nmea->icp_R_local_to_enu;
                 const Eigen::Vector3d t_local_to_enu = p_nmea->icp_t_local_to_enu;
-                const Eigen::Matrix3d R_ecef_enu = gnss_comm::ecef2rotation(first_gps_ecef);
+                const Eigen::Matrix3d R_ecef_enu = ligo_map_R_ecef_enu_from_first_gps_anchor();
                 const Eigen::Vector3d origin_local = kf_output.x_.pos;
                 const Eigen::Vector3d origin_enu = R_local_to_enu * origin_local + t_local_to_enu;
                 const Eigen::Vector3d origin_ecef = first_gps_ecef + R_ecef_enu * origin_enu;
@@ -1302,10 +1300,7 @@ void publish_nmea_aligned(
         }
         return;
     }
-    const Eigen::Vector3d p_enu(
-        nmea_cur->pose.pose.position.x,
-        nmea_cur->pose.pose.position.y,
-        nmea_cur->pose.pose.position.z);
+    const Eigen::Vector3d p_enu = ligo_nmea_odom_pos_xy_alt0(*nmea_cur);
     if (p_nmea->icp_tf_ready && !icp_path_was_ready)
     {
         icp_path_was_ready = true;
@@ -1521,7 +1516,7 @@ void publish_init_pairs_marker_from_gps_move(
   for (int i = 0; i < n_valid; ++i)
   {
     lio_disp[i] = (init_pos[i] - start_lio).norm();
-    Eigen::Vector3d gv(init_nmea[i]->pose.pose.position.x, init_nmea[i]->pose.pose.position.y, init_nmea[i]->pose.pose.position.z);
+    Eigen::Vector3d gv = ligo_nmea_odom_pos_xy_alt0(*init_nmea[i]);
     gps_disp[i] = (gv - start_nmea).norm();
   }
   int first_lio_03 = -1, first_gps_03 = -1;
@@ -1577,7 +1572,7 @@ void publish_init_pairs_marker_from_gps_move(
     Eigen::Vector3d lio_pt = (latency_est > 0.01)
         ? get_lio_at_time_dbg(t_want, i, lio_pts.empty())
         : init_pos[i];
-    Eigen::Vector3d gps_enu(init_nmea[i]->pose.pose.position.x, init_nmea[i]->pose.pose.position.y, init_nmea[i]->pose.pose.position.z);
+    Eigen::Vector3d gps_enu = ligo_nmea_odom_pos_xy_alt0(*init_nmea[i]);
     Eigen::Vector3d gps_local = (gps_enu - start_nmea) + start_lio;
     lio_pts.push_back(lio_pt);
     gps_local_pts.push_back(gps_local);
@@ -1936,17 +1931,6 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
-            if (pending_outdoor_realign_ivox_reset.exchange(false, std::memory_order_acq_rel))
-            {
-                RCLCPP_WARN(rclcpp::get_logger("ligo"),
-                            "Outdoor re-align: applying deferred IVox + trajectory map reset (LIO/KF/IMU unchanged)");
-                if (NMEA_ENABLE && traj_manager)
-                    traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
-                ivox_ = std::make_shared<IVoxType>(ivox_options_);
-                ivox_last_ = std::make_shared<IVoxType>(ivox_options_);
-                traj_manager.reset(new curvefitter::TrajectoryManager<4>());
-                init_map = false;
-            }
             if (g_pending_indoor_topic_snap.load(std::memory_order_acquire) && !flg_reset && !mapping_mode)
             {
                 if (ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
@@ -2362,7 +2346,7 @@ int main(int argc, char** argv)
                                     double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat - time_predict_last_const;
                                     double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat - time_update_last;
 
-                                    nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+                                    nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(nmea_cur);
 
                                     if (!p_nmea->nmea_ready)
                                     {
@@ -2375,7 +2359,6 @@ int main(int argc, char** argv)
                                         time_update_last = time_predict_last_const;
                                         state_out = kf_output.x_;
                                         p_nmea->processNMEA(nmea_cur, state_out);
-                                        nmeaClearCycleIfRealignComplete();
                                     }
                                     else
                                     {
@@ -2391,7 +2374,7 @@ int main(int argc, char** argv)
                                         double err_sq_xy_pre = 0.0;
                                         if (p_nmea->icp_tf_ready)
                                         {
-                                            const Eigen::Vector3d p_gps_enu(nmea_cur->pose.pose.position.x, nmea_cur->pose.pose.position.y, nmea_cur->pose.pose.position.z);
+                                            const Eigen::Vector3d p_gps_enu = ligo_nmea_odom_pos_xy_alt0(*nmea_cur);
                                             const Eigen::Vector3d p_lio_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
                                             const double dx = p_lio_enu.x() - p_gps_enu.x(), dy = p_lio_enu.y() - p_gps_enu.y();
                                             err_sq_xy_pre = dx * dx + dy * dy;
@@ -2434,10 +2417,7 @@ int main(int argc, char** argv)
                                         // Track the last GNSS position (ECEF) with good outdoor quality.
                                         if (!cov_high_cfg && nmea_global_anchor_ready)
                                         {
-                                            const Eigen::Vector3d p_enu_cur(
-                                                nmea_cur->pose.pose.position.x,
-                                                nmea_cur->pose.pose.position.y,
-                                                nmea_cur->pose.pose.position.z);
+                                            const Eigen::Vector3d p_enu_cur = ligo_nmea_odom_pos_xy_alt0(*nmea_cur);
                                             const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
                                             const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
                                             last_good_gnss_ecef       = anc + R * p_enu_cur;
@@ -2556,7 +2536,7 @@ int main(int argc, char** argv)
                             double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_predict_last_const;
                             double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat2 - time_update_last;
 
-                            nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+                            nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(nmea_cur);
 
                             if (!p_nmea->nmea_ready)
                             {
@@ -2569,7 +2549,6 @@ int main(int argc, char** argv)
                                 time_update_last = time_predict_last_const;
                                 state_out = kf_output.x_;
                                 p_nmea->processNMEA(nmea_cur, state_out);
-                                nmeaClearCycleIfRealignComplete();
                             }
                             else
                             {
@@ -2586,7 +2565,7 @@ int main(int argc, char** argv)
                                 double err_sq_xy_pre2 = 0.0;
                                 if (p_nmea->icp_tf_ready)
                                 {
-                                    const Eigen::Vector3d p_gps_enu(nmea_cur->pose.pose.position.x, nmea_cur->pose.pose.position.y, nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d p_gps_enu = ligo_nmea_odom_pos_xy_alt0(*nmea_cur);
                                     const Eigen::Vector3d p_lio_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
                                     const double dx = p_lio_enu.x() - p_gps_enu.x(), dy = p_lio_enu.y() - p_gps_enu.y();
                                     err_sq_xy_pre2 = dx * dx + dy * dy;
@@ -2628,10 +2607,7 @@ int main(int argc, char** argv)
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, nmea_indoor_high_cov_threshold);
                                 if (!cov_high_cfg && nmea_global_anchor_ready)
                                 {
-                                    const Eigen::Vector3d p_enu_cur(
-                                        nmea_cur->pose.pose.position.x,
-                                        nmea_cur->pose.pose.position.y,
-                                        nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d p_enu_cur = ligo_nmea_odom_pos_xy_alt0(*nmea_cur);
                                     const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
                                     const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
                                     last_good_gnss_ecef       = anc + R * p_enu_cur;
@@ -2853,7 +2829,7 @@ int main(int argc, char** argv)
                             double dt = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 - time_predict_last_const;
                             double dt_cov = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local - nmea_lat3 - time_update_last;
 
-                            nmeaMaybeTriggerOutdoorRealignAfterIndoor(nmea_cur);
+                            nmeaMaybeResumeNmeaFactorsAfterOutdoorGnss(nmea_cur);
 
                             if (!p_nmea->nmea_ready)
                             {
@@ -2865,7 +2841,6 @@ int main(int argc, char** argv)
                                 kf_output.predict(dt, Q_output, input_in, true, false);
                                 time_predict_last_const = rclcpp::Time(nmea_cur->header.stamp).seconds() - time_diff_nmea_local;
                                 p_nmea->processNMEA(nmea_cur, kf_output.x_);
-                                nmeaClearCycleIfRealignComplete();
                             }
                             else
                             {
@@ -2882,7 +2857,7 @@ int main(int argc, char** argv)
                                 double err_sq_xy_pre3 = 0.0;
                                 if (p_nmea->icp_tf_ready)
                                 {
-                                    const Eigen::Vector3d p_gps_enu(nmea_cur->pose.pose.position.x, nmea_cur->pose.pose.position.y, nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d p_gps_enu = ligo_nmea_odom_pos_xy_alt0(*nmea_cur);
                                     const Eigen::Vector3d p_lio_enu = p_nmea->icp_R_local_to_enu * kf_output.x_.pos + p_nmea->icp_t_local_to_enu;
                                     const double dx = p_lio_enu.x() - p_gps_enu.x(), dy = p_lio_enu.y() - p_gps_enu.y();
                                     err_sq_xy_pre3 = dx * dx + dy * dy;
@@ -2923,10 +2898,7 @@ int main(int argc, char** argv)
                                 const bool cov_high_temp = nmeaCovarianceIsHigh(nmea_cur, nmea_indoor_high_cov_threshold);
                                 if (!cov_high_cfg && nmea_global_anchor_ready)
                                 {
-                                    const Eigen::Vector3d p_enu_cur(
-                                        nmea_cur->pose.pose.position.x,
-                                        nmea_cur->pose.pose.position.y,
-                                        nmea_cur->pose.pose.position.z);
+                                    const Eigen::Vector3d p_enu_cur = ligo_nmea_odom_pos_xy_alt0(*nmea_cur);
                                     const Eigen::Vector3d anc = gnss_comm::geo2ecef(nmea_global_anchor_lla);
                                     const Eigen::Matrix3d R   = gnss_comm::geo2rotation(nmea_global_anchor_lla);
                                     last_good_gnss_ecef       = anc + R * p_enu_cur;
@@ -3052,7 +3024,7 @@ int main(int argc, char** argv)
                     ligo::indoor::ensureIndoorGICPMapFromGridEcef(p_ecef);
                 }
             }
-            // Indoor GICP first when possible so reference map can latch T^{-1} before first /indoor/map_cloud.
+            // Indoor GICP when icp_tf_ready: optional one-shot LIO→ENU snap after first converged+quality pass.
             if (!mapping_mode && indoor_flag_dynamic &&
                 indoor_gicp_map_loaded && p_nmea && p_nmea->icp_tf_ready &&
                 feats_down_world && !feats_down_world->empty())
@@ -3072,6 +3044,24 @@ int main(int argc, char** argv)
                     indoor_gicp_T_map_lidar,
                     lidar_end_time,
                     pubIndoorMap2d);
+
+                if (indoor_gicp_lio_enu_snap_requested && p_nmea->icp_tf_ready && indoor_pose_valid) {
+                    const Eigen::Matrix3d R_g =
+                        indoor_rot_enu_meas.normalized().toRotationMatrix();
+                    const Eigen::Vector3d p_g = indoor_pos_enu_meas;
+                    const Eigen::Matrix3d R_l = kf_output.x_.rot;
+                    const Eigen::Vector3d p_l = kf_output.x_.pos;
+                    p_nmea->icp_R_local_to_enu = R_g * R_l.transpose();
+                    p_nmea->icp_t_local_to_enu =
+                        p_g - p_nmea->icp_R_local_to_enu * p_l;
+                    indoor_gicp_lio_enu_snap_applied = true;
+                    indoor_gicp_lio_enu_snap_requested = false;
+                    RCLCPP_WARN(
+                        rclcpp::get_logger("ligo"),
+                        "[indoor/gicp] LIO→ENU ICP one-shot snap: first converged+quality GICP "
+                        "(ENU %.2f, %.2f, %.2f m)",
+                        p_g.x(), p_g.y(), p_g.z());
+                }
 
             }
             else
@@ -3200,7 +3190,8 @@ after_sync_packages:
         const auto t_save_start = std::chrono::steady_clock::now();
         string all_points_dir = ligo_make_pcd_save_path();
         const bool saved_in_enu = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
-        const Eigen::Matrix3d R_ecef_enu = saved_in_enu ? gnss_comm::ecef2rotation(first_gps_ecef) : Eigen::Matrix3d::Identity();
+        const Eigen::Matrix3d R_ecef_enu =
+            saved_in_enu ? ligo_map_R_ecef_enu_from_first_gps_anchor() : Eigen::Matrix3d::Identity();
         const Eigen::Vector3d anchor_ecef_m = saved_in_enu ? first_gps_ecef : Eigen::Vector3d::Zero();
         const Eigen::Vector3d anchor_lla_deg_m = saved_in_enu ? first_gps_lla : Eigen::Vector3d::Zero();
         cout << "current scan saved to " << all_points_dir << (saved_in_enu ? " (ENU)" : "") << endl;
