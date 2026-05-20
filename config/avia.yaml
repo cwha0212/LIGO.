@@ -86,7 +86,7 @@
       posit_odo_topic: "/ublox_driver/receiver_lla"
       nmea_input_type: "navsatfix"
       # NavSatFix→ENU: 전역 고도는 사용하지 않음(0 m). LIO 맵의 z는 LiDAR/IMU 기준 유지.
-      ppp_std_thres: 300.0
+      ppp_std_thres: 100.0
       # 높은 NMEA 공분산(실내 등)일 때 indoor reloc 트리거 허용 (기존 하드코딩 상수 대체)
       force_indoor_on_high_cov: true
       indoor_high_cov_threshold: 500.0
@@ -133,8 +133,8 @@
       indoor_flag: false
       # *_grid2d.yaml + pgm + source_pcd. Relative: package source <src>/LIGO./<path> if that dir exists, else share/ligo/<path>.
       grid_map_dir: "PCD"
-      # Absolute path to the reference PCD (odometry는 보통 비움; 런타임에 PCD/<id>/<id>.pcd 사용)
-      # Typically: <workspace>/src/LIGO./PCD/<map_name>/<map_name>.pcd
+      # Absolute path to the reference PCD for GICP (ENU). 비우면 grid2d source_pcd → `{sub}_orig.pcd` 자동.
+      # Typically: <workspace>/src/LIGO./PCD/<map_name>/<sub>/<sub>_orig.pcd
       map_pcd_path: ""
       # 실내 GICP → GTSAM factor 허용 조건. small_gicp result.error 스케일은 보통 수십~수백(레거시 기본 5면 100% REJECT).
       gicp_max_factor_error: 400.0

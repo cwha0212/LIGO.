@@ -888,7 +888,7 @@ class ModeOrchestrator:
     def _map_artifact_status(save_dir: Path, sub_map_name: str) -> tuple[str, list[dict], list[str]]:
         names = [
             f"{sub_map_name}.pcd",
-            f"{sub_map_name}_ecef.pcd",
+            f"{sub_map_name}_orig.pcd",
             f"{sub_map_name}_grid2d.pgm",
             f"{sub_map_name}_grid2d.yaml",
         ]

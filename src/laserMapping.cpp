@@ -281,10 +281,16 @@ static std::filesystem::path ligo_make_map_root_dir()
     return std::filesystem::path(map_folder) / pcd_save_map_name / pcd_save_sub_map_name;
 }
 
-/** Single sub-map directory: `{map_folder}/{map_name}/{sub_map_name}/{sub_map_name}.pcd` (overwrite on each save). */
+/** Primary map PCD (ECEF when NMEA/ENU save path is active): `{…}/{sub_map_name}.pcd`. */
 static std::string ligo_make_pcd_save_path()
 {
     return (ligo_make_map_root_dir() / (pcd_save_sub_map_name + ".pcd")).string();
+}
+
+/** ENU/original companion for GICP + grid2d: `{…}/{sub_map_name}_orig.pcd`. */
+static std::string ligo_make_pcd_orig_path(const std::string &base_pcd_path)
+{
+    return ligo_replace_pcd_suffix(base_pcd_path, "_orig.pcd");
 }
 
 static std::string ligo_make_tmp_map_save_path(long long bucket_idx, double interval_sec)
@@ -321,18 +327,24 @@ static PointCloudXYZI::Ptr ligo_convert_enu_cloud_to_ecef(
     return cloud_ecef;
 }
 
-static bool ligo_save_ecef_companion_pcd(
-    const std::string &enu_pcd_path,
+/** Saves ENU to `{base}_orig.pcd` and ECEF to `{base}.pcd`. */
+static bool ligo_save_enu_ecef_map_pair(
+    const std::string &base_pcd_path,
     const PointCloudXYZI::Ptr &cloud_enu,
     const Eigen::Matrix3d &R_ecef_enu,
     const Eigen::Vector3d &anchor_ecef_m)
 {
-    const std::string ecef_path = ligo_replace_pcd_suffix(enu_pcd_path, "_ecef.pcd");
+    const std::string orig_path = ligo_make_pcd_orig_path(base_pcd_path);
     const PointCloudXYZI::Ptr cloud_ecef =
         ligo_convert_enu_cloud_to_ecef(cloud_enu, R_ecef_enu, anchor_ecef_m);
-    if (!ligo_try_write_binary_pcd(ecef_path, cloud_ecef))
+    if (!ligo_try_write_binary_pcd(orig_path, cloud_enu))
     {
-        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] failed to save ECEF companion: %s", ecef_path.c_str());
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] failed to save ENU map: %s", orig_path.c_str());
+        return false;
+    }
+    if (!ligo_try_write_binary_pcd(base_pcd_path, cloud_ecef))
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"), "[pcd] failed to save ECEF map: %s", base_pcd_path.c_str());
         return false;
     }
     return true;
@@ -548,7 +560,8 @@ static void save_grid2d_from_cloud_with_rays(
     bool add_enu_to_ecef_metadata = false,
     const Eigen::Matrix3d &R_ecef_enu = Eigen::Matrix3d::Identity(),
     const Eigen::Vector3d &anchor_ecef_m = Eigen::Vector3d::Zero(),
-    const Eigen::Vector3d &anchor_lla_deg_m = Eigen::Vector3d::Zero())
+    const Eigen::Vector3d &anchor_lla_deg_m = Eigen::Vector3d::Zero(),
+    const std::string &source_pcd_for_yaml = "")
 {
     if (!cloud || cloud->empty() || resolution_m <= 0.0 || ray_origins.size() != cloud->size())
     {
@@ -739,7 +752,8 @@ static void save_grid2d_from_cloud_with_rays(
     f_yaml << "occupied_thresh: 0.65\n";
     f_yaml << "free_thresh: 0.196\n";
     f_yaml << "mode: trinary\n";
-    f_yaml << "source_pcd: " << pcd_path << "\n";
+    const std::string &source_pcd_path = source_pcd_for_yaml.empty() ? pcd_path : source_pcd_for_yaml;
+    f_yaml << "source_pcd: " << source_pcd_path << "\n";
     f_yaml << "frame_id: " << frame_id << "\n";
     f_yaml << "grid_type: occupancy_2d_raycast\n";
     f_yaml << "min_points_per_cell: " << std::max(1, min_points_per_cell) << "\n";
@@ -879,12 +893,12 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                     cout << "current scan saved to " << all_points_dir << " (ENU)" << endl;
                     PointCloudXYZI::Ptr pcd_save =
                         ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
-                    if (ligo_try_write_binary_pcd(all_points_dir, pcd_save))
+                    if (ligo_save_enu_ecef_map_pair(all_points_dir, pcd_save, R_ecef_enu, first_gps_ecef))
                     {
                         save_grid2d_from_cloud_with_rays(
                             pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
-                            3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla);
-                        ligo_save_ecef_companion_pcd(all_points_dir, pcd_save, R_ecef_enu, first_gps_ecef);
+                            3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla,
+                            ligo_make_pcd_orig_path(all_points_dir));
                     }
                     pcl_wait_save->clear();
                     pcl_wait_ray_origins.clear();
@@ -1692,9 +1706,10 @@ int main(int argc, char** argv)
     if (mapping_mode)
     {
         RCLCPP_INFO(node->get_logger(),
-                    "[pcd] mapping saves overwrite %s/%s/%s/%s.pcd (+ grid yaml/pgm, ecef pcd)",
+                    "[pcd] mapping saves overwrite %s/%s/%s/%s.pcd (ECEF) + %s_orig.pcd (ENU) + grid2d",
                     map_folder.c_str(),
                     pcd_save_map_name.c_str(),
+                    pcd_save_sub_map_name.c_str(),
                     pcd_save_sub_map_name.c_str(),
                     pcd_save_sub_map_name.c_str());
     }
@@ -3197,15 +3212,19 @@ after_sync_packages:
         cout << "current scan saved to " << all_points_dir << (saved_in_enu ? " (ENU)" : "") << endl;
         PointCloudXYZI::Ptr pcd_save =
             ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
-        if (ligo_try_write_binary_pcd(all_points_dir, pcd_save))
+        if (saved_in_enu)
         {
-            if (saved_in_enu)
+            if (ligo_save_enu_ecef_map_pair(all_points_dir, pcd_save, R_ecef_enu, anchor_ecef_m))
             {
                 save_grid2d_from_cloud_with_rays(
                     pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
-                    3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m);
-                ligo_save_ecef_companion_pcd(all_points_dir, pcd_save, R_ecef_enu, anchor_ecef_m);
+                    3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m,
+                    ligo_make_pcd_orig_path(all_points_dir));
             }
+        }
+        else
+        {
+            ligo_try_write_binary_pcd(all_points_dir, pcd_save);
         }
         const double save_elapsed_s =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t_save_start).count();
