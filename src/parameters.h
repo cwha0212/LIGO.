@@ -153,6 +153,12 @@ extern double lidar_time_inte, first_imu_time;
 extern bool NMEA_ENABLE;
 extern bool mapping_mode;
 extern bool indoor_flag;
+
+/** True when NMEA fusion or static indoor factors need preloaded grid/PCD assets. */
+inline bool ligo_need_indoor_map_assets()
+{
+  return NMEA_ENABLE || indoor_flag;
+}
 extern double time_update_last, time_current, time_predict_last_const, t_last;
 extern Eigen::Vector3d indoor_pos_enu_meas;
 extern Eigen::Quaterniond indoor_rot_enu_meas;

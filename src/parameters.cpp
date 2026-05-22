@@ -453,22 +453,23 @@ void readParameters(rclcpp::Node * node)
     indoor_map_pcd_path = get_param("indoor.map_pcd_path", std::string(""));
     indoor_grid_map_dir = resolve_indoor_grid_map_dir(get_param("indoor.grid_map_dir", std::string("")));
     if (!mapping_mode) {
-      if (!indoor_map_pcd_path.empty()) {
-        RCLCPP_WARN(
-            rclcpp::get_logger("ligo"),
-            "[indoor/gicp] indoor.map_pcd_path is ignored in odometry mode; grid maps are loaded from <map_folder>/<map_name>/ "
-            "(see map_folder in yaml).");
-      }
-      const std::string odom_map_name = sanitize_map_token(
-          get_param("indoor.map_name_for_odometry", std::string("")),
-          pcd_save_map_name);
-      indoor_grid_map_dir = resolve_indoor_map_group_dir(odom_map_name);
       indoor_map_pcd_path.clear();
-      RCLCPP_INFO(
-          rclcpp::get_logger("ligo"),
-          "[indoor/gicp] odometry map group: map_name=%s dir=%s",
-          odom_map_name.c_str(),
-          indoor_grid_map_dir.c_str());
+      if (ligo_need_indoor_map_assets()) {
+        const std::string odom_map_name = sanitize_map_token(
+            get_param("indoor.map_name_for_odometry", std::string("")),
+            pcd_save_map_name);
+        indoor_grid_map_dir = resolve_indoor_map_group_dir(odom_map_name);
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "[indoor/gicp] odometry map group: map_name=%s dir=%s",
+            odom_map_name.c_str(),
+            indoor_grid_map_dir.c_str());
+      } else {
+        indoor_grid_map_dir.clear();
+        RCLCPP_INFO(
+            rclcpp::get_logger("ligo"),
+            "[lio-only] nmea_enable=false and indoor_flag=false — skip indoor/GICP reference map preload");
+      }
     } else if (!indoor_grid_map_dir.empty()) {
       cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;
     }

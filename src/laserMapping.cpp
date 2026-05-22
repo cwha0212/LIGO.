@@ -1698,6 +1698,46 @@ void publish_init_pairs_marker_from_gps_move(
   pub->publish(gps_marker);
 }
 
+/** Load grid/PCD for NMEA–LIO ICP or static indoor; no-op for pure LIO (see ligo_need_indoor_map_assets). */
+static void ligo_load_indoor_reference_maps(const rclcpp::Logger & logger)
+{
+    if (!ligo_need_indoor_map_assets())
+        return;
+    if (indoor_grid_map_dir.empty() && indoor_map_pcd_path.empty())
+        return;
+    if (ligo::indoor::indoorGridMapsLoaded() || indoor_gicp_map_loaded)
+        return;
+
+    ligo::indoor::SmallGICPConfig gicp_cfg;
+    gicp_cfg.num_threads                  = 4;
+    gicp_cfg.map_downsampling_resolution  = indoor_gicp_map_voxel_m;
+    gicp_cfg.scan_downsampling_resolution = indoor_gicp_scan_voxel_m;
+    gicp_cfg.max_correspondence_distance  = indoor_gicp_max_correspondence_m;
+    gicp_cfg.max_iterations               = indoor_gicp_max_iterations_reg;
+    ligo::indoor::setIndoorGICPConfigForGridSelection(gicp_cfg);
+
+    if (!indoor_grid_map_dir.empty())
+    {
+        if (ligo::indoor::loadIndoorGridMapsFromDirectory(indoor_grid_map_dir))
+        {
+            RCLCPP_INFO(logger,
+                        "[indoor/gicp] grid_map_dir loaded; reference PCD follows occupancy grid membership (ECEF)");
+        }
+        else
+        {
+            RCLCPP_WARN(logger,
+                        "[indoor/gicp] indoor.grid_map_dir=%s invalid or empty — check * _grid2d.yaml",
+                        indoor_grid_map_dir.c_str());
+        }
+        if (!ligo::indoor::indoorGridMapsLoaded() && !indoor_map_pcd_path.empty())
+            ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
+    }
+    else if (!indoor_map_pcd_path.empty())
+    {
+        ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
+    }
+}
+
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
@@ -1741,39 +1781,7 @@ int main(int argc, char** argv)
         p_nmea->Rex_imu_r << MAT_FROM_ARRAY(extrinR_gnss);
         p_nmea->nmea_ready = false;
     }
-    // Load grid registry / reference PCD whenever paths are set (also mapping_mode: indoor_flag may be false).
-    if (!indoor_grid_map_dir.empty() || !indoor_map_pcd_path.empty())
-    {
-        ligo::indoor::SmallGICPConfig gicp_cfg;
-        gicp_cfg.num_threads                    = 4;
-        gicp_cfg.map_downsampling_resolution    = indoor_gicp_map_voxel_m;
-        gicp_cfg.scan_downsampling_resolution   = indoor_gicp_scan_voxel_m;
-        gicp_cfg.max_correspondence_distance    = indoor_gicp_max_correspondence_m;
-        gicp_cfg.max_iterations                 = indoor_gicp_max_iterations_reg;
-        ligo::indoor::setIndoorGICPConfigForGridSelection(gicp_cfg);
-        if (!indoor_grid_map_dir.empty())
-        {
-            if (ligo::indoor::loadIndoorGridMapsFromDirectory(indoor_grid_map_dir))
-            {
-                RCLCPP_INFO(node->get_logger(),
-                            "[indoor/gicp] grid_map_dir loaded; reference PCD follows occupancy grid membership (ECEF)");
-            }
-            else
-            {
-                RCLCPP_WARN(node->get_logger(),
-                            "[indoor/gicp] indoor.grid_map_dir=%s invalid or empty — check * _grid2d.yaml",
-                            indoor_grid_map_dir.c_str());
-            }
-            if (!ligo::indoor::indoorGridMapsLoaded() && !indoor_map_pcd_path.empty())
-            {
-                ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
-            }
-        }
-        else if (!indoor_map_pcd_path.empty())
-        {
-            ligo::indoor::initIndoorGICP(indoor_map_pcd_path, gicp_cfg);
-        }
-    }
+    ligo_load_indoor_reference_maps(node->get_logger());
     // IMU uses h_dyn_share_modified_2; esekfom 2h does not assign slot 2 — always 3h (NMEA slot unused when NMEA_ENABLE is false / no NMEA updates).
     kf_output.init_dyn_share_modified_3h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output, h_model_NMEA_output);
     Eigen::Matrix<double, 24, 24> P_init_output; // = MD(24, 24)::Identity() * 0.01;
@@ -1876,6 +1884,20 @@ int main(int argc, char** argv)
             // Enter: do not set indoor_flag_dynamic here — reloc reset applies anchor then sets it true.
             if (!was_indoor)
             {
+                if (!ligo::indoor::indoorGridMapsLoaded() && !indoor_gicp_map_loaded)
+                {
+                    if (indoor_grid_map_dir.empty() && indoor_map_pcd_path.empty())
+                    {
+                        RCLCPP_WARN(
+                            rclcpp::get_logger("ligo"),
+                            "[indoor] /ligo/indoor_mode: no reference maps loaded — enable nmea_enable or "
+                            "indoor_flag, or set indoor.grid_map_dir / indoor.map_pcd_path and restart");
+                    }
+                    else
+                    {
+                        ligo_load_indoor_reference_maps(rclcpp::get_logger("ligo"));
+                    }
+                }
                 RCLCPP_INFO(rclcpp::get_logger("ligo"),
                             "[indoor] dynamic indoor mode ON (pending fused LIO→ENU snap on next lidar frame)");
                 g_pending_indoor_topic_snap = true;
@@ -2217,6 +2239,16 @@ int main(int argc, char** argv)
             /*** initialize the map ***/
             if(!init_map && !lose_lid)
             {
+                static double last_init_map_log_t = -1.0;
+                const double now_t = Measures.lidar_beg_time;
+                if (now_t - last_init_map_log_t > 1.0)
+                {
+                    last_init_map_log_t = now_t;
+                    RCLCPP_INFO(
+                        node->get_logger(),
+                        "[lio] building IVox init map: %zu / %d points",
+                        init_feats_world->size(), init_map_size);
+                }
                 feats_down_world->resize(feats_undistort->size());
                 for(int i = 0; i < feats_undistort->size(); i++)
                 {
@@ -2238,6 +2270,7 @@ int main(int argc, char** argv)
                     
                     init_feats_world.reset(new PointCloudXYZI());
                     init_map = true;
+                    RCLCPP_INFO(node->get_logger(), "[lio] IVox init map ready (%d points)", init_map_size);
                     if (NMEA_ENABLE) traj_manager->ResetTrajectory(pose_graph_key_pose, pose_time_vector, LiDAR_points, points_num);
                 }
                 goto after_sync_packages;
@@ -3256,13 +3289,17 @@ after_sync_packages:
         }
         first_pvt_anc = ref_ecef;
         first_lla_anc = ref_lla;
-        Eigen::Matrix3d enu_rot = gnss_comm::ecef2rotation(ref_ecef);
+        const bool ref_ecef_valid = (ref_ecef.norm() > 1.0);
+        const bool write_enu_global = NMEA_ENABLE && nmea_global_anchor_ready && ref_ecef_valid;
+        Eigen::Matrix3d enu_rot = Eigen::Matrix3d::Identity();
+        if (write_enu_global)
+            enu_rot = gnss_comm::geo2rotation(ref_lla);
         for (int i = 0; i < time_frame.size(); i++)
         {
-            if (NMEA_ENABLE)
+            if (write_enu_global)
             {
-                Eigen::Vector3d ecef_r = enu_rot * est_poses[i] + ref_ecef;
-                Eigen::Vector3d pos_enu = gnss_comm::ecef2enu(first_lla_anc, ecef_r - first_pvt_anc);
+                const Eigen::Vector3d ecef_r = enu_rot * est_poses[i] + ref_ecef;
+                const Eigen::Vector3d pos_enu = gnss_comm::ecef2enu(first_lla_anc, ecef_r - first_pvt_anc);
 #ifdef process_ppp
                 if (!ppp_ecef.empty())
                 {
