@@ -186,6 +186,8 @@ std::string enu_heading_topic = "/ligo/enu_heading_deg";
 std::string global_position_topic = "/ligo/global_position";
 std::string ecef_position_topic = "/ligo/ecef_position";
 std::string ecef_position_frame_id = "ecef";
+std::string mqtt_pose_topic = "/ligo/mqtt_pose";
+std::string mqtt_pose_meta_topic = "/ligo/mqtt_pose_meta";
 bool nmea_global_anchor_ready = false;
 Eigen::Vector3d nmea_global_anchor_lla = Eigen::Vector3d::Zero();
 bool nmea_last_raw_lla_valid = false;
@@ -203,6 +205,7 @@ double lidar_time_inte = 0.1, first_imu_time = 0.0;
 bool NMEA_ENABLE = true;
 bool mapping_mode = false;
 bool indoor_flag = false;
+bool odometry_map_local_mode = false;
 bool dyn_filter = false;
 double dyn_filter_resolution = 1.0;
 Eigen::Vector3d indoor_pos_enu_meas = Eigen::Vector3d::Zero();
@@ -359,14 +362,23 @@ void readParameters(rclcpp::Node * node)
   p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
   time_diff_valid = true;
   ppp_fname = get_param("nmea.ppp_file_name", std::string("TST.pos"));
+  mqtt_pose_topic = get_param("ligo.mqtt_pose_topic", mqtt_pose_topic);
+  mqtt_pose_meta_topic = get_param("ligo.mqtt_pose_meta_topic", mqtt_pose_meta_topic);
   NMEA_ENABLE = get_param("nmea.nmea_enable", false);
   cout << "nmea enable:" << NMEA_ENABLE << endl;
   indoor_flag = get_param("indoor.indoor_flag", false);
+  odometry_map_local_mode = get_param("indoor.odometry_map_local_mode", false);
   if (mapping_mode)
   {
     indoor_flag = false;
+    odometry_map_local_mode = false;
+  }
+  if (!mapping_mode && !NMEA_ENABLE)
+  {
+    odometry_map_local_mode = true;
   }
   cout << "indoor enable:" << indoor_flag << endl;
+  cout << "odometry map-local mode:" << odometry_map_local_mode << endl;
   if (NMEA_ENABLE)
   {
     p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);
@@ -468,7 +480,8 @@ void readParameters(rclcpp::Node * node)
         indoor_grid_map_dir.clear();
         RCLCPP_INFO(
             rclcpp::get_logger("ligo"),
-            "[lio-only] nmea_enable=false and indoor_flag=false — skip indoor/GICP reference map preload");
+            "[lio-only] nmea_enable=false and indoor_flag=false and odometry_map_local_mode=false — "
+            "skip indoor/GICP reference map preload");
       }
     } else if (!indoor_grid_map_dir.empty()) {
       cout << "indoor.grid_map_dir (resolved): " << indoor_grid_map_dir << endl;

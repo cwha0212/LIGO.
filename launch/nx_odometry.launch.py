@@ -13,10 +13,16 @@ def generate_launch_description():
     stdout_colorized_envvar = SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1")
 
     use_rviz = LaunchConfiguration("use_rviz")
+    nmea_enable = LaunchConfiguration("nmea_enable")
     use_rviz_arg = DeclareLaunchArgument(
         "use_rviz",
         default_value="false",
         description="Run RViz2 (default: false)",
+    )
+    nmea_enable_arg = DeclareLaunchArgument(
+        "nmea_enable",
+        default_value="true",
+        description="Enable NMEA fusion/publish path",
     )
 
     indoor_map_name = LaunchConfiguration("indoor_map_name")
@@ -42,7 +48,10 @@ def generate_launch_description():
         parameters=[
             base_config,
             mode_config,
-            {"indoor.map_name_for_odometry": indoor_map_name},
+            {
+                "indoor.map_name_for_odometry": indoor_map_name,
+                "nmea.nmea_enable": nmea_enable,
+            },
         ],
     )
 
@@ -60,6 +69,7 @@ def generate_launch_description():
         executable="ligo_topic_to_mqtt.py",
         name="ligo_topic_to_mqtt",
         output="screen",
+        parameters=[{"mqtt.nmea_enable": nmea_enable}],
         sigterm_timeout="20",
         sigkill_timeout="5",
     )
@@ -68,6 +78,7 @@ def generate_launch_description():
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(stdout_colorized_envvar)
     ld.add_action(use_rviz_arg)
+    ld.add_action(nmea_enable_arg)
     ld.add_action(indoor_map_name_arg)
     ld.add_action(ligo_node)
     ld.add_action(mqtt_bridge)

@@ -62,6 +62,7 @@ class ModeState:
     sub_map_name: str = ""
     indoor_map_names: List[str] = field(default_factory=list)
     running_pid: Optional[int] = None
+    nmea_enable: bool = True
 
 
 @dataclass
@@ -70,6 +71,7 @@ class ParsedControl:
     map_name: str = ""
     sub_map_name: str = ""
     indoor_map_names: List[str] = field(default_factory=list)
+    nmea_enable: bool = True
     error: Optional[str] = None
 
 
@@ -110,6 +112,7 @@ class ModeOrchestrator:
         self._proc_map_name: str = ""
         self._proc_sub_map_name: str = ""
         self._proc_indoor_map_names: List[str] = []
+        self._proc_nmea_enable: bool = True
         self._sync_thread: Optional[threading.Thread] = None
         self._stop_thread: Optional[threading.Thread] = None
         # stop 진행 중에는 main loop 의 _poll_process_exit 가 중복 처리하지 않도록 함.
@@ -159,6 +162,7 @@ class ModeOrchestrator:
                     "running": self._proc_mode,
                     "pid": self._proc.pid,
                     "map_name": self._proc_map_name,
+                    "nmea_enable": self._proc_nmea_enable,
                 }
                 if self._proc_mode == "mapping" and self._proc_sub_map_name:
                     snap["sub_map_name"] = self._proc_sub_map_name
@@ -307,8 +311,14 @@ class ModeOrchestrator:
         self._mqtt_connect_requested = False
 
     def _build_launch_command(
-        self, mode: str, map_name: str, sub_map_name: str, indoor_map_names: List[str]
+        self,
+        mode: str,
+        map_name: str,
+        sub_map_name: str,
+        indoor_map_names: List[str],
+        nmea_enable: bool,
     ) -> List[str]:
+        nmea_launch_arg = f"nmea_enable:={'true' if nmea_enable else 'false'}"
         if mode == "mapping":
             return [
                 "ros2",
@@ -317,10 +327,12 @@ class ModeOrchestrator:
                 "nx_mapping.launch.py",
                 f"map_name:={map_name}",
                 f"sub_map_name:={sub_map_name}",
+                nmea_launch_arg,
             ]
         cmd = ["ros2", "launch", "ligo", "nx_odometry.launch.py"]
         if indoor_map_names:
             cmd.append(f"indoor_map_name:={indoor_map_names[0]}")
+        cmd.append(nmea_launch_arg)
         return cmd
 
     def _start_mode(
@@ -329,6 +341,7 @@ class ModeOrchestrator:
         map_name: str = "",
         sub_map_name: str = "",
         indoor_map_names: Optional[List[str]] = None,
+        nmea_enable: bool = True,
     ) -> None:
         with self._lock:
             if self._busy_locked():
@@ -345,7 +358,11 @@ class ModeOrchestrator:
             if indoor_map_names is None:
                 indoor_map_names = []
             cmd = self._build_launch_command(
-                mode=mode, map_name=map_name, sub_map_name=sub_map_name, indoor_map_names=indoor_map_names
+                mode=mode,
+                map_name=map_name,
+                sub_map_name=sub_map_name,
+                indoor_map_names=indoor_map_names,
+                nmea_enable=nmea_enable,
             )
             try:
                 # start_new_session=True: 자식을 새 process group의 leader로 만들어
@@ -367,11 +384,13 @@ class ModeOrchestrator:
             self._proc_map_name = map_name if mode == "mapping" else (indoor_map_names[0] if indoor_map_names else "")
             self._proc_sub_map_name = sub_map_name if mode == "mapping" else ""
             self._proc_indoor_map_names = list(indoor_map_names) if mode == "odometry" else []
+            self._proc_nmea_enable = bool(nmea_enable)
             self.state.mode = mode
             self.state.map_name = self._proc_map_name
             self.state.sub_map_name = self._proc_sub_map_name
             self.state.indoor_map_names = list(indoor_map_names) if mode == "odometry" else []
             self.state.running_pid = proc.pid
+            self.state.nmea_enable = bool(nmea_enable)
 
         time.sleep(self.start_confirm_sec)
         early_rc = proc.poll()
@@ -382,6 +401,7 @@ class ModeOrchestrator:
                 self._proc_map_name = ""
                 self._proc_sub_map_name = ""
                 self._proc_indoor_map_names = []
+                self._proc_nmea_enable = True
                 self.state = ModeState()
             self._publish_status(
                 event="start",
@@ -394,7 +414,7 @@ class ModeOrchestrator:
             print(f"[ERROR] early-exit: mode={mode}, map_name={map_name}, exit_code={early_rc}")
             return
 
-        start_extra: dict = {"pid": proc.pid, "command": " ".join(cmd)}
+        start_extra: dict = {"pid": proc.pid, "command": " ".join(cmd), "nmea_enable": bool(nmea_enable)}
         if mode == "mapping":
             start_extra["sub_map_name"] = sub_map_name
         if mode == "odometry" and indoor_map_names:
@@ -409,7 +429,7 @@ class ModeOrchestrator:
         )
         print(
             f"[INFO] started: mode={mode}, map_name={map_name!r}, "
-            f"indoor_map_names={indoor_map_names!r}, pid={proc.pid}"
+            f"indoor_map_names={indoor_map_names!r}, nmea_enable={nmea_enable}, pid={proc.pid}"
         )
 
     @staticmethod
@@ -745,6 +765,7 @@ class ModeOrchestrator:
             map_name = self._proc_map_name
             sub_map_name = self._proc_sub_map_name
             indoor_names = list(self._proc_indoor_map_names)
+            nmea_enable = bool(self._proc_nmea_enable)
 
         if proc is None:
             with self._lock:
@@ -780,9 +801,10 @@ class ModeOrchestrator:
             self._proc_map_name = ""
             self._proc_sub_map_name = ""
             self._proc_indoor_map_names = []
+            self._proc_nmea_enable = True
             self.state = ModeState()
 
-        stop_extra: dict = {"exit_code": exit_code, "reason": reason}
+        stop_extra: dict = {"exit_code": exit_code, "reason": reason, "nmea_enable": nmea_enable}
         if mode == "mapping":
             stop_extra["save_elapsed_sec"] = save_elapsed_sec
             if sub_map_name:
@@ -806,10 +828,15 @@ class ModeOrchestrator:
 
         # 매핑이 정상 종료되었으면 저장 결과(map_saved) 발행 후 공유 경로로 업로드한다.
         if mode == "mapping" and exit_code == 0 and map_name and sub_map_name:
-            self._publish_map_saved(map_name, sub_map_name, save_elapsed_sec=save_elapsed_sec)
+            self._publish_map_saved(
+                map_name,
+                sub_map_name,
+                save_elapsed_sec=save_elapsed_sec,
+                nmea_enable=nmea_enable,
+            )
             th_upload = threading.Thread(
                 target=self._upload_map_to_shared,
-                args=(map_name, sub_map_name),
+                args=(map_name, sub_map_name, nmea_enable),
                 name=f"map_upload_{map_name}_{sub_map_name}",
                 daemon=True,
             )
@@ -850,6 +877,9 @@ class ModeOrchestrator:
         mapping_mode = obj.get("mapping_mode")
         if not isinstance(mapping_mode, bool):
             return ParsedControl(kind="error", error="mapping_mode(boolean) 필드가 필요합니다.")
+        nmea_enable = obj.get("nmea_enable", True)
+        if not isinstance(nmea_enable, bool):
+            return ParsedControl(kind="error", error="nmea_enable(boolean) 필드가 필요합니다.")
 
         if mapping_mode:
             map_name = obj.get("map_name")
@@ -868,6 +898,7 @@ class ModeOrchestrator:
                 kind="start_mapping",
                 map_name=str(map_name).strip(),
                 sub_map_name=str(sub_map_name).strip(),
+                nmea_enable=nmea_enable,
             )
 
         map_name = obj.get("map_name")
@@ -882,16 +913,27 @@ class ModeOrchestrator:
                 error="odometry: map_names는 더 이상 사용하지 않습니다. map_name만 사용하세요.",
             )
 
-        return ParsedControl(kind="start_odometry", indoor_map_names=[str(map_name).strip()])
+        return ParsedControl(
+            kind="start_odometry",
+            indoor_map_names=[str(map_name).strip()],
+            nmea_enable=nmea_enable,
+        )
 
     @staticmethod
-    def _map_artifact_status(save_dir: Path, sub_map_name: str) -> tuple[str, list[dict], list[str]]:
-        names = [
-            f"{sub_map_name}.pcd",
-            f"{sub_map_name}_orig.pcd",
-            f"{sub_map_name}_grid2d.pgm",
-            f"{sub_map_name}_grid2d.yaml",
-        ]
+    def _map_artifact_status(
+        save_dir: Path,
+        sub_map_name: str,
+        nmea_enable: bool,
+    ) -> tuple[str, list[dict], list[str]]:
+        names = [f"{sub_map_name}.pcd"]
+        if nmea_enable:
+            names.extend(
+                [
+                    f"{sub_map_name}_orig.pcd",
+                    f"{sub_map_name}_grid2d.pgm",
+                    f"{sub_map_name}_grid2d.yaml",
+                ]
+            )
         files_out: list[dict] = []
         missing: list[str] = []
         for n in names:
@@ -911,15 +953,21 @@ class ModeOrchestrator:
         map_name: str,
         sub_map_name: str,
         save_elapsed_sec: Optional[float] = None,
+        nmea_enable: bool = True,
     ) -> None:
         save_dir = local_map_root() / map_name / sub_map_name
-        st, files_out, missing = self._map_artifact_status(save_dir, sub_map_name)
+        st, files_out, missing = self._map_artifact_status(save_dir, sub_map_name, nmea_enable)
         msg = (
             "맵 저장이 완료되었습니다."
             if st == "ok"
             else f"일부 산출물이 없습니다: {', '.join(missing)}"
         )
-        extra: dict[str, Any] = {"save_root": str(save_dir), "files": files_out, "missing": missing}
+        extra: dict[str, Any] = {
+            "save_root": str(save_dir),
+            "files": files_out,
+            "missing": missing,
+            "nmea_enable": bool(nmea_enable),
+        }
         if save_elapsed_sec is not None:
             extra["save_elapsed_sec"] = save_elapsed_sec
         sz_sum = 0
@@ -938,7 +986,7 @@ class ModeOrchestrator:
             extra=extra,
         )
 
-    def _upload_map_to_shared(self, map_name: str, sub_map_name: str) -> None:
+    def _upload_map_to_shared(self, map_name: str, sub_map_name: str, nmea_enable: bool) -> None:
         """로컬 PCD → 공유 경로 rsync 업로드. _stop_mode_worker 완료 후 별도 스레드에서 실행."""
         src = local_map_root() / map_name / sub_map_name
         dst = SHARED_MAP_ROOT / map_name / sub_map_name
@@ -952,7 +1000,7 @@ class ModeOrchestrator:
             mode="mapping",
             map_name=map_name,
             sub_map_name=sub_map_name,
-            extra={"src": str(src), "dst": str(dst)},
+            extra={"src": str(src), "dst": str(dst), "nmea_enable": bool(nmea_enable)},
         )
         print(f"[INFO] map_upload start: {src} → {dst}")
         try:
@@ -969,7 +1017,7 @@ class ModeOrchestrator:
                     mode="mapping",
                     map_name=map_name,
                     sub_map_name=sub_map_name,
-                    extra={"elapsed_sec": rsync_elapsed_sec},
+                    extra={"elapsed_sec": rsync_elapsed_sec, "nmea_enable": bool(nmea_enable)},
                 )
                 print(f"[INFO] map_upload rsync done: map={map_name}/{sub_map_name}, elapsed={rsync_elapsed_sec}s")
                 t_v0 = time.time()
@@ -997,7 +1045,7 @@ class ModeOrchestrator:
                     mode="mapping",
                     map_name=map_name,
                     sub_map_name=sub_map_name,
-                    extra=v_extra,
+                    extra={**v_extra, "nmea_enable": bool(nmea_enable)},
                 )
                 print(
                     f"[INFO] map_upload_verify: map={map_name}/{sub_map_name}, ok={v_ok}, "
@@ -1023,6 +1071,7 @@ class ModeOrchestrator:
                         "reason": reason,
                         "elapsed_sec": elapsed_sec,
                         "exit_code": completed.returncode,
+                        "nmea_enable": bool(nmea_enable),
                     },
                 )
                 print(
@@ -1040,7 +1089,11 @@ class ModeOrchestrator:
                 mode="mapping",
                 map_name=map_name,
                 sub_map_name=sub_map_name,
-                extra={"reason": "rsync 실행 파일을 찾을 수 없습니다.", "elapsed_sec": elapsed_sec},
+                extra={
+                    "reason": "rsync 실행 파일을 찾을 수 없습니다.",
+                    "elapsed_sec": elapsed_sec,
+                    "nmea_enable": bool(nmea_enable),
+                },
             )
         except subprocess.TimeoutExpired:
             elapsed_sec = round(time.time() - t0, 3)
@@ -1051,7 +1104,11 @@ class ModeOrchestrator:
                 mode="mapping",
                 map_name=map_name,
                 sub_map_name=sub_map_name,
-                extra={"reason": "업로드가 시간 제한(7200초)을 초과했습니다.", "elapsed_sec": elapsed_sec},
+                extra={
+                    "reason": "업로드가 시간 제한(7200초)을 초과했습니다.",
+                    "elapsed_sec": elapsed_sec,
+                    "nmea_enable": bool(nmea_enable),
+                },
             )
         except Exception as exc:
             elapsed_sec = round(time.time() - t0, 3)
@@ -1062,7 +1119,11 @@ class ModeOrchestrator:
                 mode="mapping",
                 map_name=map_name,
                 sub_map_name=sub_map_name,
-                extra={"reason": f"업로드 중 예외: {exc}", "elapsed_sec": elapsed_sec},
+                extra={
+                    "reason": f"업로드 중 예외: {exc}",
+                    "elapsed_sec": elapsed_sec,
+                    "nmea_enable": bool(nmea_enable),
+                },
             )
 
     _EVENT_FOR_KIND = {
@@ -1158,13 +1219,18 @@ class ModeOrchestrator:
             return
 
         if parsed.kind == "start_odometry":
-            self._start_mode(mode="odometry", indoor_map_names=parsed.indoor_map_names)
+            self._start_mode(
+                mode="odometry",
+                indoor_map_names=parsed.indoor_map_names,
+                nmea_enable=parsed.nmea_enable,
+            )
             return
         if parsed.kind == "start_mapping":
             self._start_mode(
                 mode="mapping",
                 map_name=parsed.map_name,
                 sub_map_name=parsed.sub_map_name,
+                nmea_enable=parsed.nmea_enable,
             )
             return
         if parsed.kind == "synchronization":
@@ -1183,6 +1249,7 @@ class ModeOrchestrator:
             map_name = self._proc_map_name
             sub_map_name = self._proc_sub_map_name
             indoor_names = self._proc_indoor_map_names
+            nmea_enable = bool(self._proc_nmea_enable)
             if proc is None:
                 return
             rc = proc.poll()
@@ -1193,11 +1260,12 @@ class ModeOrchestrator:
             self._proc_map_name = ""
             self._proc_sub_map_name = ""
             self._proc_indoor_map_names = []
+            self._proc_nmea_enable = True
             self.state = ModeState()
 
         status = "ok" if rc == 0 else "error"
         message = "모드 실행이 종료되었습니다." if rc == 0 else "모드 실행이 비정상 종료되었습니다."
-        ended_extra: dict = {"exit_code": rc}
+        ended_extra: dict = {"exit_code": rc, "nmea_enable": nmea_enable}
         if mode == "mapping" and sub_map_name:
             ended_extra["sub_map_name"] = sub_map_name
         if mode == "odometry" and indoor_names:
@@ -1214,10 +1282,10 @@ class ModeOrchestrator:
         print(f"[INFO] ended: mode={mode}, map_name={map_name}, exit_code={rc}")
 
         if mode == "mapping" and rc == 0 and map_name and sub_map_name:
-            self._publish_map_saved(map_name, sub_map_name)
+            self._publish_map_saved(map_name, sub_map_name, nmea_enable=nmea_enable)
             th_upload = threading.Thread(
                 target=self._upload_map_to_shared,
-                args=(map_name, sub_map_name),
+                args=(map_name, sub_map_name, nmea_enable),
                 name=f"map_upload_{map_name}_{sub_map_name}",
                 daemon=True,
             )

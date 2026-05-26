@@ -30,6 +30,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 from ligo.msg import NmeaHeadingAlignStatus
@@ -129,6 +130,7 @@ class LigoMqttBridge(Node):
         self.declare_parameter("mqtt.ws_path", str(_m.get("ws_path", "/mqtt")))
         self.declare_parameter("mqtt.username", str(_m.get("username", "") or ""))
         self.declare_parameter("mqtt.password", str(_m.get("password", "") or ""))
+        self.declare_parameter("mqtt.nmea_enable", True)
         # paho-mqtt connect()의 keepalive는 정수(초)만 허용 — float 전달 시 "required argument is not an integer"
         self.declare_parameter("mqtt.keepalive_sec", _ka_i)
         self.declare_parameter("reconnect_period_sec", 1.0)
@@ -139,6 +141,8 @@ class LigoMqttBridge(Node):
         self.declare_parameter("topic.receiver_pvt", "/ublox_driver/receiver_pvt")
         self.declare_parameter("topic.heading_align_status", "/ligo/nmea_heading_align_status")
         self.declare_parameter("topic.ligo_mode", "/ligo/mode")
+        self.declare_parameter("topic.local_pose", "/ligo/mqtt_pose")
+        self.declare_parameter("topic.local_pose_meta", "/ligo/mqtt_pose_meta")
 
         self.mqtt_host = str(self.get_parameter("mqtt.host").value)
         self.mqtt_port = int(self.get_parameter("mqtt.port").value)
@@ -157,6 +161,7 @@ class LigoMqttBridge(Node):
         self.mqtt_ws_path = str(self.get_parameter("mqtt.ws_path").value)
         self.mqtt_username = str(self.get_parameter("mqtt.username").value)
         self.mqtt_password = str(self.get_parameter("mqtt.password").value)
+        self.nmea_enable = bool(self.get_parameter("mqtt.nmea_enable").value)
         ka = int(self.get_parameter("mqtt.keepalive_sec").value)
         self._mqtt_keepalive_sec = ka if ka >= 1 else 60
 
@@ -165,6 +170,8 @@ class LigoMqttBridge(Node):
         receiver_pvt_topic = str(self.get_parameter("topic.receiver_pvt").value)
         align_status_topic = str(self.get_parameter("topic.heading_align_status").value)
         ligo_mode_topic = str(self.get_parameter("topic.ligo_mode").value)
+        local_pose_topic = str(self.get_parameter("topic.local_pose").value)
+        local_pose_meta_topic = str(self.get_parameter("topic.local_pose_meta").value)
 
         reconnect_period = float(self.get_parameter("reconnect_period_sec").value)
 
@@ -180,6 +187,12 @@ class LigoMqttBridge(Node):
         self._lat_lon_cov_max: Optional[float] = None
         self._pvt_is_no_fix: Optional[bool] = None
         self._has_heading_sample: bool = False
+        self.local_x: Optional[float] = None
+        self.local_y: Optional[float] = None
+        self.local_z: Optional[float] = None
+        self.local_frame: Optional[str] = None
+        self.local_valid: bool = False
+        self.local_heading_deg: Optional[float] = None
         self._last_ligo_mode_payload: Optional[dict] = None
         self._ligo_mode_bootstrap_done: bool = False
 
@@ -192,6 +205,8 @@ class LigoMqttBridge(Node):
                 "gnss_comm.msg.GnssPVTSolnMsg import 실패: 신호없음(PVT)·ntrip_connected 판정 불가"
             )
         self.create_subscription(NmeaHeadingAlignStatus, align_status_topic, self.on_heading_align_status, 10)
+        self.create_subscription(PoseStamped, local_pose_topic, self.on_local_pose, 10)
+        self.create_subscription(String, local_pose_meta_topic, self.on_local_pose_meta, 10)
         mode_qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -290,6 +305,8 @@ class LigoMqttBridge(Node):
         self._schedule_next_reconnect()
 
     def on_global_position(self, msg: NavSatFix) -> None:
+        if not self.nmea_enable:
+            return
         self.lat = float(msg.latitude)
         self.lon = float(msg.longitude)
         if msg.position_covariance_type != NavSatFix.COVARIANCE_TYPE_UNKNOWN:
@@ -313,6 +330,8 @@ class LigoMqttBridge(Node):
             self._publish_gps()
 
     def on_odom(self, msg: Odometry) -> None:
+        if not self.nmea_enable:
+            return
         q = msg.pose.pose.orientation
         yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
         # yaw(rad): ENU 기준 (x=East, y=North). North 기준 heading으로 변환.
@@ -326,6 +345,8 @@ class LigoMqttBridge(Node):
             self._publish_heading()
 
     def on_receiver_pvt(self, msg) -> None:
+        if not self.nmea_enable:
+            return
         self._pvt_is_no_fix = (not bool(msg.valid_fix)) or int(msg.fix_type) == 0
         # NTRIP 연결(실사용) 여부 근사: diff solution 또는 carrier solution 존재
         ntrip_connected = bool(msg.diff_soln) or int(msg.carr_soln) in (1, 2)
@@ -336,6 +357,9 @@ class LigoMqttBridge(Node):
 
     def _refresh_gps_signal_status(self) -> bool:
         prev = self.gps_signal_status
+        if not self.nmea_enable:
+            self.gps_signal_status = "비활성"
+            return prev != self.gps_signal_status
         # 신호없음: PVT 무픽스 (기존과 동일). 정상/미약: /ligo/global_position NavSatFix 위·경도 분산 대각 최댓값.
         if self._pvt_is_no_fix is True:
             self.gps_signal_status = "신호없음"
@@ -352,6 +376,8 @@ class LigoMqttBridge(Node):
         return prev != self.gps_signal_status
 
     def on_heading_align_status(self, msg: NmeaHeadingAlignStatus) -> None:
+        if not self.nmea_enable:
+            return
         aligned = bool(
             msg.icp_tf_ready and msg.status == NmeaHeadingAlignStatus.STATUS_LOCKED
         )
@@ -372,6 +398,29 @@ class LigoMqttBridge(Node):
         # lock 전환 시점에 heading 샘플이 이미 있으면 즉시 1회 publish
         if (not was_aligned) and aligned and self._has_heading_sample:
             self._publish_heading()
+
+    def on_local_pose(self, msg: PoseStamped) -> None:
+        if self.nmea_enable:
+            return
+        self.local_x = float(msg.pose.position.x)
+        self.local_y = float(msg.pose.position.y)
+        self.local_z = float(msg.pose.position.z)
+        q = msg.pose.orientation
+        self.local_heading_deg = (math.degrees(yaw_from_quaternion(q.x, q.y, q.z, q.w))) % 360.0
+        self._publish_position()
+        self._publish_heading()
+
+    def on_local_pose_meta(self, msg: String) -> None:
+        if self.nmea_enable:
+            return
+        try:
+            obj = json.loads(msg.data)
+            frame_raw = obj.get("frame")
+            if isinstance(frame_raw, str) and frame_raw.strip():
+                self.local_frame = frame_raw.strip()
+            self.local_valid = bool(obj.get("valid", False))
+        except json.JSONDecodeError:
+            self.get_logger().warn("local_pose_meta JSON 파싱 실패")
 
     def on_ligo_mode(self, msg: String) -> None:
         if not self.mqtt_topic_ligo_mode:
@@ -451,24 +500,56 @@ class LigoMqttBridge(Node):
             self._schedule_next_reconnect()
 
     def _publish_position(self) -> None:
+        if not self.nmea_enable:
+            if self.local_x is None:
+                return
+            self._publish_json(
+                self.mqtt_topic_position,
+                {
+                    "x": round(self.local_x, 4),
+                    "y": round(self.local_y, 4),
+                    "z": round(self.local_z, 4),
+                },
+            )
+            return
+        if self.lat is None or self.lon is None:
+            return
         self._publish_json(
             self.mqtt_topic_position,
-            {"lat": self.lat, "lon": self.lon},
+            {"lat": self.lat, "lon": self.lon, "coordinate_type": "wgs84"},
         )
 
     def _publish_heading(self) -> None:
+        if not self.nmea_enable:
+            if self.local_heading_deg is None:
+                return
+            self._publish_json(
+                self.mqtt_topic_heading,
+                {"yaw_deg": round(self.local_heading_deg, 2)},
+            )
+            return
+        if self.heading_deg is None:
+            return
         self._publish_json(
             self.mqtt_topic_heading,
-            {"deg_from_north_cw": self.heading_deg, "cardinal": self.heading_dir},
+            {
+                "deg_from_north_cw": self.heading_deg,
+                "cardinal": self.heading_dir,
+                "coordinate_type": "enu_north",
+            },
         )
 
     def _publish_gps(self) -> None:
+        if not self.nmea_enable:
+            return
         self._publish_json(
             self.mqtt_topic_gps,
             {"status": self.gps_signal_status, "ntrip_connected": self.ntrip_connected},
         )
 
     def _publish_icp(self) -> None:
+        if not self.nmea_enable:
+            return
         self._publish_json(
             self.mqtt_topic_icp,
             {

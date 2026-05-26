@@ -130,6 +130,8 @@ extern std::string enu_heading_topic;
 extern std::string global_position_topic;
 extern std::string ecef_position_topic;
 extern std::string ecef_position_frame_id;
+extern std::string mqtt_pose_topic;
+extern std::string mqtt_pose_meta_topic;
 extern bool nmea_global_anchor_ready;
 extern Eigen::Vector3d nmea_global_anchor_lla;
 /** Latest GNSS odometry sample (front of fusion queue); used for pre-ICP position topics. */
@@ -153,11 +155,12 @@ extern double lidar_time_inte, first_imu_time;
 extern bool NMEA_ENABLE;
 extern bool mapping_mode;
 extern bool indoor_flag;
+extern bool odometry_map_local_mode;
 
 /** True when NMEA fusion or static indoor factors need preloaded grid/PCD assets. */
 inline bool ligo_need_indoor_map_assets()
 {
-  return NMEA_ENABLE || indoor_flag;
+  return NMEA_ENABLE || indoor_flag || odometry_map_local_mode;
 }
 extern double time_update_last, time_current, time_predict_last_const, t_last;
 extern Eigen::Vector3d indoor_pos_enu_meas;

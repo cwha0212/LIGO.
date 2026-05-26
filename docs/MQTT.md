@@ -2,6 +2,15 @@
 
 MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션을 한 문서로 정리한다. **토픽 접두사·브로커 주소·동기화 경로는 [`config/mqtt_topics.yaml`](../config/mqtt_topics.yaml)에서 단일 관리**한다.
 
+## nmea_enable 모드별 문서
+
+`start` 제어 메시지의 `nmea_enable` 값에 따라 좌표/heading/저장 검증 규칙이 달라진다.
+
+- `nmea_enable=true`: [`MQTT_nmea_on.md`](./MQTT_nmea_on.md)
+- `nmea_enable=false`: [`MQTT_nmea_off.md`](./MQTT_nmea_off.md)
+
+아래 본문은 공통 설정과 기존 상세 사양(기본값: `nmea_enable=true`)을 유지한다.
+
 ## 설정 파일
 
 | 항목 | 설명 |

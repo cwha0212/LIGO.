@@ -82,7 +82,7 @@
       # 실외 재정렬(실내 후 GNSS 품질): 그래프만 비우고 ICP 유지 → fused ENU 연속; NMEALIAlign 완료 후 IVox만 지연 리셋
       # true: gpsHandler가 nmea_meas_buf에 넣는 stamp 진단을 /ligo/nmea_stamp_diag 로 퍼블리시 (navsatfix 경로만)
       publish_stamp_diag: true
-      nmea_enable: true
+      nmea_enable: false
       posit_odo_topic: "/ublox_driver/receiver_lla"
       nmea_input_type: "navsatfix"
       # NavSatFix→ENU: 전역 고도는 사용하지 않음(0 m). LIO 맵의 z는 LiDAR/IMU 기준 유지.

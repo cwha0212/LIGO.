@@ -10,33 +10,36 @@ from mqtt_config import resolve_topic
 
 topic = resolve_topic("control_mode")
 # Odometry: map_name 단일 지정 -> PCD/<map_name>/ 하위 sub-map 전체 로드
-# payload = {
+#payload = {
 #     "command": "start",
 #     "mapping_mode": False,
-#     "map_name": "site_a",
+#     "map_name": "map",
+#     "nmea_enable": False,
 # }
 
 # payload = {
 #     "command": "start",
 #     "mapping_mode": True,
-#     "map_name": "site_a",
-#     "sub_map_name": "floor_3",
+#     "map_name": "map",
+#     "sub_map_name": "test_1",
+#     "nmea_enable": False,
 # }
 
 # payload = {
 #     "command": "stop",
 # }
 
-payload = {
-  "command": "synchronization",
-  "map_name": "20260519_050500_ef2f77fd"
-}
+# payload = {
+#   "command": "synchronization",
+#   "map_name": "20260519_050500_ef2f77fd"
+# }
 
 # payload = {
 #   "command": "ready"
 # }
 
-# payload = {"command": "stop"}
+payload = {"command": "stop"}
+
 state = {"connected": False, "published": False, "failed": False, "mid": None}
 
 
