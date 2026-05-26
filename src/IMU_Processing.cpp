@@ -92,7 +92,6 @@ void ImuProcess::Set_init(Eigen::Vector3d &tmp_gravity, Eigen::Matrix3d &rot)
 {
   /** 1. initializing the gravity, gyro bias, acc and gyro covariance
    ** 2. normalize the acceleration measurenments to unit gravity **/
-  // V3D tmp_gravity = - mean_acc / mean_acc.norm() * G_m_s2; // state_gravity;
   M3D hat_grav;
   hat_grav << 0.0, gravity_(2), -gravity_(1),
               -gravity_(2), 0.0, gravity_(0),
@@ -175,7 +174,6 @@ void ImuProcess::Forward_propagation_without_imu(const MeasureGroup &meas, Point
     /** In CV model, bg represents angular velocity **/
     /** In CV model，ba represents linear acceleration **/
     V3D dR = state_LI_Init.bg * dt;
-    // M3D Exp_f = Exp(state_LI_Init.bg, dt);
     F_x.block<3, 3>(3, 3) = Exp(state_LI_Init.bg, -dt);
     F_x.block<3, 3>(3, 9) = Eye3d * dt;
     F_x.block<3, 3>(0, 6) = Eye3d * dt;

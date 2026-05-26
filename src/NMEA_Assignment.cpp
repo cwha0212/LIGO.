@@ -43,36 +43,23 @@ void NMEAAssignment::initNoises( void ) // maybe usable!
 {
     gtsam::Vector priorrotNoiseVector3(3);
     priorrotNoiseVector3 << rot_noise, rot_noise, rot_noise;
-    // priorrotNoiseVector3 << prior_noise / 1000, prior_noise / 1000, prior_noise / 1000;
     priorrotNoise = gtsam::noiseModel::Diagonal::Variances(priorrotNoiseVector3);
 
     gtsam::Vector priorposNoiseVector12(12);
-    // priorposNoiseVector12 << prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000,
-    //                         prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000;
     priorposNoiseVector12 << prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise,
                             prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise;
     priorposNoise = gtsam::noiseModel::Diagonal::Variances(priorposNoiseVector12);
 
-    // gtsam::Vector priorvelNoiseVector3(3);
-    // priorvelNoiseVector3 << prior_noise, prior_noise, prior_noise;
-    // priorvelNoise = gtsam::noiseModel::Diagonal::Variances(priorvelNoiseVector3);
-
     gtsam::Vector priorNoiseVector6(6);
-    // priorNoiseVector6 << prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000; 
-    priorNoiseVector6 << prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise; 
-    //, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise;
+    priorNoiseVector6 << prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise;
     priorNoise = gtsam::noiseModel::Diagonal::Variances(priorNoiseVector6);
 
     gtsam::Vector priorNoiseVector12(12);
-    // priorNoiseVector6 << prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000; 
-    priorNoiseVector12 << marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise; 
-    //, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise;
+    priorNoiseVector12 << marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise;
     priorBiasNoise = gtsam::noiseModel::Diagonal::Variances(priorNoiseVector12);
 
     gtsam::Vector priorNoiseVector3(3);
-    // priorNoiseVector6 << prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000, prior_noise / 1000; 
-    priorNoiseVector3 << marg_noise, marg_noise, marg_noise; //, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01; 
-    //, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise;
+    priorNoiseVector3 << marg_noise, marg_noise, marg_noise;
     priorGravNoise = gtsam::noiseModel::Diagonal::Variances(priorNoiseVector3);
 
     gtsam::Vector margrotNoiseVector3(3);
@@ -80,7 +67,7 @@ void NMEAAssignment::initNoises( void ) // maybe usable!
     margrotNoise = gtsam::noiseModel::Diagonal::Variances(margrotNoiseVector3);
 
     gtsam::Vector margposNoiseVector6(6);
-    margposNoiseVector6 << prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise; //, marg_noise, marg_noise, marg_noise; //, marg_noise, marg_noise, marg_noise;
+    margposNoiseVector6 << prior_noise, prior_noise, prior_noise, prior_noise, prior_noise, prior_noise;
     margposNoise = gtsam::noiseModel::Diagonal::Variances(margposNoiseVector6);
 
     gtsam::Vector odomaNoiseVector12(12);
@@ -92,8 +79,7 @@ void NMEAAssignment::initNoises( void ) // maybe usable!
     priorextrotNoise = gtsam::noiseModel::Diagonal::Variances(priorextrotNoiseVector3);
 
     gtsam::Vector margNoiseVector3(3);
-    margNoiseVector3 << prior_noise / 10, prior_noise / 10, prior_noise / 10; //, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, marg_noise, 
-                        // marg_noise, marg_noise;
+    margNoiseVector3 << prior_noise / 10, prior_noise / 10, prior_noise / 10;
     margNoise = gtsam::noiseModel::Diagonal::Variances(margNoiseVector3);
 
     gtsam::Vector priorextposNoiseVector3(3);
@@ -109,9 +95,6 @@ void NMEAAssignment::initNoises( void ) // maybe usable!
     odomNoiseVector15 << odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise,
                         odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise;
     odomNoiseIMU = gtsam::noiseModel::Diagonal::Variances(odomNoiseVector15); // should be related to the imu noise
-    // odomNoiseIMU = gtsam::noiseModel::Robust::Create(
-    //                 gtsam::noiseModel::mEstimator::Cauchy::Create(1), // optional: replacing Cauchy by DCS or GemanMcClure is okay but Cauchy is empirically good.
-    //                 gtsam::noiseModel::Diagonal::Variances(odomNoiseVector15));
     gtsam::Vector relatNoiseVector9(9);
     relatNoiseVector9 << odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise, odo_noise;
     relatNoise = gtsam::noiseModel::Diagonal::Variances(relatNoiseVector9);

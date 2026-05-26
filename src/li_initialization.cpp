@@ -205,9 +205,6 @@ void gpsHandler(const sensor_msgs::msg::NavSatFix::ConstSharedPtr & gpsMsg)
         gps_odom.pose.covariance[7] = gpsMsg->position_covariance[4];  // yy
         gps_odom.pose.covariance[14] = gpsMsg->position_covariance[8]; // zz
     }
-    // gps_odom->pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(0.0, 0.0, 0.0);
-    // pubGpsOdom.publish(gps_odom);
-    // gpsQueue.push_back(gps_odom);
     if (offset_just_inited)
     {
         // Clear any previously buffered NMEA messages with incompatible time base
@@ -282,7 +279,6 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         else
         {
             PointCloudXYZI::Ptr  ptr_con_i(new PointCloudXYZI(10000,1));
-            // cout << "ptr div num:" << ptr_div->size() << endl;
             *ptr_con_i = *ptr_con;
             lidar_buffer.push_back(ptr_con_i);
             double time_con_i = time_con;
@@ -300,9 +296,6 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         }
     }
     }
-    // s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
-    // mtx_buffer.unlock();
-    // sig_buffer.notify_all();
 }
 
 void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
@@ -311,11 +304,7 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
     if (rclcpp::Time(msg->header.stamp).seconds() < last_timestamp_lidar)
     {
         RCLCPP_ERROR(rclcpp::get_logger("ligo"), "lidar loop back, clear buffer");
-
-        // mtx_buffer.unlock();
-        // sig_buffer.notify_all();
         return;
-        // lidar_buffer.shrink_to_fit();
     }
 
     last_timestamp_lidar = rclcpp::Time(msg->header.stamp).seconds();    
@@ -358,12 +347,9 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
         }
     }
     }
-    // s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
-    // mtx_buffer.unlock();
-    // sig_buffer.notify_all();
 }
 
-void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in) 
+void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in)
 {
     sensor_msgs::msg::Imu::SharedPtr msg = std::make_shared<sensor_msgs::msg::Imu>(*msg_in);
 
@@ -372,24 +358,15 @@ void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr msg_in)
     msg->header.stamp.nanosec = static_cast<uint32_t>(std::round((t - std::floor(t)) * 1e9));
 
     double timestamp = rclcpp::Time(msg->header.stamp).seconds();
-    // printf("time_diff%f, %f, %f\n", last_timestamp_imu - timestamp, last_timestamp_imu, timestamp);
 
     if (timestamp < last_timestamp_imu)
     {
         RCLCPP_ERROR(rclcpp::get_logger("ligo"), "imu loop back, clear deque");
-        // imu_deque.shrink_to_fit();
-        // cout << "check time:" << timestamp << ";" << last_timestamp_imu << endl;
-        // printf("time_diff%f, %f, %f\n", last_timestamp_imu - timestamp, last_timestamp_imu, timestamp);
-        
-        // mtx_buffer.unlock();
-        // sig_buffer.notify_all();
         return;
     }
 
     imu_deque.emplace_back(msg);
     last_timestamp_imu = timestamp;
-    // mtx_buffer.unlock();
-    // sig_buffer.notify_all();
 }
 
 bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr> &nmea_msg)

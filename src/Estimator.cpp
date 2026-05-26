@@ -34,7 +34,6 @@
  *  POSSIBILITY OF SUCH DAMAGE.
  */
 
-// #include <../include/IKFoM/IKFoM_toolkit/esekfom/esekfom.hpp>
 #include "Estimator.h"
 #include <gtsam/geometry/Rot3.h>
 
@@ -44,7 +43,7 @@ PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI(10000, 1));
 PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI(10000, 1));
 std::vector<V3D> pbody_list;
 std::vector<V3D> pimu_list;
-std::vector<PointVector> Nearest_Points; 
+std::vector<PointVector> Nearest_Points;
 std::shared_ptr<IVoxType> ivox_ = nullptr;                    // localmap in ivox
 std::shared_ptr<IVoxType> ivox_last_ = nullptr;                    // localmap in ivox
 std::vector<double> knots_t;
@@ -63,7 +62,7 @@ esekfom::esekf<state_output, 24, input_ikfom> kf_output;
 double G_m_s2 = 9.81;
 input_ikfom input_in;
 V3D angvel_avr, acc_avr, acc_avr_norm;
-int feats_down_size = 0;  
+int feats_down_size = 0;
 V3D Lidar_T_wrt_IMU(Zero3d);
 M3D Lidar_R_wrt_IMU(Eye3d);
 int scan_count = 0;
@@ -97,8 +96,8 @@ Eigen::Matrix<double, 24, 1> get_f_output(state_output &s, const input_ikfom &in
 	vect3 a_inertial = s.rot * s.acc; // .normalized()
 	for(int i = 0; i < 3; i++ ){
 		res(i) = s.vel[i];
-		res(i + 3) = s.omg[i]; 
-		res(i + 6) = a_inertial[i] + s.gravity[i]; 
+		res(i + 3) = s.omg[i];
+		res(i + 6) = a_inertial[i] + s.gravity[i];
 	}
 	return res;
 }
@@ -119,10 +118,7 @@ Eigen::Matrix<double, 24, 24> df_dx_output(state_output &s, const input_ikfom &i
 	cov.template block<3, 3>(6, 12) = s.rot * delta_t; //.normalized().toRotationMatrix();
 	cov.template block<3, 3>(3, 9) = Jacob * delta_t;
 	cov.template block<3, 3>(3, 3) = delta_R.transpose();
-	// Eigen::Matrix<state_ikfom::scalar, 2, 1> vec = Eigen::Matrix<state_ikfom::scalar, 2, 1>::Zero();
-	// Eigen::Matrix<state_ikfom::scalar, 3, 2> grav_matrix;
-	// s.S2_Mx(grav_matrix, vec, 21);
-	cov.template block<3, 3>(6, 15) = Eigen::Matrix3d::Identity() * delta_t; // grav_matrix; 
+	cov.template block<3, 3>(6, 15) = Eigen::Matrix3d::Identity() * delta_t;
 	return cov;
 }
 
@@ -137,14 +133,14 @@ void h_model_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_
 	{
 		PointType &point_body_j  = feats_down_body->points[idx+j+1];
 		PointType &point_world_j = feats_down_world->points[idx+j+1];
-		pointBodyToWorld(&point_body_j, &point_world_j); 
+		pointBodyToWorld(&point_body_j, &point_world_j);
 		V3D p_body = pbody_list[idx+j+1];
 		double p_norm = p_body.norm();
 		V3D p_world;
 		p_world << point_world_j.x, point_world_j.y, point_world_j.z;
 		{
 			auto &points_near = Nearest_Points[idx+j+1];
-            ivox_->GetClosestPoint(point_world_j, points_near, NUM_MATCH_POINTS); // 
+            ivox_->GetClosestPoint(point_world_j, points_near, NUM_MATCH_POINTS); //
 			if ((points_near.size() < NUM_MATCH_POINTS)) // || pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5)
 			{
 				point_selected_surf[idx+j+1] = false;
@@ -155,7 +151,7 @@ void h_model_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_
 				if (esti_plane(pabcd, points_near, plane_thr)) //(planeValid)
 				{
 					float pd2 = fabs(pabcd(0) * point_world_j.x + pabcd(1) * point_world_j.y + pabcd(2) * point_world_j.z + pabcd(3));
-					
+
 					if (effect_num_k > 0) continue;
 					if (p_norm > match_s * pd2 * pd2)
 					{
@@ -166,44 +162,34 @@ void h_model_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_
 						normvec->points[j].intensity = pabcd(3);
 						effect_num_k ++;
 					}
-				}  
+				}
 			}
 		}
 	}
-	if (effect_num_k == 0) 
+	if (effect_num_k == 0)
 	{
 		ekfom_data.valid = false;
 		return;
 	}
 	ekfom_data.M_Noise = laser_point_cov;
-	// double sqrt_laser_noise = sqrt(laser_point_cov);
 	ekfom_data.h_x.resize(effect_num_k, 6);
-	ekfom_data.h_x = Eigen::MatrixXd::Zero(effect_num_k, 6); // 12);
+	ekfom_data.h_x = Eigen::MatrixXd::Zero(effect_num_k, 6);
 	ekfom_data.z.resize(effect_num_k);
-	// ekfom_data.z_R.resize(effect_num_k);
 	int m = 0;
-	// V3D last_norm_vec = V3D::Zero();
-	// if (!p_gnss->norm_vec_holder.empty()) 
-	// {
-	// 	last_norm_vec = p_gnss->norm_vec_holder.back();
-	// }
 	for (int j = 0; j < time_seq[k]; j++)
 	{
-		// ekfom_data.converge = false;
 		if(point_selected_surf[idx+j+1])
 		{
 			V3D norm_vec(normvec->points[j].x, normvec->points[j].y, normvec->points[j].z);
-			
-			// {   
-				M3D point_crossmat = crossmat_list[idx+j+1];
-				V3D C(s.rot.transpose() * norm_vec); // conjugate().normalized()
-				V3D A(point_crossmat * C);
 
-				if (std::fabs(norm_vec(2)) > 0.9) A = A.normalized(); // if (A.norm() > 1.0 && std::fabs(norm_vec(2)) > 0.9) 
-				ekfom_data.h_x.block<1, 6>(m, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A); //, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
-			// }
+			M3D point_crossmat = crossmat_list[idx+j+1];
+			V3D C(s.rot.transpose() * norm_vec);
+			V3D A(point_crossmat * C);
+
+			if (std::fabs(norm_vec(2)) > 0.9) A = A.normalized();
+			ekfom_data.h_x.block<1, 6>(m, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A);
 			ekfom_data.z(m) = -norm_vec(0) * feats_down_world->points[idx+j+1].x -norm_vec(1) * feats_down_world->points[idx+j+1].y -norm_vec(2) * feats_down_world->points[idx+j+1].z-normvec->points[j].intensity;
-			
+
 			m++;
 		}
 	}
@@ -221,35 +207,35 @@ void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ek
 	{
 		if(fabs(angvel_avr(0)) >= 0.99 * satu_gyro)
 		{
-			ekfom_data.satu_check[0] = true; 
+			ekfom_data.satu_check[0] = true;
 			ekfom_data.z_IMU(0) = 0.0;
 		}
-		
-		if(fabs(angvel_avr(1)) >= 0.99 * satu_gyro) 
+
+		if(fabs(angvel_avr(1)) >= 0.99 * satu_gyro)
 		{
 			ekfom_data.satu_check[1] = true;
 			ekfom_data.z_IMU(1) = 0.0;
 		}
-		
+
 		if(fabs(angvel_avr(2)) >= 0.99 * satu_gyro)
 		{
 			ekfom_data.satu_check[2] = true;
 			ekfom_data.z_IMU(2) = 0.0;
 		}
-		
+
 		if(fabs(acc_avr(0)) >= 0.99 * satu_acc)
 		{
 			ekfom_data.satu_check[3] = true;
 			ekfom_data.z_IMU(3) = 0.0;
 		}
 
-		if(fabs(acc_avr(1)) >= 0.99 * satu_acc) 
+		if(fabs(acc_avr(1)) >= 0.99 * satu_acc)
 		{
 			ekfom_data.satu_check[4] = true;
 			ekfom_data.z_IMU(4) = 0.0;
 		}
 
-		if(fabs(acc_avr(2)) >= 0.99 * satu_acc) 
+		if(fabs(acc_avr(2)) >= 0.99 * satu_acc)
 		{
 			ekfom_data.satu_check[5] = true;
 			ekfom_data.z_IMU(5) = 0.0;
@@ -262,61 +248,19 @@ void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d
 	Eigen::Matrix3d res_R = s.rot.transpose() * p_nmea->state_const_.rot;
 	Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
 	ekfom_data.h_NMEA.setIdentity();
-	// ekfom_data.h_GNSS *= p_gnss->odo_weight;
-	// ekfom_data.h_GNSS(0, 0) = p_gnss->odo_weight1; // ekfom_data.h_GNSS(3, 3) = p_gnss->odo_weight4;
-	// ekfom_data.h_GNSS(1, 1) = p_gnss->odo_weight1; // ekfom_data.h_GNSS(4, 4) = p_gnss->odo_weight5;
-	// ekfom_data.h_GNSS(0, 0) = 1.5; // p_gnss->odo_weight1; // ekfom_data.h_GNSS(5, 5) = p_gnss->odo_weight6;
-	// ekfom_data.h_GNSS(1, 1) = 1.5; // p_gnss->odo_weight1; // ekfom_data.h_GNSS(5, 5) = p_gnss->odo_weight6;
-	// ekfom_data.h_GNSS(2, 2) = 1.5; // p_gnss->odo_weight1; // ekfom_data.h_GNSS(5, 5) = p_gnss->odo_weight6;
-	ekfom_data.h_NMEA.block<3, 3>(3, 3) = Jacob_right_inv<double>(res_r); // 0.1 *
-	// ekfom_data.h_GNSS.block<1, 3>(3, 3) *= p_gnss->odo_weight4;
-	// ekfom_data.h_GNSS.block<1, 3>(4, 3) *= p_gnss->odo_weight5;
-	// ekfom_data.h_GNSS.block<1, 3>(5, 3) *= p_gnss->odo_weight6;
+	ekfom_data.h_NMEA.block<3, 3>(3, 3) = Jacob_right_inv<double>(res_r);
 	ekfom_data.z_NMEA.setZero();
-	// ekfom_data.h_GNSS.block<3, 3>(3, 3) = Eigen::Matrix3d::Zero(); // Jacob_right_inv<double>(res_r); // 
-	// ekfom_data.h_GNSS.block<3, 3>(6, 6) = Eigen::Matrix3d::Zero(); // Jacob_right_inv<double>(res_r); // 
-	// ekfom_data.z_GNSS.block<3, 1>(3, 0) = res_r;
-	// ekfom_data.z_GNSS.block<3, 1>(0, 0) = p_gnss->odo_weight * (p_gnss->state_const_.pos - s.pos); // 
 	ekfom_data.z_NMEA.block<3, 1>(0, 0) = p_nmea->state_const_.pos - s.pos;
 	ekfom_data.z_NMEA.block<3, 1>(6, 0) = p_nmea->state_const_.vel - s.vel;
-	// ekfom_data.z_GNSS(0) *= 1.5;
-	// ekfom_data.z_GNSS(1) *= 1.5;
-	// ekfom_data.z_GNSS(2) *= 1.5;
-	// ekfom_data.z_GNSS(0) = p_gnss->odo_weight1 * (p_gnss->state_const_.pos(0) - s.pos(0)); // 
-	// ekfom_data.z_GNSS(1) = p_gnss->odo_weight2 * (p_gnss->state_const_.pos(1) - s.pos(1)); // 
-	// ekfom_data.z_GNSS(2) = p_gnss->odo_weight3 * (p_gnss->state_const_.pos(2) - s.pos(2)); // 
 	ekfom_data.z_NMEA.block<3, 1>(3, 0) = res_r;
 	ekfom_data.M_Noise = gnss_ekf_noise;
-	// Eigen::Matrix3d rot_const = MTK::SO3<double>::exp(so3_deg);
-	// Eigen::Matrix3d res_R = rot_const.transpose() * s.rot.transpose() * p_nmea->state_const_.rot;
-	// Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
-	// ekfom_data.h_NMEA.setIdentity();
-	// ekfom_data.h_NMEA.block<3, 3>(3, 3) = Jacob_right_inv<double>(res_r) * rot_const.transpose();
-	// ekfom_data.h_NMEA.block<3, 3>(0, 6) = Eigen::Matrix3d::Identity() * s.time_diff(0);
-	// ekfom_data.h_NMEA.block<3, 1>(0, 9) = s.vel + s.acc * s.time_diff(0);
-	// ekfom_data.h_NMEA.block<3, 3>(0, 13) = 0.5 * Eigen::Matrix3d::Identity() * s.time_diff(0) * s.time_diff(0);
-	// ekfom_data.h_NMEA.block<3, 1>(3, 9) = Jacob_right_inv<double>(res_r) * s.omg;
-	// ekfom_data.h_NMEA.block<3, 3>(3, 10) = Jacob_right_inv<double>(res_r) * s.time_diff(0);
-	// ekfom_data.h_NMEA.block<3, 1>(6, 9) = s.acc;
-	// ekfom_data.h_NMEA.block<3, 3>(6, 13) = Eigen::Matrix3d::Identity() * s.time_diff(0);
-	// // ekfom_data.h_NMEA.block<3, 3>(6, 6) = Eigen::Matrix3d::Zero(); Jacob_right_inv<double>(res_r);
-	// ekfom_data.z_NMEA.setZero();
-	// ekfom_data.z_NMEA.block<3, 1>(0, 0) = p_nmea->state_const_.pos - s.pos - s.vel * s.time_diff - 0.5 * s.acc * s.time_diff * s.time_diff; // 
-	// ekfom_data.z_NMEA.block<3, 1>(6, 0) = p_nmea->state_const_.vel - s.vel - s.acc * s.time_diff; // 
-	// ekfom_data.z_NMEA.block<3, 1>(3, 0) = res_r; // s.rot.transpose() * p_gnss->state_.rot; //  
 }
 
 void pointBodyToWorld(PointType const * const pi, PointType * const po)
-{    
+{
     V3D p_body(pi->x, pi->y, pi->z);
-    
-    V3D p_global;
-	{
-		// if (!use_imu_as_input)
-		{
-			p_global = kf_output.x_.rot * (Lidar_R_wrt_IMU * p_body + Lidar_T_wrt_IMU) + kf_output.x_.pos; // .normalized()
-		}
-	}
+
+    V3D p_global = kf_output.x_.rot * (Lidar_R_wrt_IMU * p_body + Lidar_T_wrt_IMU) + kf_output.x_.pos;
 
     po->x = p_global(0);
     po->y = p_global(1);
