@@ -245,6 +245,17 @@ void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ek
 
 void h_model_NMEA_output(state_output &s, Eigen::Matrix3d cov_p, Eigen::Matrix3d cov_R, esekfom::dyn_share_modified<double> &ekfom_data)
 {
+	if (!NMEA_ENABLE && gicp_ekf_target_valid) {
+		Eigen::Matrix3d res_R = s.rot.transpose() * gicp_ekf_target_rot;
+		Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
+		ekfom_data.h_NMEA.setIdentity();
+		ekfom_data.h_NMEA.block<3, 3>(3, 3) = Jacob_right_inv<double>(res_r);
+		ekfom_data.z_NMEA.setZero();
+		ekfom_data.z_NMEA.block<3, 1>(0, 0) = gicp_ekf_target_pos - s.pos;
+		ekfom_data.z_NMEA.block<3, 1>(3, 0) = res_r;
+		ekfom_data.M_Noise = indoor_gicp_ekf_noise;
+		return;
+	}
 	Eigen::Matrix3d res_R = s.rot.transpose() * p_nmea->state_const_.rot;
 	Eigen::Vector3d res_r = gtsam::Rot3::Logmap(gtsam::Rot3(res_R));
 	ekfom_data.h_NMEA.setIdentity();

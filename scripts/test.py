@@ -34,11 +34,11 @@ topic = resolve_topic("control_mode")
 #   "map_name": "20260519_050500_ef2f77fd"
 # }
 
-# payload = {
-#   "command": "ready"
-# }
+payload = {
+  "command": "ready"
+}
 
-payload = {"command": "stop"}
+# payload = {"command": "stop"}
 
 state = {"connected": False, "published": False, "failed": False, "mid": None}
 

@@ -195,6 +195,11 @@ extern bool indoor_gicp_lio_enu_snap_applied;
 extern bool indoor_gicp_lio_enu_snap_requested;
 /** IndoorLocalizationFactor `relative_sqrt_info` (values[16]); measurement is GICP-refined ENU pose only. */
 extern double indoor_gicp_factor_sqrt_info_scale;
+/** GICP EKF measurement update target (nmea_enable=false continuous correction). */
+extern Eigen::Vector3d gicp_ekf_target_pos;
+extern Eigen::Matrix3d gicp_ekf_target_rot;
+extern bool gicp_ekf_target_valid;
+extern double indoor_gicp_ekf_noise;
 extern MeasureGroup Measures;
 
 extern std::vector<Eigen::Vector3d> est_poses;

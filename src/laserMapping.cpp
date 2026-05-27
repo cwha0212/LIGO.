@@ -3262,6 +3262,61 @@ int main(int argc, char** argv)
                             "(ENU %.2f, %.2f, %.2f m)",
                             p_g.x(), p_g.y(), p_g.z());
                     }
+
+                    if (!NMEA_ENABLE && indoor_gicp_lio_enu_snap_requested && indoor_pose_valid) {
+                        const Eigen::Isometry3d& T_gicp = indoor_gicp_T_map_lidar;
+                        const Eigen::Vector3d p_old = kf_output.x_.pos;
+                        const Eigen::Matrix3d R_old = kf_output.x_.rot;
+
+                        const Eigen::Vector3d p_new = T_gicp.rotation() * p_old + T_gicp.translation();
+                        const Eigen::Matrix3d R_new = T_gicp.rotation() * R_old;
+
+                        const Eigen::Vector3d delta_t = p_new - p_old;
+
+                        ivox_.reset(new IVoxType(ivox_options_));
+                        ivox_last_.reset(new IVoxType(ivox_options_));
+
+                        kf_output.x_.pos = p_new;
+                        kf_output.x_.rot = R_new;
+                        kf_output.x_.acc = -R_new.transpose() * kf_output.x_.gravity;
+
+                        indoor_gicp_T_map_lidar = Eigen::Isometry3d::Identity();
+
+                        indoor_gicp_lio_enu_snap_applied = true;
+                        indoor_gicp_lio_enu_snap_requested = false;
+                        init_map = false;
+                        RCLCPP_WARN(
+                            rclcpp::get_logger("ligo"),
+                            "[indoor/gicp] nmea_off pose snap: first converged+quality GICP — "
+                            "LIO pose moved to map frame  pos=(%.3f,%.3f,%.3f)  "
+                            "delta_t=(%.3f,%.3f,%.3f)",
+                            p_new.x(), p_new.y(), p_new.z(),
+                            delta_t.x(), delta_t.y(), delta_t.z());
+                    }
+                    else if (!NMEA_ENABLE && indoor_gicp_lio_enu_snap_applied && indoor_pose_valid) {
+                        const Eigen::Isometry3d& T_g = indoor_gicp_T_map_lidar;
+                        const Eigen::Vector3d pos_before = kf_output.x_.pos;
+                        gicp_ekf_target_pos = T_g.rotation() * kf_output.x_.pos + T_g.translation();
+                        gicp_ekf_target_rot = T_g.rotation() * kf_output.x_.rot;
+                        gicp_ekf_target_valid = true;
+
+                        kf_output.update_iterated_dyn_share_NMEA();
+                        gicp_ekf_target_valid = false;
+
+                        static size_t s_gicp_ekf_cnt = 0;
+                        ++s_gicp_ekf_cnt;
+                        if (s_gicp_ekf_cnt <= 5 || s_gicp_ekf_cnt % 100 == 0) {
+                            const Eigen::Vector3d correction = kf_output.x_.pos - pos_before;
+                            RCLCPP_INFO(
+                                rclcpp::get_logger("ligo"),
+                                "[indoor/gicp] EKF update #%zu  correction=(%.4f,%.4f,%.4f)  "
+                                "pos=(%.3f,%.3f,%.3f)  noise=%.4f",
+                                s_gicp_ekf_cnt,
+                                correction.x(), correction.y(), correction.z(),
+                                kf_output.x_.pos.x(), kf_output.x_.pos.y(), kf_output.x_.pos.z(),
+                                indoor_gicp_ekf_noise);
+                        }
+                    }
                 }
 
             }

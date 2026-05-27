@@ -230,6 +230,10 @@ bool indoor_gicp_snap_lio_enu_on_first_convergence = true;
 bool indoor_gicp_lio_enu_snap_applied = false;
 bool indoor_gicp_lio_enu_snap_requested = false;
 double indoor_gicp_factor_sqrt_info_scale = 1.0;
+Eigen::Vector3d gicp_ekf_target_pos = Eigen::Vector3d::Zero();
+Eigen::Matrix3d gicp_ekf_target_rot = Eigen::Matrix3d::Identity();
+bool gicp_ekf_target_valid = false;
+double indoor_gicp_ekf_noise = 0.01;
 std::vector<Eigen::Vector3d> est_poses;
 std::vector<Eigen::Vector3d> local_poses;
 std::vector<Eigen::Matrix3d> local_rots;
@@ -499,6 +503,7 @@ void readParameters(rclcpp::Node * node)
     indoor_gicp_factor_sqrt_info_scale = get_param("indoor.gicp_factor_sqrt_info_scale", 1.0);
     if (indoor_gicp_factor_sqrt_info_scale < 1e-9) indoor_gicp_factor_sqrt_info_scale = 1e-9;
     cout << "indoor.gicp_factor_sqrt_info_scale: " << indoor_gicp_factor_sqrt_info_scale << endl;
+    indoor_gicp_ekf_noise = get_param("indoor.gicp_ekf_noise", 0.01);
   }
 }
 

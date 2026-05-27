@@ -398,7 +398,10 @@ bool runIndoorGICPUpdate(const CloudT::ConstPtr& scan_world,
 
   if (!quality_ok) ++s_gicp_rejected;
 
-  if (indoor_gicp_snap_lio_enu_on_first_convergence && !indoor_gicp_lio_enu_snap_applied &&
+  const bool want_snap = NMEA_ENABLE
+      ? indoor_gicp_snap_lio_enu_on_first_convergence
+      : true;
+  if (want_snap && !indoor_gicp_lio_enu_snap_applied &&
       result.converged && quality_ok) {
     indoor_gicp_lio_enu_snap_requested = true;
   }
