@@ -292,7 +292,7 @@ class ModeOrchestrator:
         if int(sub_rc) != int(mqtt.MQTT_ERR_SUCCESS):
             self._publish_status(
                 event="control",
-                status="error",
+                status="fail",
                 message=f"제어 토픽 구독 실패: rc={sub_rc}",
             )
             print(f"[ERROR] MQTT subscribe 실패: topic={self.mqtt_control_topic}, rc={sub_rc}")
@@ -345,10 +345,9 @@ class ModeOrchestrator:
     ) -> None:
         with self._lock:
             if self._busy_locked():
-                # 디스패치 레벨에서 1차 차단됨; 이중 안전망.
                 self._publish_status(
-                    event="start",
-                    status="error",
+                    event=mode,
+                    status="fail",
                     message="이미 실행 중인 작업이 있습니다. stop 명령으로 먼저 종료하세요.",
                     mode=mode,
                     map_name=map_name,
@@ -371,8 +370,8 @@ class ModeOrchestrator:
                 proc = subprocess.Popen(cmd, start_new_session=True)
             except Exception as exc:
                 self._publish_status(
-                    event="start",
-                    status="error",
+                    event=mode,
+                    status="fail",
                     message=f"모드 실행 실패: {exc}",
                     mode=mode,
                     map_name=map_name,
@@ -404,8 +403,8 @@ class ModeOrchestrator:
                 self._proc_nmea_enable = True
                 self.state = ModeState()
             self._publish_status(
-                event="start",
-                status="error",
+                event=mode,
+                status="fail",
                 message="모드 프로세스가 시작 직후 종료되었습니다. journalctl 로그를 확인하세요.",
                 mode=mode,
                 map_name=map_name,
@@ -420,8 +419,8 @@ class ModeOrchestrator:
         if mode == "odometry" and indoor_map_names:
             start_extra["indoor_map_names"] = list(indoor_map_names)
         self._publish_status(
-            event="start",
-            status="ok",
+            event=mode,
+            status="start",
             message=f"{mode} 모드 실행을 시작했습니다.",
             mode=mode,
             map_name=map_name if mode == "mapping" else self._proc_map_name,
@@ -614,7 +613,7 @@ class ModeOrchestrator:
         if rsync_ok:
             self._publish_status(
                 event="sync",
-                status="ok",
+                status="finish",
                 message="맵 동기화가 완료되었습니다.",
                 mode="idle",
                 map_name=map_name,
@@ -637,7 +636,7 @@ class ModeOrchestrator:
                 )
             self._publish_status(
                 event="sync_verify",
-                status="ok" if v_ok else "error",
+                status="success" if v_ok else "fail",
                 message=(
                     "맵 동기화 후 파일 용량 검증을 통과했습니다."
                     if v_ok
@@ -654,7 +653,7 @@ class ModeOrchestrator:
         else:
             self._publish_status(
                 event="sync",
-                status="error",
+                status="fail",
                 message="맵 동기화에 실패했습니다.",
                 mode="idle",
                 map_name=map_name,
@@ -668,10 +667,9 @@ class ModeOrchestrator:
         started = False
         with self._lock:
             if self._busy_locked():
-                # 디스패치 레벨에서 1차 차단됨; 이중 안전망.
                 self._publish_status(
                     event="sync",
-                    status="error",
+                    status="fail",
                     message="이미 실행 중인 작업이 있습니다. stop 명령으로 먼저 종료하세요.",
                     mode="idle",
                     map_name=map_name,
@@ -681,7 +679,7 @@ class ModeOrchestrator:
             if not src.is_dir():
                 self._publish_status(
                     event="sync",
-                    status="error",
+                    status="fail",
                     message="맵 동기화에 실패했습니다.",
                     mode="idle",
                     map_name=map_name,
@@ -694,7 +692,7 @@ class ModeOrchestrator:
             except Exception as exc:
                 self._publish_status(
                     event="sync",
-                    status="error",
+                    status="fail",
                     message="맵 동기화에 실패했습니다.",
                     mode="idle",
                     map_name=map_name,
@@ -714,7 +712,7 @@ class ModeOrchestrator:
         if started:
             self._publish_status(
                 event="sync",
-                status="ok",
+                status="start",
                 message="맵 동기화를 시작했습니다.",
                 mode="idle",
                 map_name=map_name,
@@ -734,15 +732,16 @@ class ModeOrchestrator:
                 self._proc_indoor_map_names = []
                 self.state = ModeState()
                 self._publish_status(
-                    event="stop",
+                    event="ready",
                     status="ok",
                     message="종료할 실행 중 모드가 없습니다.",
                 )
                 return
             if self._stop_in_progress:
+                cur_mode = self._proc_mode
                 self._publish_status(
-                    event="stop",
-                    status="ok",
+                    event=cur_mode if cur_mode in ("mapping", "odometry") else "ready",
+                    status="stop",
                     message="이미 stop 요청이 진행 중입니다.",
                     mode=self._proc_mode,
                     map_name=self._proc_map_name,
@@ -812,8 +811,8 @@ class ModeOrchestrator:
         if mode == "odometry" and indoor_names:
             stop_extra["indoor_map_names"] = indoor_names
         self._publish_status(
-            event="stop",
-            status="ok",
+            event=mode if mode in ("mapping", "odometry") else "ready",
+            status="stop",
             message=stop_msg,
             mode=mode,
             map_name=map_name,
@@ -945,7 +944,7 @@ class ModeOrchestrator:
                     files_out.append({"name": n, "size": None})
             else:
                 missing.append(n)
-        status = "ok" if not missing else "warn"
+        status = "finish"
         return status, files_out, missing
 
     def _publish_map_saved(
@@ -959,7 +958,7 @@ class ModeOrchestrator:
         st, files_out, missing = self._map_artifact_status(save_dir, sub_map_name, nmea_enable)
         msg = (
             "맵 저장이 완료되었습니다."
-            if st == "ok"
+            if not missing
             else f"일부 산출물이 없습니다: {', '.join(missing)}"
         )
         extra: dict[str, Any] = {
@@ -995,7 +994,7 @@ class ModeOrchestrator:
         t0 = time.time()
         self._publish_status(
             event="map_upload",
-            status="ok",
+            status="start",
             message="맵 업로드를 시작했습니다.",
             mode="mapping",
             map_name=map_name,
@@ -1012,7 +1011,7 @@ class ModeOrchestrator:
             if completed.returncode == 0:
                 self._publish_status(
                     event="map_upload",
-                    status="ok",
+                    status="finish",
                     message="맵 업로드가 완료되었습니다.",
                     mode="mapping",
                     map_name=map_name,
@@ -1036,7 +1035,7 @@ class ModeOrchestrator:
                     )
                 self._publish_status(
                     event="map_upload_verify",
-                    status="ok" if v_ok else "error",
+                    status="success" if v_ok else "fail",
                     message=(
                         "맵 업로드 후 공유 경로 파일 용량 검증을 통과했습니다."
                         if v_ok
@@ -1062,7 +1061,7 @@ class ModeOrchestrator:
                 )
                 self._publish_status(
                     event="map_upload",
-                    status="error",
+                    status="fail",
                     message="맵 업로드에 실패했습니다.",
                     mode="mapping",
                     map_name=map_name,
@@ -1084,7 +1083,7 @@ class ModeOrchestrator:
             elapsed_sec = round(time.time() - t0, 3)
             self._publish_status(
                 event="map_upload",
-                status="error",
+                status="fail",
                 message="맵 업로드에 실패했습니다.",
                 mode="mapping",
                 map_name=map_name,
@@ -1099,7 +1098,7 @@ class ModeOrchestrator:
             elapsed_sec = round(time.time() - t0, 3)
             self._publish_status(
                 event="map_upload",
-                status="error",
+                status="fail",
                 message="맵 업로드에 실패했습니다.",
                 mode="mapping",
                 map_name=map_name,
@@ -1114,7 +1113,7 @@ class ModeOrchestrator:
             elapsed_sec = round(time.time() - t0, 3)
             self._publish_status(
                 event="map_upload",
-                status="error",
+                status="fail",
                 message="맵 업로드에 실패했습니다.",
                 mode="mapping",
                 map_name=map_name,
@@ -1127,8 +1126,8 @@ class ModeOrchestrator:
             )
 
     _EVENT_FOR_KIND = {
-        "start_mapping": "start",
-        "start_odometry": "start",
+        "start_mapping": "mapping",
+        "start_odometry": "odometry",
         "synchronization": "sync",
     }
 
@@ -1142,7 +1141,7 @@ class ModeOrchestrator:
         )
         self._publish_status(
             event=event,
-            status="error",
+            status="fail",
             message=message,
             mode=running if running in ("mapping", "odometry") else "idle",
             map_name=parsed.map_name or busy.get("map_name", ""),
@@ -1170,7 +1169,7 @@ class ModeOrchestrator:
         return {
             "timestamp_unix": time.time(),
             "event": "ready",
-            "status": "busy",
+            "status": "fail",
             "message": f"현재 {running} 작업이 진행 중입니다.",
             "ready": False,
             "mode": running if running in ("mapping", "odometry") else mode,
@@ -1199,7 +1198,7 @@ class ModeOrchestrator:
         payload = msg.payload.decode("utf-8", errors="replace")
         parsed = self._parse_control(payload)
         if parsed.error:
-            self._publish_status(event="control", status="error", message=parsed.error)
+            self._publish_status(event="control", status="fail", message=parsed.error)
             print(f"[WARN] invalid control message: {parsed.error}, payload={payload}")
             return
 
@@ -1237,7 +1236,7 @@ class ModeOrchestrator:
             self._start_sync(parsed.map_name)
             return
 
-        self._publish_status(event="control", status="error", message="알 수 없는 제어 명령입니다.")
+        self._publish_status(event="control", status="fail", message="알 수 없는 제어 명령입니다.")
 
     def _poll_process_exit(self) -> None:
         with self._lock:
@@ -1263,7 +1262,7 @@ class ModeOrchestrator:
             self._proc_nmea_enable = True
             self.state = ModeState()
 
-        status = "ok" if rc == 0 else "error"
+        status = "ok" if rc == 0 else "fail"
         message = "모드 실행이 종료되었습니다." if rc == 0 else "모드 실행이 비정상 종료되었습니다."
         ended_extra: dict = {"exit_code": rc, "nmea_enable": nmea_enable}
         if mode == "mapping" and sub_map_name:

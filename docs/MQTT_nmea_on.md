@@ -59,12 +59,13 @@
 - `{sub_map_name}_grid2d.pgm`
 - `{sub_map_name}_grid2d.yaml`
 
-관련 이벤트:
+관련 이벤트 (`event` → task, `status` → 진행 상태):
 
-- `stop`: 종료 결과 (`exit_code`, `save_elapsed_sec`, `nmea_enable`)
-- `map_saved`: 로컬 저장 결과 (`files`, `missing`, `artifact_bytes_total`, `nmea_enable`)
-- `map_upload`: 공유 경로 업로드 결과 (`elapsed_sec`, `nmea_enable`)
-- `map_upload_verify`: 업로드 검증 결과 (`mismatches`, `bytes_total`, `nmea_enable`)
+- `mapping` (`start`, `stop`, `fail`): mapping 시작, 종료, 실패
+- `odometry` (`start`, `stop`, `fail`): odometry 시작, 종료, 실패
+- `map_saved` (`start`, `finish`, `fail`): 로컬 저장 결과 (`files`, `missing`, `artifact_bytes_total`, `nmea_enable`)
+- `map_upload` (`start`, `finish`, `fail`): 공유 경로 업로드 결과 (`elapsed_sec`, `nmea_enable`)
+- `map_upload_verify` (`success`, `fail`): 업로드 검증 결과 (`mismatches`, `bytes_total`, `nmea_enable`)
 
 ## 4) MQTT 메시지 예시
 
@@ -124,12 +125,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (start)
+### `{prefix}/control/mode_status` (mapping start)
 
 ```json
 {
-  "event": "start",
-  "status": "ok",
+  "event": "mapping",
+  "status": "start",
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_1",
@@ -139,12 +140,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (stop)
+### `{prefix}/control/mode_status` (mapping stop)
 
 ```json
 {
-  "event": "stop",
-  "status": "ok",
+  "event": "mapping",
+  "status": "stop",
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_1",
@@ -155,12 +156,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (map_saved)
+### `{prefix}/control/mode_status` (map_saved finish)
 
 ```json
 {
   "event": "map_saved",
-  "status": "ok",
+  "status": "finish",
   "message": "맵 저장이 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -178,12 +179,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (map_upload)
+### `{prefix}/control/mode_status` (map_upload finish)
 
 ```json
 {
   "event": "map_upload",
-  "status": "ok",
+  "status": "finish",
   "message": "맵 업로드가 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -193,12 +194,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (map_upload_verify)
+### `{prefix}/control/mode_status` (map_upload_verify success)
 
 ```json
 {
   "event": "map_upload_verify",
-  "status": "ok",
+  "status": "success",
   "message": "업로드 검증이 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -213,5 +214,5 @@
 
 `synchronization` 명령은 `nmea_enable`과 무관하게 동일하게 동작한다.
 
-- `sync`: rsync 실행 결과
-- `sync_verify`: 공유 -> 로컬 파일 용량 검증 결과
+- `sync` (`start`, `finish`, `fail`): rsync 실행 결과
+- `sync_verify` (`success`, `fail`): 공유 -> 로컬 파일 용량 검증 결과

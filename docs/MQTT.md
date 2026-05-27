@@ -29,9 +29,9 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 오케스트레이터는 `ros2 launch` 를 **새 process group의 leader**로 띄우고(stop 시 `os.killpg` 로 PG 전체에 SIGINT/SIGTERM/SIGKILL 전파), 터미널 Ctrl+C 와 동일하게 `ligo_mapping`·`ligo_topic_to_mqtt` 등 모든 자식 노드가 즉시 시그널을 받는다. 이렇게 하지 않으면 launch 가 자식 propagation 을 빠뜨리는 케이스에 매핑 저장이 시작되지 않을 수 있다.
 
-원격 `stop` 명령 처리는 **별도 워커 스레드**에서 진행한다. mapping 의 PCD/그리드 저장이 수 분~수십 분 걸려도 MQTT 콜백 스레드가 막히지 않으므로 keepalive 가 끊기지 않고, 매핑이 끝나면 워커가 `event="stop"` → (성공 시) `event="map_saved"` 순으로 발행한다.
+원격 `stop` 명령 처리는 **별도 워커 스레드**에서 진행한다. mapping 의 PCD/그리드 저장이 수 분~수십 분 걸려도 MQTT 콜백 스레드가 막히지 않으므로 keepalive 가 끊기지 않고, 매핑이 끝나면 워커가 `event="mapping", status="stop"` → (성공 시) `event="map_saved"` 순으로 발행한다.
 
-상태 메시지는 **재연결 시 손실 방지용 링 버퍼**(최대 200개)에 저장한다. MQTT 연결이 끊긴 동안에 `_publish_status` 가 호출되면(예: 매핑 저장 중 브로커/프록시 측 단절) 큐에 넣어 두고, 재연결 후 `_on_connect` 에서 순서대로 flush 한다. 따라서 long mapping → 끊김 → 재연결 시나리오에서도 `event="stop"`·`event="map_saved"` 가 viewer 에 도달한다.
+상태 메시지는 **재연결 시 손실 방지용 링 버퍼**(최대 200개)에 저장한다. MQTT 연결이 끊긴 동안에 `_publish_status` 가 호출되면(예: 매핑 저장 중 브로커/프록시 측 단절) 큐에 넣어 두고, 재연결 후 `_on_connect` 에서 순서대로 flush 한다. 따라서 long mapping → 끊김 → 재연결 시나리오에서도 `event="mapping", status="stop"`·`event="map_saved"` 가 viewer 에 도달한다.
 
 설치 후 경로: `share/ligo/config/mqtt_topics.yaml` (`ament_index`로 탐색).
 
@@ -162,13 +162,13 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 #### 보드 준비 확인
 
-`control/mode`에 publish하면 `mode_status`로 응답한다. idle이면 `ready=true`, mapping·odometry·sync 진행 중이면 `ready=false`(`status=busy`). **작업 중에도 거부되지 않는다.**
+`control/mode`에 publish하면 `mode_status`로 응답한다. idle이면 `ready=true`(`status=ok`), mapping·odometry·sync 진행 중이면 `ready=false`(`status=fail`). **작업 중에도 거부되지 않는다.**
 
 ```json
 { "command": "ready" }
 ```
 
-응답 예 (idle):
+응답 예 (idle — `status="ok"`):
 
 ```json
 {
@@ -186,8 +186,8 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 오케스트레이터는 동시에 **하나의 작업**만 수행한다. mapping·odometry 실행 중이거나 동기화(`sync`)가 진행 중이면, **`stop`·`ready`를 제외한 명령**(`start`(mapping/odometry), `synchronization`)은 즉시 거부되고 다음 형태의 에러가 발행된다.
 
-- `event`: 거부 대상에 따라 `start` 또는 `sync`
-- `status`: `error`
+- `event`: 거부 대상에 따라 `mapping`, `odometry` 또는 `sync`
+- `status`: `fail`
 - `message`: 현재 진행 중인 작업 종류 명시 + `{"command":"stop"}`을 먼저 보내라는 안내
 - `extra.running`: `{"running": "mapping"|"odometry"|"sync", "pid": <int>, "map_name": "...", ...}`
 - `extra.rejected_command`: 거부된 명령 종류
@@ -198,20 +198,22 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 공통 필드: `timestamp_unix`, `event`, `status`, `message`, `mode`, `map_name` (및 매핑 시 `sub_map_name`). `extra`에 부가 정보.
 
-| `event` | 의미 |
-|---------|------|
-| `ready` | `{"command":"ready"}` 요청에 대한 보드 준비 상태 (`ready` 필드, 작업 중이면 `running`) |
-| `start` | 런치 시작 |
-| `stop` | stop 또는 서비스 종료로 프로세스 종료 시도 완료 |
-| `ended` | 하위 launch 프로세스 종료 (`exit_code`) |
-| `control` | 잘못된 제어 JSON (`status=error`) |
-| `sync` | 동기화 시작 (`status=ok`, message만) / **rsync** 완료 (`status=ok`, `extra.elapsed_sec` = rsync 소요 초) / 실패 (`status=error`, `extra.reason`, `extra.elapsed_sec`) |
-| `sync_verify` | `sync`의 rsync 성공 직후 **별도 메시지**로 공유→로컬 디렉터리 트리 파일 크기 일치 여부 검사. `status=ok` 또는 `error` (`extra.reason`, `mismatches`, `reference`, `mirror`, `file_count`, `bytes_total`, `rsync_elapsed_sec`, `verify_elapsed_sec` 등) |
-| `map_saved` | mapping 정상 종료(원격 `stop` 또는 자체 종료) 후 **로컬** 경로에서 PCD·그리드 산출물 검증 결과 (`extra.save_root`, `extra.files`, `extra.missing`, `extra.artifact_bytes_total`, 원격 `stop` 경유 시 `extra.save_elapsed_sec`) |
-| `map_upload` | `map_saved` 직후 로컬 → 공유(`/mnt/rms_maps`) rsync. 시작(`extra.src/dst`), **rsync** 완료(`status=ok`, `extra.elapsed_sec`), rsync 실패(`status=error`, `extra.reason`, `extra.exit_code`). 업로드 옵션은 `sync.rsync_upload_options`(기본 `-a --no-owner --no-group`). 바이트 검증은 `map_upload_verify` 참고. |
-| `map_upload_verify` | `map_upload`의 rsync 성공 직후 **별도 메시지**. 로컬 `src`와 공유 `dst` 트리의 파일 크기 일치 검사. 필드는 `sync_verify`와 유사하며 `sub_map_name`이 포함된다. |
+`event`는 **작업 종류**(task)를, `status`는 해당 작업의 **진행 상태**를 나타낸다. 같은 event라도 status로 시작·완료·실패를 구분할 수 있다.
 
-매핑 `stop` 의 `extra.save_elapsed_sec` 은 오케스트레이터가 SIGINT 를 보낸 시점부터 `ros2 launch` 종료까지의 초이며, 사실상 `[pcd] final map save (shutdown) took ... s` 와 거의 일치한다(SIGINT 전파·rclcpp shutdown 오버헤드 포함). `_poll_process_exit` 경로(원격 stop 없이 launch 가 스스로 끝났을 때)에서는 `save_elapsed_sec` 이 포함되지 않는다.
+| `event` | `status` 값 | 의미 |
+|---------|-------------|------|
+| `ready` | `ok`, `fail` | `{"command":"ready"}` 요청에 대한 보드 준비 상태 (`ready` 필드, 작업 중이면 `running`) |
+| `mapping` | `start`, `stop`, `fail` | mapping 런치 시작(`start`), 정상 종료(`stop`), 실패(`fail`) |
+| `odometry` | `start`, `stop`, `fail` | odometry 런치 시작(`start`), 정상 종료(`stop`), 실패(`fail`) |
+| `ended` | `ok`, `fail` | 하위 launch 프로세스가 원격 stop 없이 자체 종료 (`exit_code`) |
+| `control` | `fail` | 잘못된 제어 JSON |
+| `map_saved` | `start`, `finish`, `fail` | mapping 정상 종료 후 **로컬** 경로에서 PCD·그리드 산출물 검증 시작(`start`), 완료(`finish`), 실패(`fail`) |
+| `map_upload` | `start`, `finish`, `fail` | `map_saved` 직후 로컬 → 공유(`/mnt/rms_maps`) rsync. 시작(`start`), rsync 완료(`finish`), 실패(`fail`). 업로드 옵션은 `sync.rsync_upload_options`(기본 `-a --no-owner --no-group`). |
+| `map_upload_verify` | `success`, `fail` | `map_upload`의 rsync 성공 직후 **별도 메시지**. 로컬 `src`와 공유 `dst` 트리의 파일 크기 일치 검사. |
+| `sync` | `start`, `finish`, `fail` | 동기화 rsync 시작(`start`), 완료(`finish`), 실패(`fail`) |
+| `sync_verify` | `success`, `fail` | `sync`의 rsync 성공 직후 **별도 메시지**로 공유→로컬 디렉터리 트리 파일 크기 일치 여부 검사. |
+
+매핑의 `event="mapping", status="stop"` 에서 `extra.save_elapsed_sec` 은 오케스트레이터가 SIGINT 를 보낸 시점부터 `ros2 launch` 종료까지의 초이며, 사실상 `[pcd] final map save (shutdown) took ... s` 와 거의 일치한다(SIGINT 전파·rclcpp shutdown 오버헤드 포함). `_poll_process_exit` 경로(원격 stop 없이 launch 가 스스로 끝났을 때)에서는 `save_elapsed_sec` 이 포함되지 않는다.
 
 `map_saved`는 기대 파일 4종 존재 여부를 검사한다: `<sub>.pcd` (ECEF), `<sub>_orig.pcd` (ENU), `<sub>_grid2d.pgm`, `<sub>_grid2d.yaml` (경로: 로컬 `<패키지>/PCD/<map_name>/<sub_map_name>/`). NMEA/ENU 저장 조건에 따라 일부가 없을 수 있으면 `status=warn` 및 `missing` 배열로 알린다.
 
@@ -219,15 +221,15 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 오케스트레이터 기동부터 mapping → 종료까지 시간순으로 발행되는 `mode_status` 메시지 예시. `timestamp_unix` 는 가독성을 위해 짧게 표기.
 
-#### 1) Mapping 시작 — `event="start"`
+#### 1) Mapping 시작 — `event="mapping"`, `status="start"`
 
 `extra.pid`는 `ros2 launch` 프로세스, `extra.command`는 실제 실행된 커맨드.
 
 ```json
 {
   "timestamp_unix": 1778477010.000,
-  "event": "start",
-  "status": "ok",
+  "event": "mapping",
+  "status": "start",
   "message": "mapping 모드 실행을 시작했습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -237,15 +239,15 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 }
 ```
 
-#### 3) `stop` 명령 처리 후 매핑 정상 종료 — `event="stop"`
+#### 3) `stop` 명령 처리 후 매핑 정상 종료 — `event="mapping"`, `status="stop"`
 
 `exit_code: 0` 이면 PCD/그리드 저장까지 완료되고 launch 가 정상 종료된 상태. `save_elapsed_sec` 은 SIGINT 발사부터 launch 종료까지의 초.
 
 ```json
 {
   "timestamp_unix": 1778477750.000,
-  "event": "stop",
-  "status": "ok",
+  "event": "mapping",
+  "status": "stop",
   "message": "모드를 정상 종료했습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -258,13 +260,13 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 
 #### 4) 매핑 산출물 검증 — `event="map_saved"`
 
-`event="stop"` 직후 워커가 **로컬** `sync.local_map_root/<map>/<sub>/` 의 4종 파일을 확인하고 발행한다. 모두 존재하면 `status="ok"`:
+`event="mapping"`, `status="stop"` 직후 워커가 **로컬** `sync.local_map_root/<map>/<sub>/` 의 4종 파일을 확인하고 발행한다. 모두 존재하면 `status="finish"`:
 
 ```json
 {
   "timestamp_unix": 1778477750.100,
   "event": "map_saved",
-  "status": "ok",
+  "status": "finish",
   "message": "맵 저장이 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -281,13 +283,13 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 }
 ```
 
-일부 산출물(예: ENU 미정합으로 `_orig.pcd`·grid2d 생략)이 없으면 `status="warn"` + `missing`:
+일부 산출물(예: ENU 미정합으로 `_orig.pcd`·grid2d 생략)이 없으면 `status="finish"` + `missing`(warn 수준):
 
 ```json
 {
   "timestamp_unix": 1778477750.100,
   "event": "map_saved",
-  "status": "warn",
+  "status": "finish",
   "message": "일부 산출물이 없습니다: floor_2_orig.pcd, floor_2_grid2d.pgm, floor_2_grid2d.yaml",
   "mode": "mapping",
   "map_name": "site_a",
@@ -311,7 +313,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 {
   "timestamp_unix": 1778477750.200,
   "event": "map_upload",
-  "status": "ok",
+  "status": "start",
   "message": "맵 업로드를 시작했습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -327,7 +329,7 @@ MQTT 브로커 설정, 토픽 이름, 페이로드, 모드 오케스트레이션
 {
   "timestamp_unix": 1778477760.500,
   "event": "map_upload",
-  "status": "ok",
+  "status": "finish",
   "message": "맵 업로드가 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -342,7 +344,7 @@ rsync 완료 직후 — 용량 검증 (`map_upload`와 분리된 메시지):
 {
   "timestamp_unix": 1778477760.510,
   "event": "map_upload_verify",
-  "status": "ok",
+  "status": "success",
   "message": "맵 업로드 후 공유 경로 파일 용량 검증을 통과했습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -365,7 +367,7 @@ rsync 완료 직후 — 용량 검증 (`map_upload`와 분리된 메시지):
 {
   "timestamp_unix": 1778477751.000,
   "event": "map_upload",
-  "status": "error",
+  "status": "fail",
   "message": "맵 업로드에 실패했습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -381,8 +383,8 @@ rsync 완료 직후 — 용량 검증 (`map_upload`와 분리된 메시지):
 ```json
 {
   "timestamp_unix": 1778478000.000,
-  "event": "stop",
-  "status": "ok",
+  "event": "odometry",
+  "status": "stop",
   "message": "모드를 정상 종료했습니다.",
   "mode": "odometry",
   "map_name": "site_a",
@@ -402,7 +404,7 @@ rsync 완료 직후 — 용량 검증 (`map_upload`와 분리된 메시지):
 {
   "timestamp_unix": 1778477020.000,
   "event": "sync",
-  "status": "ok",
+  "status": "start",
   "message": "맵 동기화를 시작했습니다.",
   "mode": "idle",
   "map_name": "site_a"
@@ -415,7 +417,7 @@ rsync 완료 직후 — 용량 검증 (`map_upload`와 분리된 메시지):
 {
   "timestamp_unix": 1778477032.350,
   "event": "sync",
-  "status": "ok",
+  "status": "finish",
   "message": "맵 동기화가 완료되었습니다.",
   "mode": "idle",
   "map_name": "site_a",
@@ -429,7 +431,7 @@ rsync 완료 직후 — 용량 검증 (`sync`와 분리된 메시지):
 {
   "timestamp_unix": 1778477032.360,
   "event": "sync_verify",
-  "status": "ok",
+  "status": "success",
   "message": "맵 동기화 후 파일 용량 검증을 통과했습니다.",
   "mode": "idle",
   "map_name": "site_a",
@@ -451,7 +453,7 @@ rsync 완료 직후 — 용량 검증 (`sync`와 분리된 메시지):
 {
   "timestamp_unix": 1778477021.500,
   "event": "sync",
-  "status": "error",
+  "status": "fail",
   "message": "맵 동기화에 실패했습니다.",
   "mode": "idle",
   "map_name": "site_a",
@@ -475,13 +477,28 @@ rsync 완료 직후 — 용량 검증 (`sync`와 분리된 메시지):
 }
 ```
 
-#### 8) 잘못된 제어 JSON — `event="control"`
+비정상 종료:
+
+```json
+{
+  "timestamp_unix": 1778478500.000,
+  "event": "ended",
+  "status": "fail",
+  "message": "모드 실행이 비정상 종료되었습니다.",
+  "mode": "mapping",
+  "map_name": "site_a",
+  "sub_map_name": "floor_2",
+  "exit_code": 1
+}
+```
+
+#### 8) 잘못된 제어 JSON — `event="control"`, `status="fail"`
 
 ```json
 {
   "timestamp_unix": 1778477005.000,
   "event": "control",
-  "status": "error",
+  "status": "fail",
   "message": "mapping_mode=true일 때 sub_map_name은 영문/숫자/_/- 조합의 필수 문자열입니다.",
   "mode": "idle",
   "map_name": ""

@@ -62,14 +62,14 @@
 
 - `{sub_map_name}.pcd`
 
-관련 이벤트는 모두 `nmea_enable` 필드를 포함한다.
+관련 이벤트는 모두 `nmea_enable` 필드를 포함한다. `event`는 task, `status`는 진행 상태.
 
-- `start`
-- `stop`
-- `ended`
-- `map_saved`
-- `map_upload`
-- `map_upload_verify`
+- `mapping` (`start`, `stop`, `fail`)
+- `odometry` (`start`, `stop`, `fail`)
+- `ended` (`ok`, `fail`)
+- `map_saved` (`start`, `finish`, `fail`)
+- `map_upload` (`start`, `finish`, `fail`)
+- `map_upload_verify` (`success`, `fail`)
 
 ## 5) MQTT 메시지 예시
 
@@ -111,12 +111,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (start)
+### `{prefix}/control/mode_status` (mapping start)
 
 ```json
 {
-  "event": "start",
-  "status": "ok",
+  "event": "mapping",
+  "status": "start",
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_1",
@@ -126,12 +126,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (stop)
+### `{prefix}/control/mode_status` (mapping stop)
 
 ```json
 {
-  "event": "stop",
-  "status": "ok",
+  "event": "mapping",
+  "status": "stop",
   "mode": "mapping",
   "map_name": "site_a",
   "sub_map_name": "floor_1",
@@ -142,14 +142,14 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (map_saved)
+### `{prefix}/control/mode_status` (map_saved finish)
 
 `nmea_enable=false`일 때 필수 산출물은 `.pcd` 1개만 검증한다.
 
 ```json
 {
   "event": "map_saved",
-  "status": "ok",
+  "status": "finish",
   "message": "맵 저장이 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -164,12 +164,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (map_upload)
+### `{prefix}/control/mode_status` (map_upload finish)
 
 ```json
 {
   "event": "map_upload",
-  "status": "ok",
+  "status": "finish",
   "message": "맵 업로드가 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -179,12 +179,12 @@
 }
 ```
 
-### `{prefix}/control/mode_status` (map_upload_verify)
+### `{prefix}/control/mode_status` (map_upload_verify success)
 
 ```json
 {
   "event": "map_upload_verify",
-  "status": "ok",
+  "status": "success",
   "message": "업로드 검증이 완료되었습니다.",
   "mode": "mapping",
   "map_name": "site_a",
@@ -199,5 +199,5 @@
 
 `synchronization` 명령은 `nmea_enable`과 무관하게 동일하게 동작한다.
 
-- `sync`
-- `sync_verify`
+- `sync` (`start`, `finish`, `fail`)
+- `sync_verify` (`success`, `fail`)
