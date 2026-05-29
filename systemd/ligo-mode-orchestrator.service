@@ -11,7 +11,7 @@ Restart=always
 RestartSec=3
 KillSignal=SIGINT
 TimeoutStopSec=20
-StandardOutput=journal
+StandardOutput=null
 StandardError=journal
 
 [Install]

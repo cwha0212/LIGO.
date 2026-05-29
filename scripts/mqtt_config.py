@@ -34,6 +34,8 @@ _DEFAULT_MQTT: Dict[str, Any] = {
         "init_heading_icp": "{prefix}/init_heading_icp",
         "ligo_mode": "{prefix}/ligo_mode",
         "nav_prefix": "{prefix}/nav",
+        "task_goal": "{prefix}/task/goal",
+        "task_status": "{prefix}/task/status",
     },
 }
 

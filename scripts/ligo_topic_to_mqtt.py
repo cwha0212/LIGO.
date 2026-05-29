@@ -143,6 +143,7 @@ class LigoMqttBridge(Node):
         self.declare_parameter("topic.ligo_mode", "/ligo/mode")
         self.declare_parameter("topic.local_pose", "/ligo/mqtt_pose")
         self.declare_parameter("topic.local_pose_meta", "/ligo/mqtt_pose_meta")
+        self.declare_parameter("topic.local_odom", "/odom")
 
         self.mqtt_host = str(self.get_parameter("mqtt.host").value)
         self.mqtt_port = int(self.get_parameter("mqtt.port").value)
@@ -172,6 +173,7 @@ class LigoMqttBridge(Node):
         ligo_mode_topic = str(self.get_parameter("topic.ligo_mode").value)
         local_pose_topic = str(self.get_parameter("topic.local_pose").value)
         local_pose_meta_topic = str(self.get_parameter("topic.local_pose_meta").value)
+        local_odom_topic = str(self.get_parameter("topic.local_odom").value)
 
         reconnect_period = float(self.get_parameter("reconnect_period_sec").value)
 
@@ -207,6 +209,7 @@ class LigoMqttBridge(Node):
         self.create_subscription(NmeaHeadingAlignStatus, align_status_topic, self.on_heading_align_status, 10)
         self.create_subscription(PoseStamped, local_pose_topic, self.on_local_pose, 10)
         self.create_subscription(String, local_pose_meta_topic, self.on_local_pose_meta, 10)
+        self.create_subscription(Odometry, local_odom_topic, self.on_local_odom, 10)
         mode_qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -407,6 +410,19 @@ class LigoMqttBridge(Node):
         self.local_z = float(msg.pose.position.z)
         q = msg.pose.orientation
         self.local_heading_deg = (math.degrees(yaw_from_quaternion(q.x, q.y, q.z, q.w))) % 360.0
+        self._publish_position()
+        self._publish_heading()
+
+    def on_local_odom(self, msg: Odometry) -> None:
+        if self.nmea_enable:
+            return
+        self.local_x = float(msg.pose.pose.position.x)
+        self.local_y = float(msg.pose.pose.position.y)
+        self.local_z = float(msg.pose.pose.position.z)
+        q = msg.pose.pose.orientation
+        self.local_heading_deg = (math.degrees(yaw_from_quaternion(q.x, q.y, q.z, q.w))) % 360.0
+        self.local_valid = True
+        self.local_frame = str(msg.header.frame_id)
         self._publish_position()
         self._publish_heading()
 

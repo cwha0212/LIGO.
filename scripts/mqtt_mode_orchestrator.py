@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import collections
 import json
+import math
 import os
 import signal
 import subprocess
@@ -10,12 +11,23 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 try:
     import paho.mqtt.client as mqtt
 except ImportError as exc:
     raise SystemExit("paho-mqtt가 필요합니다: pip install paho-mqtt") from exc
+
+try:
+    import rclpy
+    from rclpy.action import ActionClient
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from action_msgs.msg import GoalStatus
+    from nav2_msgs.action import NavigateToPose
+    _RCLPY_AVAILABLE = True
+except ImportError:
+    _RCLPY_AVAILABLE = False
 
 from mqtt_config import (
     SHARED_MAP_ROOT,
@@ -43,6 +55,12 @@ def _mqtt_reason_failed(reason_code: object) -> bool:
     except (TypeError, ValueError):
         pass
     return str(reason_code).strip().lower() not in ("success", "0", "no error", "no_error")
+
+
+def _quaternion_from_yaw(yaw: float) -> Tuple[float, float, float, float]:
+    """평면 yaw(rad)를 (x, y, z, w) quaternion으로 변환한다(roll=pitch=0)."""
+    half = yaw * 0.5
+    return (0.0, 0.0, math.sin(half), math.cos(half))
 
 
 def _is_valid_map_name(raw: object) -> bool:
@@ -75,6 +93,135 @@ class ParsedControl:
     error: Optional[str] = None
 
 
+class Nav2TaskHandler:
+    """rclpy 노드를 별도 스레드에서 실행하여 Nav2 NavigateToPose action을 처리한다.
+
+    MQTT goal 수신 시 send_goal로 action을 보내고, goal 수락/feedback/result에 따라
+    status_cb(task_name, status)로 진행 상태('processing'/'success'/'fail')를 알린다.
+    """
+
+    def __init__(
+        self,
+        status_cb: Callable[[str, str], None],
+        action_name: str = "navigate_to_pose",
+        server_wait_sec: float = 5.0,
+    ) -> None:
+        if not _RCLPY_AVAILABLE:
+            raise RuntimeError(
+                "rclpy/nav2_msgs를 import할 수 없습니다. ROS2 환경에서 실행하세요."
+            )
+        self._status_cb = status_cb
+        self._server_wait_sec = server_wait_sec
+
+        if not rclpy.ok():
+            rclpy.init()
+        self._node: Node = rclpy.create_node("ligo_mqtt_nav2_task_bridge")
+        self._action_client = ActionClient(self._node, NavigateToPose, action_name)
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self._node)
+        self._spin_thread = threading.Thread(
+            target=self._executor.spin, name="nav2_task_spin", daemon=True
+        )
+        self._spin_thread.start()
+        # task_name별 진행 중인 goal handle (취소/중복 추적용)
+        self._goal_handles: dict = {}
+        self._lock = threading.Lock()
+
+    def send_goal(
+        self, task_name: str, x1: float, y1: float, x2: float, y2: float
+    ) -> None:
+        dx = x2 - x1
+        dy = y2 - y1
+        yaw = 0.0 if math.hypot(dx, dy) < 1e-3 else math.atan2(dy, dx)
+        qx, qy, qz, qw = _quaternion_from_yaw(yaw)
+
+        if not self._action_client.wait_for_server(timeout_sec=self._server_wait_sec):
+            self._node.get_logger().warn(
+                f"[task] Nav2 action server를 찾을 수 없습니다: task={task_name}"
+            )
+            self._status_cb(task_name, "fail")
+            return
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = "map"
+        goal.pose.header.stamp = self._node.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(x1)
+        goal.pose.pose.position.y = float(y1)
+        goal.pose.pose.position.z = 0.0
+        goal.pose.pose.orientation.x = qx
+        goal.pose.pose.orientation.y = qy
+        goal.pose.pose.orientation.z = qz
+        goal.pose.pose.orientation.w = qw
+
+        send_future = self._action_client.send_goal_async(
+            goal,
+            feedback_callback=lambda fb, tn=task_name: self._on_feedback(tn, fb),
+        )
+        send_future.add_done_callback(
+            lambda fut, tn=task_name: self._on_goal_response(tn, fut)
+        )
+
+    def _on_goal_response(self, task_name: str, future) -> None:
+        try:
+            goal_handle = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self._node.get_logger().error(f"[task] goal 전송 실패: task={task_name}, err={exc}")
+            self._status_cb(task_name, "fail")
+            return
+
+        if not goal_handle.accepted:
+            self._node.get_logger().warn(f"[task] goal 거부됨: task={task_name}")
+            self._status_cb(task_name, "fail")
+            return
+
+        with self._lock:
+            self._goal_handles[task_name] = goal_handle
+        self._status_cb(task_name, "processing")
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            lambda fut, tn=task_name: self._on_result(tn, fut)
+        )
+
+    def _on_feedback(self, task_name: str, _feedback) -> None:
+        self._status_cb(task_name, "processing")
+
+    def _on_result(self, task_name: str, future) -> None:
+        with self._lock:
+            self._goal_handles.pop(task_name, None)
+        try:
+            result = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self._node.get_logger().error(f"[task] result 수신 실패: task={task_name}, err={exc}")
+            self._status_cb(task_name, "fail")
+            return
+
+        if result.status == GoalStatus.STATUS_SUCCEEDED:
+            self._status_cb(task_name, "success")
+        else:
+            self._node.get_logger().warn(
+                f"[task] goal 실패: task={task_name}, status={result.status}"
+            )
+            self._status_cb(task_name, "fail")
+
+    def shutdown(self) -> None:
+        try:
+            self._executor.shutdown()
+        except Exception:
+            pass
+        try:
+            self._node.destroy_node()
+        except Exception:
+            pass
+        if self._spin_thread.is_alive():
+            self._spin_thread.join(timeout=2.0)
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
+
+
 class ModeOrchestrator:
     def __init__(self) -> None:
         self._cfg = load_mqtt_config()
@@ -85,6 +232,8 @@ class ModeOrchestrator:
         self.topic_prefix = topic_prefix(self._cfg)
         self.mqtt_control_topic = resolve_topic("control_mode", self._cfg)
         self.mqtt_status_topic = resolve_topic("control_status", self._cfg)
+        self.mqtt_task_goal_topic = resolve_topic("task_goal", self._cfg)
+        self.mqtt_task_status_topic = resolve_topic("task_status", self._cfg)
         self.mqtt_use_websocket = bool(m.get("use_websocket", True))
         self.mqtt_ws_path = str(m.get("ws_path", "/mqtt"))
         self.mqtt_username = str(m.get("username", "") or "")
@@ -129,6 +278,8 @@ class ModeOrchestrator:
         self._reconnect_backoff_max_sec = 30.0
 
         self.state = ModeState()
+        self._nav2_handler: Optional["Nav2TaskHandler"] = None
+        self._nav2_lock = threading.Lock()
         self._mqtt = self._create_mqtt_client()
 
     @staticmethod
@@ -298,6 +449,13 @@ class ModeOrchestrator:
             print(f"[ERROR] MQTT subscribe 실패: topic={self.mqtt_control_topic}, rc={sub_rc}")
             return
         print(f"[INFO] MQTT 구독 완료: {self.mqtt_control_topic}")
+        if self.mqtt_task_goal_topic:
+            task_sub = client.subscribe(self.mqtt_task_goal_topic, qos=0)
+            task_rc = task_sub[0] if isinstance(task_sub, tuple) and task_sub else task_sub
+            if int(task_rc) != int(mqtt.MQTT_ERR_SUCCESS):
+                print(f"[ERROR] task 토픽 구독 실패: topic={self.mqtt_task_goal_topic}, rc={task_rc}")
+            else:
+                print(f"[INFO] MQTT 구독 완료: {self.mqtt_task_goal_topic}")
         with self._pending_lock:
             pending_count = len(self._pending_status)
             self._flush_pending_status_locked()
@@ -329,11 +487,42 @@ class ModeOrchestrator:
                 f"sub_map_name:={sub_map_name}",
                 nmea_launch_arg,
             ]
+        if not nmea_enable:
+            hdl_map_name = indoor_map_names[0] if indoor_map_names else map_name
+            if not hdl_map_name:
+                raise ValueError("odometry 시작에 필요한 map_name이 없습니다.")
+            pcd_path = self._resolve_hdl_global_pcd(hdl_map_name)
+            return [
+                "ros2",
+                "launch",
+                "hdl_localization",
+                "hdl_localization_2.launch.py",
+                f"global_pcd:={pcd_path}",
+                "nmea_enable:=false",
+            ]
         cmd = ["ros2", "launch", "ligo", "nx_odometry.launch.py"]
         if indoor_map_names:
             cmd.append(f"indoor_map_name:={indoor_map_names[0]}")
         cmd.append(nmea_launch_arg)
         return cmd
+
+    @staticmethod
+    def _resolve_hdl_global_pcd(map_name: str) -> Path:
+        map_dir = local_map_root() / map_name
+        if not map_dir.is_dir():
+            raise ValueError(
+                f"odometry 맵 디렉터리가 없습니다: {map_dir}. synchronization 후 다시 시도하세요."
+            )
+        candidates = sorted(p for p in map_dir.rglob("*.pcd") if p.is_file())
+        if not candidates:
+            raise ValueError(f"odometry 맵에서 PCD 파일을 찾을 수 없습니다: {map_dir}")
+        exact = map_dir / f"{map_name}.pcd"
+        if exact.is_file():
+            return exact
+        for candidate in candidates:
+            if not candidate.name.endswith("_orig.pcd"):
+                return candidate
+        return candidates[0]
 
     def _start_mode(
         self,
@@ -356,13 +545,23 @@ class ModeOrchestrator:
 
             if indoor_map_names is None:
                 indoor_map_names = []
-            cmd = self._build_launch_command(
-                mode=mode,
-                map_name=map_name,
-                sub_map_name=sub_map_name,
-                indoor_map_names=indoor_map_names,
-                nmea_enable=nmea_enable,
-            )
+            try:
+                cmd = self._build_launch_command(
+                    mode=mode,
+                    map_name=map_name,
+                    sub_map_name=sub_map_name,
+                    indoor_map_names=indoor_map_names,
+                    nmea_enable=nmea_enable,
+                )
+            except Exception as exc:
+                self._publish_status(
+                    event=mode,
+                    status="fail",
+                    message=f"모드 실행 준비 실패: {exc}",
+                    mode=mode,
+                    map_name=map_name if mode == "mapping" else (indoor_map_names[0] if indoor_map_names else map_name),
+                )
+                return
             try:
                 # start_new_session=True: 자식을 새 process group의 leader로 만들어
                 # stop 시 os.killpg 로 ros2 launch + 모든 노드(예: ligo_mapping, ligo_topic_to_mqtt)에
@@ -1196,6 +1395,9 @@ class ModeOrchestrator:
 
     def _on_message(self, client, userdata, msg) -> None:
         payload = msg.payload.decode("utf-8", errors="replace")
+        if self.mqtt_task_goal_topic and msg.topic == self.mqtt_task_goal_topic:
+            self._handle_task_goal(payload)
+            return
         parsed = self._parse_control(payload)
         if parsed.error:
             self._publish_status(event="control", status="fail", message=parsed.error)
@@ -1237,6 +1439,82 @@ class ModeOrchestrator:
             return
 
         self._publish_status(event="control", status="fail", message="알 수 없는 제어 명령입니다.")
+
+    def _ensure_nav2_handler(self) -> Optional["Nav2TaskHandler"]:
+        with self._nav2_lock:
+            if self._nav2_handler is not None:
+                return self._nav2_handler
+            try:
+                self._nav2_handler = Nav2TaskHandler(status_cb=self._publish_task_status)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ERROR] Nav2TaskHandler 초기화 실패: {exc}")
+                self._nav2_handler = None
+            return self._nav2_handler
+
+    def _publish_task_status(self, task_name: str, status: str) -> None:
+        if not self.mqtt_task_status_topic:
+            return
+        payload = {
+            "task_name": task_name,
+            "status": status,
+            "timestamp_unix": time.time(),
+        }
+        payload_str = json.dumps(payload, ensure_ascii=False)
+        try:
+            self._mqtt.publish(self.mqtt_task_status_topic, payload_str, qos=0, retain=False)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] task/status 발행 실패: {exc}")
+
+    def _handle_task_goal(self, payload: str) -> None:
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            print(f"[WARN] task/goal 메시지가 JSON 형식이 아닙니다: {payload!r}")
+            return
+        if not isinstance(obj, dict):
+            print("[WARN] task/goal 페이로드가 객체가 아닙니다.")
+            return
+
+        task_name = obj.get("task_name")
+        if not isinstance(task_name, str) or not task_name.strip():
+            print("[WARN] task/goal: task_name(문자열)이 필요합니다.")
+            return
+        task_name = task_name.strip()
+
+        coords: dict = {}
+        for key in ("x1", "y1", "x2", "y2"):
+            try:
+                coords[key] = float(obj[key])
+            except (KeyError, TypeError, ValueError):
+                self._publish_task_status(task_name, "fail")
+                print(f"[WARN] task/goal: {key}(숫자)가 필요합니다. task={task_name}")
+                return
+
+        if not _RCLPY_AVAILABLE:
+            self._publish_task_status(task_name, "fail")
+            print("[ERROR] task/goal: rclpy/nav2_msgs를 사용할 수 없는 환경입니다.")
+            return
+
+        with self._lock:
+            current_mode = self._proc_mode
+        if current_mode != "odometry":
+            print(
+                f"[INFO] task/goal: orchestrator odometry 모드가 아님(current={current_mode}). "
+                f"수동 launch(hdl/nav2) 가정하고 Nav2 action을 시도합니다. task={task_name}"
+            )
+
+        handler = self._ensure_nav2_handler()
+        if handler is None:
+            self._publish_task_status(task_name, "fail")
+            return
+
+        try:
+            handler.send_goal(
+                task_name, coords["x1"], coords["y1"], coords["x2"], coords["y2"]
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._publish_task_status(task_name, "fail")
+            print(f"[ERROR] task/goal goal 전송 중 오류: task={task_name}, err={exc}")
 
     def _poll_process_exit(self) -> None:
         with self._lock:
@@ -1297,6 +1575,11 @@ class ModeOrchestrator:
         th = self._stop_thread
         if th is not None and th.is_alive():
             th.join()
+        with self._nav2_lock:
+            handler = self._nav2_handler
+            self._nav2_handler = None
+        if handler is not None:
+            handler.shutdown()
         try:
             self._mqtt.loop_stop()
             self._mqtt.disconnect()
