@@ -217,6 +217,7 @@ set(ligo_python_scripts
   scripts/mqtt_nav_pub.py
   scripts/mqtt_nav2_straight_follower.py
   scripts/virtual_ligo_gps_simulator.py
+  scripts/pointcloud_to_scan.py
 )
 set(ligo_existing_python_scripts "")
 foreach(script_path IN LISTS ligo_python_scripts)
