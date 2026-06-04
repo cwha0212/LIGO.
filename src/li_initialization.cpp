@@ -495,14 +495,15 @@ bool sync_packages(MeasureGroup &meas, queue<nav_msgs::msg::Odometry::SharedPtr>
         lidar_pushed = true;
     }
 
-    if (!lose_lid && (last_timestamp_imu < lidar_end_time + 2))
+    // IMU must cover scan end (deskew); one IMU period margin — not 2 s wall-clock wait.
+    const double imu_sync_margin =
+        (imu_time_inte > 1e-6) ? (2.0 * imu_time_inte) : 0.01;
+    if (!lose_lid && (last_timestamp_imu < lidar_end_time + imu_sync_margin))
     {
-        // lidar_pushed = false;
         return false;
     }
-    if (lose_lid && last_timestamp_imu < meas.lidar_beg_time + lidar_time_inte + 2)
+    if (lose_lid && last_timestamp_imu < meas.lidar_beg_time + lidar_time_inte + imu_sync_margin)
     {
-        // lidar_pushed = false;
         return false;
     }
 
