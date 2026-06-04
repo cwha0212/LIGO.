@@ -45,7 +45,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <color.h>
 #include <../include/IKFoM/IKFoM_toolkit/esekfom/esekfom.hpp>
-#include <ligo/msg/local_sensor_external_trigger.hpp>
+#include <navi/msg/local_sensor_external_trigger.hpp>
 #include <queue>
 #include <boost/optional.hpp>
 #include <gtsam/nonlinear/NonlinearFactor.h>

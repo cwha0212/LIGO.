@@ -100,8 +100,6 @@ extern std::vector<double> extrinR, extrinR_gnss;
 extern std::vector<double> ppp_anc;
 extern bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 extern bool   scan_pub_en, scan_body_pub_en;
-/** ENU 2D occupancy grid (PGM) cell size (m) when exporting *_grid2d alongside PCD; independent of ivox voxel size. */
-extern double pcd_save_grid2d_resolution_m;
 /** VoxelGrid leaf (m) for map PCD, ECEF companion, and tmp_map split PCD; 0 = no downsampling. */
 extern double pcd_save_downsample_voxel_m;
 /** Map name for mapping outputs (directory under `map_folder`). */
@@ -153,6 +151,13 @@ extern double lidar_time_inte, first_imu_time;
 extern bool NMEA_ENABLE;
 extern bool mapping_mode;
 extern bool indoor_flag;
+/** Localization-only mode: load a prior PCD into ivox at startup and stop accumulating
+ *  new lidar points into ivox (MapIncremental is skipped). Intended for indoor map-based
+ *  pose tracking without GNSS/NMEA. Initial pose comes from /initialpose (RViz 2D Pose Estimate). */
+extern bool localization_only;
+/** Absolute path to the prior PCD loaded into ivox at startup when localization_only is true.
+ *  Coordinate frame must match LIGO's local map frame ("camera_init"). */
+extern std::string localization_prior_pcd_path;
 
 /** True when NMEA fusion or static indoor factors need preloaded grid/PCD assets. */
 inline bool ligo_need_indoor_map_assets()

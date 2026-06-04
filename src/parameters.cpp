@@ -164,7 +164,6 @@ std::vector<double> extrinR(9, 0.0), extrinR_gnss(9, 0.0);
 std::vector<double> ppp_anc(3, 0.0);
 bool   runtime_pos_log, log_lidar_frame_time_ms, path_en;
 bool   scan_pub_en, scan_body_pub_en;
-double pcd_save_grid2d_resolution_m = 0.2;
 double pcd_save_downsample_voxel_m = 0.2;
 std::string pcd_save_map_name = "map";
 std::string pcd_save_sub_map_name = "sub_map";
@@ -203,6 +202,8 @@ double lidar_time_inte = 0.1, first_imu_time = 0.0;
 bool NMEA_ENABLE = true;
 bool mapping_mode = false;
 bool indoor_flag = false;
+bool localization_only = false;
+std::string localization_prior_pcd_path;
 bool dyn_filter = false;
 double dyn_filter_resolution = 1.0;
 Eigen::Vector3d indoor_pos_enu_meas = Eigen::Vector3d::Zero();
@@ -343,10 +344,6 @@ void readParameters(rclcpp::Node * node)
   } else {
     ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY18;
   }
-  pcd_save_grid2d_resolution_m = get_param(
-      "pcd_save.grid2d_resolution", static_cast<double>(ivox_options_.resolution_));
-  if (pcd_save_grid2d_resolution_m <= 0.0)
-    pcd_save_grid2d_resolution_m = static_cast<double>(ivox_options_.resolution_);
   pcd_save_downsample_voxel_m = get_param("pcd_save.downsample_voxel_m", 0.2);
   if (pcd_save_downsample_voxel_m < 0.0)
   {
@@ -367,6 +364,33 @@ void readParameters(rclcpp::Node * node)
     indoor_flag = false;
   }
   cout << "indoor enable:" << indoor_flag << endl;
+
+  localization_only = get_param("localization.enable", false);
+  localization_prior_pcd_path = trim_ws(get_param("localization.prior_pcd_path", std::string("")));
+  if (localization_only)
+  {
+    if (mapping_mode)
+    {
+      RCLCPP_WARN(rclcpp::get_logger("ligo"),
+                  "[localization] localization.enable=true but mapping.mapping_mode=true; "
+                  "forcing mapping_mode=false (cannot accumulate map in localization mode).");
+      mapping_mode = false;
+    }
+    if (localization_prior_pcd_path.empty())
+    {
+      RCLCPP_ERROR(rclcpp::get_logger("ligo"),
+                   "[localization] localization.enable=true requires localization.prior_pcd_path "
+                   "(absolute PCD path) — disabling localization mode.");
+      localization_only = false;
+    }
+    else
+    {
+      RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                  "[localization] enabled: prior_pcd_path=%s",
+                  localization_prior_pcd_path.c_str());
+    }
+  }
+  cout << "localization_only:" << localization_only << endl;
   if (NMEA_ENABLE)
   {
     p_nmea->p_assign->outlier_rej = get_param("gnss.outlier_rejection", false);

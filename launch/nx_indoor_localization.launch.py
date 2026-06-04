@@ -9,36 +9,38 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """LIGO 실내 위치추정 모드 (PCD 기반, GNSS off).
+
+    핵심:
+      * config/avia.yaml + config/nx_mode_indoor_localization.yaml 오버레이
+      * launch 인자 prior_pcd 로 prior PCD 절대 경로 지정 (yaml 의 localization.prior_pcd_path 덮어씀)
+      * RViz "2D Pose Estimate" (/initialpose) 로 초기 pose 입력
+    """
     stdout_linebuf_envvar = SetEnvironmentVariable("RCUTILS_CONSOLE_STDOUT_LINE_BUFFERED", "1")
     stdout_colorized_envvar = SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1")
 
     use_rviz = LaunchConfiguration("use_rviz")
-    nmea_enable = LaunchConfiguration("nmea_enable")
     use_rviz_arg = DeclareLaunchArgument(
         "use_rviz",
-        default_value="false",
-        description="Run RViz2 (default: false)",
-    )
-    nmea_enable_arg = DeclareLaunchArgument(
-        "nmea_enable",
         default_value="true",
-        description="Enable NMEA fusion/publish path",
+        description="Run RViz2 (default: true — 초기 pose 입력에 필요).",
     )
 
-    indoor_map_name = LaunchConfiguration("indoor_map_name")
-    indoor_map_name_arg = DeclareLaunchArgument(
-        "indoor_map_name",
-        default_value="",
+    prior_pcd = LaunchConfiguration("prior_pcd")
+    prior_pcd_arg = DeclareLaunchArgument(
+        "prior_pcd",
+        default_value="/home/maum/map2.pcd",
         description=(
-            "Odometry map name. Loads all sub-maps under PCD/<map_name>/ recursively. "
-            "Empty: fallback to pcd_save.map_name from YAML."
+            "Prior PCD 절대 경로 (예: /home/tae/map.pcd). "
+            "비우면 yaml 의 localization.prior_pcd_path 사용."
         ),
     )
 
-    pkg = get_package_share_directory("navi")
-    base_config = PathJoinSubstitution([pkg, "config", "avia.yaml"])
-    mode_config = PathJoinSubstitution([pkg, "config", "nx_mode_odometry.yaml"])
-    rviz_config = PathJoinSubstitution([pkg, "rviz_cfg", "loam_livox.rviz"])
+    navi_pkg = get_package_share_directory("navi")
+    ligo_pkg = get_package_share_directory("ligo")
+    base_config = PathJoinSubstitution([ligo_pkg, "config", "avia.yaml"])
+    mode_config = PathJoinSubstitution([navi_pkg, "config", "nx_mode_indoor_localization.yaml"])
+    rviz_config = PathJoinSubstitution([navi_pkg, "rviz_cfg", "loam_livox.rviz"])
 
     ligo_node = Node(
         package="navi",
@@ -48,10 +50,7 @@ def generate_launch_description():
         parameters=[
             base_config,
             mode_config,
-            {
-                "indoor.map_name_for_odometry": indoor_map_name,
-                "nmea.nmea_enable": nmea_enable,
-            },
+            {"localization.prior_pcd_path": prior_pcd},
         ],
     )
 
@@ -64,23 +63,11 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    mqtt_bridge = Node(
-        package="navi",
-        executable="ligo_topic_to_mqtt.py",
-        name="ligo_topic_to_mqtt",
-        output="screen",
-        parameters=[{"mqtt.nmea_enable": nmea_enable}],
-        sigterm_timeout="20",
-        sigkill_timeout="5",
-    )
-
     ld = LaunchDescription()
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(stdout_colorized_envvar)
     ld.add_action(use_rviz_arg)
-    ld.add_action(nmea_enable_arg)
-    ld.add_action(indoor_map_name_arg)
+    ld.add_action(prior_pcd_arg)
     ld.add_action(ligo_node)
-    ld.add_action(mqtt_bridge)
     ld.add_action(rviz_node)
     return ld

@@ -40,7 +40,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <ligo/msg/local_sensor_external_trigger.hpp>
+#include <navi/msg/local_sensor_external_trigger.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include "Estimator.h"
 

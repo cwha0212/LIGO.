@@ -15,6 +15,7 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
     map_name = LaunchConfiguration("map_name")
     sub_map_name = LaunchConfiguration("sub_map_name")
+    nmea_enable = LaunchConfiguration("nmea_enable")
     use_rviz_arg = DeclareLaunchArgument(
         "use_rviz",
         default_value="false",
@@ -30,6 +31,11 @@ def generate_launch_description():
         default_value="sub_map",
         description="Sub-map name under map_name directory",
     )
+    nmea_enable_arg = DeclareLaunchArgument(
+        "nmea_enable",
+        default_value="true",
+        description="Enable NMEA fusion/publish path",
+    )
     # launch ExecuteLocal: SIGINT 후 sigterm_timeout 초 뒤 SIGTERM, (sigterm_timeout + sigkill_timeout) 초 뒤 SIGKILL.
     # ligo_mapping은 main() 종료 시점에 맵 PCD를 저장하므로, 기본값을 크게 두어 저장 중 SIGKILL을 피함.
     map_save_shutdown_timeout_sec = LaunchConfiguration("map_save_shutdown_timeout_sec")
@@ -42,17 +48,25 @@ def generate_launch_description():
         ),
     )
 
-    pkg = get_package_share_directory("ligo")
+    pkg = get_package_share_directory("navi")
     base_config = PathJoinSubstitution([pkg, "config", "avia.yaml"])
     mode_config = PathJoinSubstitution([pkg, "config", "nx_mode_mapping.yaml"])
     rviz_config = PathJoinSubstitution([pkg, "rviz_cfg", "loam_livox.rviz"])
 
     ligo_node = Node(
-        package="ligo",
+        package="navi",
         executable="ligo_mapping",
         name="laserMapping",
         output="screen",
-        parameters=[base_config, mode_config, {"pcd_save.map_name": map_name, "pcd_save.sub_map_name": sub_map_name}],
+        parameters=[
+            base_config,
+            mode_config,
+            {
+                "pcd_save.map_name": map_name,
+                "pcd_save.sub_map_name": sub_map_name,
+                "nmea.nmea_enable": nmea_enable,
+            },
+        ],
         sigterm_timeout=map_save_shutdown_timeout_sec,
         sigkill_timeout=map_save_shutdown_timeout_sec,
     )
@@ -67,10 +81,11 @@ def generate_launch_description():
     )
 
     mqtt_bridge = Node(
-        package="ligo",
+        package="navi",
         executable="ligo_topic_to_mqtt.py",
         name="ligo_topic_to_mqtt",
         output="screen",
+        parameters=[{"mqtt.nmea_enable": nmea_enable}],
         sigterm_timeout="20",
         sigkill_timeout="5",
     )
@@ -81,6 +96,7 @@ def generate_launch_description():
     ld.add_action(use_rviz_arg)
     ld.add_action(map_name_arg)
     ld.add_action(sub_map_name_arg)
+    ld.add_action(nmea_enable_arg)
     ld.add_action(map_save_shutdown_timeout_arg)
     ld.add_action(ligo_node)
     ld.add_action(mqtt_bridge)

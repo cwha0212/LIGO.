@@ -1,0 +1,34 @@
+# nx_indoor_localization.launch.py 용 오버레이 — 베이스는 config/avia.yaml
+# 실내 PCD 기반 위치추정 (GNSS/NMEA off, indoor_flag/GICP factor off, 순수 LIO + prior map).
+#
+# 동작:
+#   1) 시작 시 localization.prior_pcd_path 의 PCD 를 ivox 에 사전 로드 → 그게 prior map.
+#   2) MapIncremental 비활성 (ivox 에 새 점 누적 X) → localization-only.
+#   3) RViz "2D Pose Estimate" (/initialpose) 로 초기 pose 입력 → kf_output.x_ 에 적용.
+#   4) GNSS/NMEA/ENU/Indoor GICP 모두 off → 결과 odometry 는 PCD 좌표계 ("camera_init") 기준.
+/**:
+  ros__parameters:
+    map_folder: "/home/maum/map2.pcd"
+    mapping:
+      mapping_mode: false   # PCD 저장 안 함 (localization 전용)
+      # 권장: IMU 정지 평균으로 자세 추정 대신 yaml gravity_init 사용 → 시동 빨라짐
+      init_with_imu: false
+
+    localization:
+      # true: prior PCD 를 ivox 에 로드하고 MapIncremental 건너뜀. /initialpose 로 초기 pose 입력.
+      enable: true
+      # 절대 경로. PCD 좌표계는 LIGO 의 local map 좌표계 ("camera_init") 와 동일해야 함
+      # (= 매핑할 때 사용한 LIGO 가 저장한 PCD 면 그대로 맞음).
+      prior_pcd_path: "/home/maum/map2.pcd"    # 예: "/home/tae/PCD/myroom/myroom.pcd"
+
+    nmea:
+      # GNSS/NMEA 완전 off — 실내에서는 GNSS 신호 의미 없음.
+      nmea_enable: false
+
+    indoor:
+      # GTSAM IndoorLocalizationFactor / SmallGICP factor 비활성 (단순 LIO 만 사용).
+      indoor_flag: false
+      grid_map_dir: ""
+      map_pcd_path: ""
+
+    # pcd_save.* 는 localization 모드에서 사용 안 함 (mapping_mode=false 이므로 자동 우회).

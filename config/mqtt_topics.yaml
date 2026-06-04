@@ -2,12 +2,12 @@
 # prefix 는 mqtt.topic_prefix; 토픽 문자열의 {prefix} 가 치환된다.
 
 mqtt:
-  host: rms.bottle-tak.com
-  port: 80
-  use_websocket: true
-  ws_path: /mqtt
-  username: ""
-  password: ""
+  host: 192.168.50.24
+  port: 1883
+  use_websocket: false
+  ws_path: 
+  username: "maumai"
+  password: "mcl1234~"
   keepalive_sec: 10
   topic_prefix: 80f7e77a602ea53d
   topics:
@@ -19,6 +19,8 @@ mqtt:
     init_heading_icp: "{prefix}/init_heading_icp"
     ligo_mode: "{prefix}/ligo_mode"
     nav_prefix: "{prefix}/nav"
+    task_goal: "{prefix}/task/goal"
+    task_status: "{prefix}/task/status"
 
 orchestrator:
   # SIGINT 후 SIGTERM 까지 기다리는 시간(초). mapping 은 PCD/그리드 저장에 시간이 걸리므로 길게.

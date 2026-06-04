@@ -1,0 +1,15 @@
+image: /home/tae/tact/src/LIGO./PCD/myroom/myroom/myroom_grid2d.pgm
+resolution: 0.20000000000000001
+origin: [-50.20000000000000284, -50.00000000000000000, 0.0]
+image_top_left_xy_m: [-50.20000000000000284, 76.60000000000000853]
+negate: 0
+occupied_thresh: 0.65000000000000002
+free_thresh: 0.19600000000000001
+mode: trinary
+source_pcd: /home/tae/tact/src/LIGO./PCD/myroom/myroom/myroom.pcd
+frame_id: camera_init
+grid_type: occupancy_2d_logodds
+z_filter_m: [-0.29999999999999999, 1.19999999999999996]
+width_cells: 737
+height_cells: 634
+num_cells_occupied: 6373

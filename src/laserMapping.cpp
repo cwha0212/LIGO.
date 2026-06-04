@@ -42,6 +42,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -58,13 +59,14 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <atomic>
 #include "li_initialization.h"
-#include <ligo/msg/nmea_heading_align_status.hpp>
+#include <navi/msg/nmea_heading_align_status.hpp>
 
 /** Implemented in li_initialization.cpp (not declared in li_initialization.h to avoid include-order / GTSAM issues). */
 void ligo_try_create_nmea_stamp_diag_publisher(std::shared_ptr<rclcpp::Node> node);
 
 #include "Indoor_Processing.h"
 #include "Indoor_GridMapRegistry.h"
+#include <memory>
 #include <malloc.h>
 #include <fstream>
 #include <cmath>
@@ -102,6 +104,64 @@ bool            last_good_gnss_ecef_valid = false;
 
 /** Set by /ligo/indoor_mode true; main loop snaps LIO→ENU anchor then clears. */
 static std::atomic<bool> g_pending_indoor_topic_snap{false};
+
+// =============================================================================
+// Localization-only (map-based, GNSS-free) helpers
+// =============================================================================
+
+/** Pose received from RViz "2D Pose Estimate" (/initialpose), staged for the main loop. */
+struct PendingInitPose {
+    Eigen::Vector3d pos = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d rot = Eigen::Matrix3d::Identity();
+};
+static std::mutex g_pending_init_pose_mtx;
+static std::atomic<bool> g_pending_init_pose_valid{false};
+static PendingInitPose g_pending_init_pose;
+
+/** Loads a prior PCD from disk into ivox_ for localization-only mode.
+ *  Returns the loaded cloud on success (same points as added to ivox), or nullptr on failure.
+ *  Caller can republish this cloud to RViz on /Laser_map. */
+static PointCloudXYZI::Ptr loadPriorPCDIntoIvox(const std::string &pcd_path)
+{
+    if (pcd_path.empty() || !ivox_)
+        return nullptr;
+    std::error_code ec;
+    if (!std::filesystem::exists(pcd_path, ec))
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"),
+                     "[localization] prior PCD not found: %s", pcd_path.c_str());
+        return nullptr;
+    }
+    PointCloudXYZI::Ptr cloud(new PointCloudXYZI());
+    if (pcl::io::loadPCDFile<PointType>(pcd_path, *cloud) < 0 || cloud->empty())
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("ligo"),
+                     "[localization] failed to load prior PCD (or empty): %s", pcd_path.c_str());
+        return nullptr;
+    }
+    ivox_->AddPoints(cloud->points);
+    RCLCPP_INFO(rclcpp::get_logger("ligo"),
+                "[localization] prior PCD loaded into ivox: %s  points=%zu  voxel_res=%.3f",
+                pcd_path.c_str(), cloud->points.size(),
+                static_cast<double>(ivox_options_.resolution_));
+    return cloud;
+}
+
+/** Publish prior map for RViz visualization on /Laser_map (frame_id = camera_init). */
+static void publish_prior_map_for_rviz(
+    const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pub,
+    const PointCloudXYZI::ConstPtr &cloud,
+    const rclcpp::Time &stamp,
+    const char *frame_id = "camera_init")
+{
+    if (!pub || !cloud || cloud->empty())
+        return;
+    sensor_msgs::msg::PointCloud2 msg;
+    pcl::toROSMsg(*cloud, msg);
+    msg.header.stamp = stamp;
+    msg.header.frame_id = frame_id;
+    pub->publish(msg);
+}
 
 //surf feature in map
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
@@ -220,11 +280,15 @@ void pointBodyLidarToIMU(PointType const * const pi, PointType * const po)
 }
 
 void MapIncremental() {
+    if (!feats_down_world || Nearest_Points.size() != feats_down_world->size())
+    {
+        return;
+    }
     PointVector points_to_add;
-    int cur_pts = feats_down_world->size();
-    points_to_add.reserve(cur_pts);
-    
-    for (size_t i = 0; i < cur_pts; ++i) {
+    const int cur_pts = static_cast<int>(feats_down_world->size());
+    points_to_add.reserve(static_cast<size_t>(cur_pts));
+
+    for (size_t i = 0; i < static_cast<size_t>(cur_pts); ++i) {
         /* decide if need add to map */
         PointType &point_world = feats_down_world->points[i];
         if (!Nearest_Points[i].empty()) {
@@ -268,13 +332,13 @@ void publish_init_map(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Sh
 
 PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI(500000, 1));
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
-static std::vector<Eigen::Vector3d> pcl_wait_ray_origins;
 PointCloudXYZI::Ptr pcl_wait_save_tmp_map(new PointCloudXYZI());
 static std::vector<Eigen::Vector3d> pcl_wait_tmp_map_ray_origins;
 static double g_tmp_map_time_base_sec = std::numeric_limits<double>::quiet_NaN();
 static long long g_tmp_map_bucket_idx = -1;
 static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointCloudXYZI::Ptr &cloud);
 static std::string ligo_replace_pcd_suffix(const std::string &pcd_path, const std::string &suffix);
+static PointCloudXYZI::Ptr ligo_voxel_downsample_for_map_pcd(const PointCloudXYZI::Ptr &in, double leaf_m);
 
 static std::filesystem::path ligo_make_map_root_dir()
 {
@@ -287,7 +351,7 @@ static std::string ligo_make_pcd_save_path()
     return (ligo_make_map_root_dir() / (pcd_save_sub_map_name + ".pcd")).string();
 }
 
-/** ENU/original companion for GICP + grid2d: `{…}/{sub_map_name}_orig.pcd`. */
+/** ENU/original companion for GICP: `{…}/{sub_map_name}_orig.pcd`. */
 static std::string ligo_make_pcd_orig_path(const std::string &base_pcd_path)
 {
     return ligo_replace_pcd_suffix(base_pcd_path, "_orig.pcd");
@@ -499,16 +563,27 @@ static bool ligo_ensure_parent_dir(const std::string &file_path)
     }
 }
 
-/** Map PCD/ECEF export: voxel downsample (leaf = pcd_save.downsample_voxel_m; 0 = off). Grid2D still uses full cloud+rays. */
+/** Deep copy so callers never alias persistent buffers (e.g. pcl_wait_save). */
+static PointCloudXYZI::Ptr ligo_copy_point_cloud(const PointCloudXYZI::Ptr &in)
+{
+    PointCloudXYZI::Ptr copy(new PointCloudXYZI());
+    if (in && !in->empty())
+    {
+        *copy = *in;
+    }
+    return copy;
+}
+
+/** Map PCD/ECEF export: voxel downsample (leaf = pcd_save.downsample_voxel_m; 0 = off). */
 static PointCloudXYZI::Ptr ligo_voxel_downsample_for_map_pcd(const PointCloudXYZI::Ptr &in, double leaf_m)
 {
     if (!in || in->empty())
     {
-        return in;
+        return PointCloudXYZI::Ptr(new PointCloudXYZI());
     }
     if (leaf_m <= 0.0)
     {
-        return in;
+        return ligo_copy_point_cloud(in);
     }
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(in);
@@ -518,7 +593,7 @@ static PointCloudXYZI::Ptr ligo_voxel_downsample_for_map_pcd(const PointCloudXYZ
     vg.filter(*out);
     if (out->empty())
     {
-        return in;
+        return ligo_copy_point_cloud(in);
     }
     return out;
 }
@@ -548,287 +623,46 @@ static bool ligo_try_write_binary_pcd(const std::string &file_path, const PointC
     }
 }
 
-static void save_grid2d_from_cloud_with_rays(
-    const PointCloudXYZI::Ptr &cloud,
-    const std::vector<Eigen::Vector3d> &ray_origins,
-    const std::string &pcd_path,
-    const std::string &frame_id,
-    double resolution_m,
-    int min_points_per_cell = 3,
-    double z_min_m = -1e9,
-    double z_max_m = 1e9,
-    bool add_enu_to_ecef_metadata = false,
-    const Eigen::Matrix3d &R_ecef_enu = Eigen::Matrix3d::Identity(),
-    const Eigen::Vector3d &anchor_ecef_m = Eigen::Vector3d::Zero(),
-    const Eigen::Vector3d &anchor_lla_deg_m = Eigen::Vector3d::Zero(),
-    const std::string &source_pcd_for_yaml = "")
-{
-    if (!cloud || cloud->empty() || resolution_m <= 0.0 || ray_origins.size() != cloud->size())
-    {
-        return;
-    }
-
-    std::unordered_map<uint64_t, uint32_t> cell_counts;
-    cell_counts.reserve(cloud->size() / 2 + 1);
-
-    int min_ix = std::numeric_limits<int>::max();
-    int min_iy = std::numeric_limits<int>::max();
-    int max_ix = std::numeric_limits<int>::min();
-    int max_iy = std::numeric_limits<int>::min();
-
-    for (size_t i = 0; i < cloud->points.size(); ++i)
-    {
-        const auto &pt = cloud->points[i];
-        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
-        {
-            continue;
-        }
-        if (pt.z < z_min_m || pt.z > z_max_m)
-        {
-            continue;
-        }
-
-        const int ix = static_cast<int>(std::floor(static_cast<double>(pt.x) / resolution_m));
-        const int iy = static_cast<int>(std::floor(static_cast<double>(pt.y) / resolution_m));
-        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
-                             static_cast<uint32_t>(iy);
-        cell_counts[key] += 1U;
-
-        min_ix = std::min(min_ix, ix);
-        min_iy = std::min(min_iy, iy);
-        max_ix = std::max(max_ix, ix);
-        max_iy = std::max(max_iy, iy);
-
-        const Eigen::Vector3d &org = ray_origins[i];
-        if (std::isfinite(org.x()) && std::isfinite(org.y()))
-        {
-            const int iox = static_cast<int>(std::floor(org.x() / resolution_m));
-            const int ioy = static_cast<int>(std::floor(org.y() / resolution_m));
-            min_ix = std::min(min_ix, iox);
-            min_iy = std::min(min_iy, ioy);
-            max_ix = std::max(max_ix, iox);
-            max_iy = std::max(max_iy, ioy);
-        }
-    }
-
-    if (cell_counts.empty())
-    {
-        return;
-    }
-
-    const std::string pgm_path = ligo_replace_pcd_suffix(pcd_path, "_grid2d.pgm");
-    const std::string yaml_path = ligo_replace_pcd_suffix(pcd_path, "_grid2d.yaml");
-
-    const int width = max_ix - min_ix + 1;
-    const int height = max_iy - min_iy + 1;
-    if (width <= 0 || height <= 0)
-    {
-        return;
-    }
-    constexpr uint64_t kMaxPgmPixels = 120000000ULL;
-    const uint64_t num_pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
-    if (num_pixels > kMaxPgmPixels)
-    {
-        RCLCPP_WARN(
-            rclcpp::get_logger("ligo"),
-            "[map/grid2d] skip pgm export: image too large (%d x %d = %llu pixels)",
-            width, height, static_cast<unsigned long long>(num_pixels));
-        return;
-    }
-
-    // PGM occupancy encoding:
-    //   0   : occupied
-    //   254 : free
-    //   205 : unknown
-    std::vector<unsigned char> image(static_cast<size_t>(num_pixels), 205);
-
-    auto mark_cell = [&](int ix, int iy, unsigned char value) {
-        const int col = ix - min_ix;
-        const int row = max_iy - iy;
-        if (row >= 0 && row < height && col >= 0 && col < width)
-        {
-            const size_t idx = static_cast<size_t>(row) * static_cast<size_t>(width) + static_cast<size_t>(col);
-            // Keep occupied strongest.
-            if (image[idx] != 0 || value == 0)
-            {
-                image[idx] = value;
-            }
-        }
-    };
-
-    // Ray-cast free cells from sensor origin to hit point endpoint (endpoint excluded).
-    for (size_t i = 0; i < cloud->points.size(); ++i)
-    {
-        const auto &pt = cloud->points[i];
-        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z))
-        {
-            continue;
-        }
-        if (pt.z < z_min_m || pt.z > z_max_m)
-        {
-            continue;
-        }
-        const Eigen::Vector3d &org = ray_origins[i];
-        if (!std::isfinite(org.x()) || !std::isfinite(org.y()))
-        {
-            continue;
-        }
-
-        int x0 = static_cast<int>(std::floor(org.x() / resolution_m));
-        int y0 = static_cast<int>(std::floor(org.y() / resolution_m));
-        const int x1 = static_cast<int>(std::floor(static_cast<double>(pt.x) / resolution_m));
-        const int y1 = static_cast<int>(std::floor(static_cast<double>(pt.y) / resolution_m));
-
-        int dx = std::abs(x1 - x0);
-        int sx = x0 < x1 ? 1 : -1;
-        int dy = -std::abs(y1 - y0);
-        int sy = y0 < y1 ? 1 : -1;
-        int err = dx + dy;
-        while (true)
-        {
-            if (!(x0 == x1 && y0 == y1))
-            {
-                mark_cell(x0, y0, 254);
-            }
-            if (x0 == x1 && y0 == y1)
-            {
-                break;
-            }
-            const int e2 = 2 * err;
-            if (e2 >= dy)
-            {
-                err += dy;
-                x0 += sx;
-            }
-            if (e2 <= dx)
-            {
-                err += dx;
-                y0 += sy;
-            }
-        }
-    }
-
-    size_t occupied_cells = 0;
-    for (const auto &kv : cell_counts)
-    {
-        const uint64_t key = kv.first;
-        const int ix = static_cast<int32_t>(static_cast<uint32_t>(key >> 32));
-        const int iy = static_cast<int32_t>(static_cast<uint32_t>(key & 0xffffffffULL));
-        const uint32_t cnt = kv.second;
-        const int occupied = (cnt >= static_cast<uint32_t>(std::max(1, min_points_per_cell))) ? 1 : 0;
-        if (!occupied)
-        {
-            continue;
-        }
-        occupied_cells++;
-
-        mark_cell(ix, iy, 0);
-    }
-
-    std::ofstream f_pgm(pgm_path, std::ios::binary);
-    if (!f_pgm.is_open())
-    {
-        RCLCPP_WARN(rclcpp::get_logger("ligo"), "failed to open grid pgm: %s", pgm_path.c_str());
-        return;
-    }
-    f_pgm << "P5\n" << width << " " << height << "\n255\n";
-    f_pgm.write(reinterpret_cast<const char *>(image.data()), static_cast<std::streamsize>(image.size()));
-    f_pgm.close();
-
-    std::ofstream f_yaml(yaml_path);
-    if (!f_yaml.is_open())
-    {
-        RCLCPP_WARN(rclcpp::get_logger("ligo"), "failed to open grid yaml: %s", yaml_path.c_str());
-        return;
-    }
-    // Keep high precision in metadata for large-coordinate frames.
-    f_yaml << std::fixed << std::setprecision(17);
-    f_yaml << "image: " << pgm_path << "\n";
-    f_yaml << "resolution: " << resolution_m << "\n";
-    f_yaml << "origin: ["
-           << (static_cast<double>(min_ix) * resolution_m) << ", "
-           << (static_cast<double>(min_iy) * resolution_m) << ", 0.0]\n";
-    f_yaml << "negate: 0\n";
-    f_yaml << "occupied_thresh: 0.65\n";
-    f_yaml << "free_thresh: 0.196\n";
-    f_yaml << "mode: trinary\n";
-    const std::string &source_pcd_path = source_pcd_for_yaml.empty() ? pcd_path : source_pcd_for_yaml;
-    f_yaml << "source_pcd: " << source_pcd_path << "\n";
-    f_yaml << "frame_id: " << frame_id << "\n";
-    f_yaml << "grid_type: occupancy_2d_raycast\n";
-    f_yaml << "min_points_per_cell: " << std::max(1, min_points_per_cell) << "\n";
-    f_yaml << "z_filter_m: [" << z_min_m << ", " << z_max_m << "]\n";
-    f_yaml << "width_cells: " << width << "\n";
-    f_yaml << "height_cells: " << height << "\n";
-    f_yaml << "num_cells_total: " << cell_counts.size() << "\n";
-    f_yaml << "num_cells_occupied: " << occupied_cells << "\n";
-    if (add_enu_to_ecef_metadata)
-    {
-        f_yaml << "ecef_from_enu:\n";
-        f_yaml << "  equation: p_ecef = anchor_ecef_m + R_ecef_enu * p_enu\n";
-        f_yaml << "  anchor_ecef_m: ["
-               << anchor_ecef_m.x() << ", "
-               << anchor_ecef_m.y() << ", "
-               << anchor_ecef_m.z() << "]\n";
-        f_yaml << "  anchor_lla_deg_m: ["
-               << anchor_lla_deg_m.x() << ", "
-               << anchor_lla_deg_m.y() << ", "
-               << anchor_lla_deg_m.z() << "]\n";
-        f_yaml << "  R_ecef_enu_row_major: ["
-               << R_ecef_enu(0, 0) << ", " << R_ecef_enu(0, 1) << ", " << R_ecef_enu(0, 2) << ", "
-               << R_ecef_enu(1, 0) << ", " << R_ecef_enu(1, 1) << ", " << R_ecef_enu(1, 2) << ", "
-               << R_ecef_enu(2, 0) << ", " << R_ecef_enu(2, 1) << ", " << R_ecef_enu(2, 2) << "]\n";
-    }
-    f_yaml.close();
-
-    RCLCPP_INFO(
-        rclcpp::get_logger("ligo"),
-        "[map/grid2d] saved pgm grid: frame=%s cells=%zu occupied=%zu res=%.2f -> %s",
-        frame_id.c_str(),
-        cell_counts.size(),
-        occupied_cells,
-        resolution_m,
-        pgm_path.c_str());
-}
-
 void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pubLaserCloudFullRes)
 {
-    if (scan_pub_en)
+    if (scan_pub_en && feats_down_body && feats_down_world)
     {
-        PointCloudXYZI::Ptr laserCloudFullRes(feats_down_body); // (points_num); // 
-        int size = laserCloudFullRes->points.size();
+        const int size = static_cast<int>(std::min(feats_down_body->size(), feats_down_world->size()));
+        if (size > 0)
+        {
+            PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+            bool use_enu_for_pub = false;
+            use_enu_for_pub = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
+            Eigen::Matrix3d R_local_to_enu = Eigen::Matrix3d::Identity();
+            Eigen::Vector3d t_local_to_enu = Eigen::Vector3d::Zero();
+            if (use_enu_for_pub)
+            {
+                R_local_to_enu = p_nmea->icp_R_local_to_enu;
+                t_local_to_enu = p_nmea->icp_t_local_to_enu;
+            }
 
-        PointCloudXYZI::Ptr   laserCloudWorld(new PointCloudXYZI(size, 1));
-        bool use_enu_for_pub = false;
-        use_enu_for_pub = (NMEA_ENABLE && p_nmea && p_nmea->icp_tf_ready);
-        Eigen::Matrix3d R_local_to_enu = Eigen::Matrix3d::Identity();
-        Eigen::Vector3d t_local_to_enu = Eigen::Vector3d::Zero();
-        if (use_enu_for_pub)
-        {
-            R_local_to_enu = p_nmea->icp_R_local_to_enu;
-            t_local_to_enu = p_nmea->icp_t_local_to_enu;
+            for (int i = 0; i < size; i++)
+            {
+                const Eigen::Vector3d p_local(
+                    feats_down_world->points[i].x,
+                    feats_down_world->points[i].y,
+                    feats_down_world->points[i].z);
+                const Eigen::Vector3d p_pub =
+                    use_enu_for_pub ? (R_local_to_enu * p_local + t_local_to_enu) : p_local;
+                laserCloudWorld->points[i].x = p_pub.x();
+                laserCloudWorld->points[i].y = p_pub.y();
+                laserCloudWorld->points[i].z = p_pub.z();
+                laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
+            }
+            sensor_msgs::msg::PointCloud2 laserCloudmsg;
+            pcl::toROSMsg(*laserCloudWorld, laserCloudmsg);
+
+            laserCloudmsg.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
+            laserCloudmsg.header.stamp.nanosec = static_cast<uint32_t>(
+                std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
+            laserCloudmsg.header.frame_id = use_enu_for_pub ? "map" : "camera_init";
+            pubLaserCloudFullRes->publish(laserCloudmsg);
         }
-        
-        for (int i = 0; i < size; i++)
-        {
-            const Eigen::Vector3d p_local(
-                feats_down_world->points[i].x,
-                feats_down_world->points[i].y,
-                feats_down_world->points[i].z);
-            const Eigen::Vector3d p_pub = use_enu_for_pub ? (R_local_to_enu * p_local + t_local_to_enu) : p_local;
-            laserCloudWorld->points[i].x = p_pub.x();
-            laserCloudWorld->points[i].y = p_pub.y();
-            laserCloudWorld->points[i].z = p_pub.z();
-            laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
-        }
-        sensor_msgs::msg::PointCloud2 laserCloudmsg;
-        pcl::toROSMsg(*laserCloudWorld, laserCloudmsg);
-        
-        laserCloudmsg.header.stamp.sec = static_cast<int32_t>(std::floor(lidar_end_time));
-        laserCloudmsg.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time - std::floor(lidar_end_time)) * 1e9));
-        laserCloudmsg.header.frame_id = use_enu_for_pub ? "map" : "camera_init";
-        pubLaserCloudFullRes->publish(laserCloudmsg);
-        // publish_count -= PUBFRAME_PERIOD;
     }
     
     /**************** save map ****************/
@@ -843,8 +677,6 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
             {
                 if (pcl_wait_save->size() > 0)
                     pcl_wait_save->clear();
-                if (!pcl_wait_ray_origins.empty())
-                    pcl_wait_ray_origins.clear();
                 scan_wait_num = 0;
             }
             else
@@ -879,7 +711,6 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                 }
 
                 *pcl_wait_save += *laserCloudWorld;
-                pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_enu);
                 {
                     const PointCloudXYZI::Ptr laserCloudEcef =
                         ligo_convert_enu_cloud_to_ecef(laserCloudWorld, R_ecef_enu, first_gps_ecef);
@@ -893,59 +724,63 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
                     cout << "current scan saved to " << all_points_dir << " (ENU)" << endl;
                     PointCloudXYZI::Ptr pcd_save =
                         ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
-                    if (ligo_save_enu_ecef_map_pair(all_points_dir, pcd_save, R_ecef_enu, first_gps_ecef))
-                    {
-                        save_grid2d_from_cloud_with_rays(
-                            pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
-                            3, -1e9, 1e9, true, R_ecef_enu, first_gps_ecef, first_gps_lla,
-                            ligo_make_pcd_orig_path(all_points_dir));
-                    }
+                    ligo_save_enu_ecef_map_pair(all_points_dir, pcd_save, R_ecef_enu, first_gps_ecef);
                     pcl_wait_save->clear();
-                    pcl_wait_ray_origins.clear();
                     scan_wait_num = 0;
                 }
             }
         }
         else
         {
-            int size = points_num;
-            PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
-            const Eigen::Vector3d origin_local = kf_output.x_.pos;
-
-            for (int i = 0; i < size; i++)
+            // NMEA off: points_num is only updated by traj_manager->AddGraphPose (NMEA path).
+            // Use per-scan downsampled feature count for map accumulation.
+            if (!feats_down_world || feats_down_world->empty())
             {
-                laserCloudWorld->points[i].x = feats_down_world->points[i].x;
-                laserCloudWorld->points[i].y = feats_down_world->points[i].y;
-                laserCloudWorld->points[i].z = feats_down_world->points[i].z;
-                laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
+                // skip
             }
-
-            *pcl_wait_save += *laserCloudWorld;
-            pcl_wait_ray_origins.insert(pcl_wait_ray_origins.end(), static_cast<size_t>(size), origin_local);
-            if (pcd_tmp_map_enable)
+            else
             {
-                static bool warned_tmp_map_non_enu = false;
-                if (!warned_tmp_map_non_enu)
+                const int size = static_cast<int>(feats_down_world->size());
+                PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI());
+                laserCloudWorld->points.resize(static_cast<size_t>(size));
+
+                for (int i = 0; i < size; i++)
                 {
-                    warned_tmp_map_non_enu = true;
-                    RCLCPP_WARN(
-                        rclcpp::get_logger("ligo"),
-                        "[tmp_map] skipped: ECEF anchor not ready (NMEA/icp_tf_required).");
+                    laserCloudWorld->points[i].x = feats_down_world->points[i].x;
+                    laserCloudWorld->points[i].y = feats_down_world->points[i].y;
+                    laserCloudWorld->points[i].z = feats_down_world->points[i].z;
+                    laserCloudWorld->points[i].intensity = feats_down_world->points[i].intensity;
                 }
-            }
 
-            static int scan_wait_num = 0;
-            scan_wait_num++;
-            if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
-            {
-                string all_points_dir = ligo_make_pcd_save_path();
-                cout << "current scan saved to " << all_points_dir << endl;
-                PointCloudXYZI::Ptr pcd_save =
-                    ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
-                ligo_try_write_binary_pcd(all_points_dir, pcd_save);
-                pcl_wait_save->clear();
-                pcl_wait_ray_origins.clear();
-                scan_wait_num = 0;
+                if (init_map)
+                {
+                    *pcl_wait_save += *laserCloudWorld;
+                }
+
+                if (pcd_tmp_map_enable)
+                {
+                    static bool warned_tmp_map_non_enu = false;
+                    if (!warned_tmp_map_non_enu)
+                    {
+                        warned_tmp_map_non_enu = true;
+                        RCLCPP_WARN(
+                            rclcpp::get_logger("ligo"),
+                            "[tmp_map] skipped: ECEF anchor not ready (NMEA/icp_tf_required).");
+                    }
+                }
+
+                static int scan_wait_num = 0;
+                scan_wait_num++;
+                const string map_path = ligo_make_pcd_save_path();
+                if (pcl_wait_save->size() > 0 && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
+                {
+                    cout << "current scan saved to " << map_path << endl;
+                    PointCloudXYZI::Ptr pcd_save =
+                        ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
+                    ligo_try_write_binary_pcd(map_path, pcd_save);
+                    pcl_wait_save->clear();
+                    scan_wait_num = 0;
+                }
             }
         }
     }
@@ -953,7 +788,11 @@ void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>:
 
 void publish_frame_body(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pubLaserCloudFull_body)
 {
-    int size = feats_undistort->points.size();
+    if (!feats_undistort || feats_undistort->empty())
+    {
+        return;
+    }
+    const int size = static_cast<int>(feats_undistort->points.size());
     PointCloudXYZI::Ptr laserCloudIMUBody(new PointCloudXYZI(size, 1));
 
     for (int i = 0; i < size; i++)
@@ -1250,20 +1089,20 @@ void publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPat
 
 /** Publishes LIO↔ENU initial heading / local→ENU alignment status (TIME-PAIR or indoor reloc). */
 static void publish_heading_align_status(
-    const rclcpp::Publisher<ligo::msg::NmeaHeadingAlignStatus>::SharedPtr &pub,
+    const rclcpp::Publisher<navi::msg::NmeaHeadingAlignStatus>::SharedPtr &pub,
     double lidar_end_time_sec)
 {
     if (flg_exit || !rclcpp::ok() || !pub || !NMEA_ENABLE || !p_nmea)
     {
         return;
     }
-    ligo::msg::NmeaHeadingAlignStatus msg;
+    navi::msg::NmeaHeadingAlignStatus msg;
     const double sec_d = std::floor(lidar_end_time_sec);
     msg.header.stamp.sec = static_cast<int32_t>(sec_d);
     msg.header.stamp.nanosec = static_cast<uint32_t>(std::round((lidar_end_time_sec - sec_d) * 1e9));
     msg.header.frame_id = "map";
 
-    using M = ligo::msg::NmeaHeadingAlignStatus;
+    using M = navi::msg::NmeaHeadingAlignStatus;
     if (!p_nmea->icp_tf_ready)
     {
         if (p_nmea->init_start_set || !p_nmea->init_pos_buf.empty())
@@ -1746,7 +1585,7 @@ int main(int argc, char** argv)
     if (mapping_mode)
     {
         RCLCPP_INFO(node->get_logger(),
-                    "[pcd] mapping saves overwrite %s/%s/%s/%s.pcd (ECEF) + %s_orig.pcd (ENU) + grid2d",
+                    "[pcd] mapping saves overwrite %s/%s/%s/%s.pcd (ECEF) + %s_orig.pcd (ENU)",
                     map_folder.c_str(),
                     pcd_save_map_name.c_str(),
                     pcd_save_sub_map_name.c_str(),
@@ -1859,12 +1698,74 @@ int main(int argc, char** argv)
     auto pubLaserCloudFullRes = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", qos_pub);
     auto pubLaserCloudFullRes_body = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", qos_pub);
     auto pubLaserCloudEffect = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", qos_pub);
-    auto pubLaserCloudMap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/Laser_map", qos_pub);
+    // In localization-only mode publish the prior map with latched QoS so RViz can subscribe
+    // late and still receive it.
+    const rclcpp::QoS qos_laser_map =
+        localization_only ? rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable() : qos_pub;
+    auto pubLaserCloudMap =
+        node->create_publisher<sensor_msgs::msg::PointCloud2>("/Laser_map", qos_laser_map);
+
+    // Localization-only: preload prior PCD into ivox after /Laser_map publisher exists,
+    // then publish the map once for RViz visualization (latched QoS keeps it for new subscribers).
+    if (localization_only)
+    {
+        PointCloudXYZI::Ptr prior_cloud = loadPriorPCDIntoIvox(localization_prior_pcd_path);
+        if (prior_cloud && !prior_cloud->empty())
+        {
+            init_map = true;
+            publish_prior_map_for_rviz(pubLaserCloudMap, prior_cloud, node->now(), "camera_init");
+            RCLCPP_INFO(node->get_logger(),
+                        "[localization] prior map published on /Laser_map (frame_id=camera_init, latched). "
+                        "Set RViz Fixed Frame to camera_init, then send /initialpose via 2D Pose Estimate. "
+                        "MapIncremental will be skipped (ivox stays as prior map).");
+        }
+        else
+        {
+            RCLCPP_ERROR(node->get_logger(),
+                         "[localization] prior PCD preload failed; falling back to standard LIO (mapping will accumulate).");
+            localization_only = false;
+        }
+    }
+
     rclcpp::QoS qos_latched = rclcpp::QoS(1).transient_local();
     auto pubIndoorMapCloud  = node->create_publisher<sensor_msgs::msg::PointCloud2>("/indoor/map_cloud", qos_latched);
     auto pubIndoorMap2d =
         node->create_publisher<nav_msgs::msg::OccupancyGrid>("/indoor/map_2d", qos_latched);
     auto pubIndoorAlignedScan = node->create_publisher<sensor_msgs::msg::PointCloud2>("/indoor/aligned_scan", qos_pub);
+    // /initialpose subscriber: RViz "2D Pose Estimate". In localization-only mode this is
+    // the way to provide the initial pose of the robot in the prior-PCD frame ("camera_init").
+    auto subInitialPose = node->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        "/initialpose", rclcpp::QoS(10),
+        [node](const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
+            if (!localization_only)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node->get_logger(), *node->get_clock(), 5000,
+                    "[localization] /initialpose received but localization.enable=false; ignoring");
+                return;
+            }
+            PendingInitPose p;
+            p.pos << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z;
+            Eigen::Quaterniond q(msg->pose.pose.orientation.w,
+                                 msg->pose.pose.orientation.x,
+                                 msg->pose.pose.orientation.y,
+                                 msg->pose.pose.orientation.z);
+            if (q.norm() < 1e-6) q = Eigen::Quaterniond::Identity();
+            q.normalize();
+            p.rot = q.toRotationMatrix();
+            {
+                std::lock_guard<std::mutex> lk(g_pending_init_pose_mtx);
+                g_pending_init_pose = p;
+            }
+            g_pending_init_pose_valid.store(true, std::memory_order_release);
+            const double yaw_deg = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180.0 / M_PI;
+            RCLCPP_WARN(node->get_logger(),
+                        "[localization] /initialpose staged: pos=(%.3f, %.3f, %.3f) yaw=%.2f deg "
+                        "(frame_id=%s)",
+                        p.pos.x(), p.pos.y(), p.pos.z(), yaw_deg,
+                        msg->header.frame_id.c_str());
+        });
+
     // Subscriber for dynamic indoor/outdoor mode toggle
     auto subIndoorFlag = node->create_subscription<std_msgs::msg::Bool>(
         "/ligo/indoor_mode", 10,
@@ -1912,13 +1813,13 @@ int main(int argc, char** argv)
     auto pubNmeaAlignedPath = node->create_publisher<nav_msgs::msg::Path>("/nmea_aligned_path", qos_pub);
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pubNmeaLioErrorXy;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pubNmea03mDiag;
-    rclcpp::Publisher<ligo::msg::NmeaHeadingAlignStatus>::SharedPtr pubHeadingAlignStatus;
+    rclcpp::Publisher<navi::msg::NmeaHeadingAlignStatus>::SharedPtr pubHeadingAlignStatus;
     if (NMEA_ENABLE)
     {
         pubNmeaLioErrorXy = node->create_publisher<std_msgs::msg::Float64>("/ligo/nmea_lio_error_xy", qos_pub);
         pubNmea03mDiag = node->create_publisher<std_msgs::msg::Float64MultiArray>("/ligo/nmea_03m_diag", qos_pub);
         pubHeadingAlignStatus =
-            node->create_publisher<ligo::msg::NmeaHeadingAlignStatus>("/ligo/nmea_heading_align_status", qos_pub);
+            node->create_publisher<navi::msg::NmeaHeadingAlignStatus>("/ligo/nmea_heading_align_status", qos_pub);
         RCLCPP_INFO(node->get_logger(),
                     "NMEA heading align status: topic=/ligo/nmea_heading_align_status "
                     "(STATUS: 0=UNALIGNED 1=COLLECTING 2=LOCKED; SOURCE: 0=NONE 1=TIME_PAIR 2=INDOOR_RELOC)");
@@ -1968,6 +1869,32 @@ int main(int argc, char** argv)
         rclcpp::spin_some(node);
         if(sync_packages(Measures, p_nmea->nmea_msg)) 
         {
+            // Localization-only: apply pending /initialpose to kf_output (no NMEA/ENU required).
+            if (localization_only && g_pending_init_pose_valid.load(std::memory_order_acquire))
+            {
+                PendingInitPose ip;
+                {
+                    std::lock_guard<std::mutex> lk(g_pending_init_pose_mtx);
+                    ip = g_pending_init_pose;
+                }
+                g_pending_init_pose_valid.store(false, std::memory_order_release);
+                state_out = state_output();
+                state_out.pos = ip.pos;
+                state_out.rot = ip.rot;
+                state_out.vel = Eigen::Vector3d::Zero();
+                state_out.gravity << VEC_FROM_ARRAY(gravity);
+                state_out.acc = -state_out.rot.transpose() * state_out.gravity;
+                kf_output.x_ = state_out;
+                reset_cov_output(kf_output.P_);
+                p_imu->imu_need_init_ = false;
+                p_imu->after_imu_init_ = true;
+                init_map = true;
+                flg_first_scan = true;
+                RCLCPP_WARN(node->get_logger(),
+                            "[localization] /initialpose applied: pos=(%.3f,%.3f,%.3f) "
+                            "(IMU init skipped, prior PCD retained in ivox)",
+                            ip.pos.x(), ip.pos.y(), ip.pos.z());
+            }
             if (g_pending_indoor_topic_snap.load(std::memory_order_acquire) && !flg_reset && !mapping_mode)
             {
                 if (ligo_fused_lio_pose_enu(indoor_reloc_pos_enu, indoor_reloc_rot_enu))
@@ -3057,7 +2984,9 @@ int main(int argc, char** argv)
             }
 
             /*** add the feature points to map ***/
-            if(feats_down_size > 4)
+            // In localization-only mode the prior PCD already populates ivox; do not accumulate
+            // new lidar points (would slowly drift the prior map / mix it with live scans).
+            if(feats_down_size > 4 && !localization_only)
             {
                 MapIncremental();
             }
@@ -3247,13 +3176,7 @@ after_sync_packages:
             ligo_voxel_downsample_for_map_pcd(pcl_wait_save, pcd_save_downsample_voxel_m);
         if (saved_in_enu)
         {
-            if (ligo_save_enu_ecef_map_pair(all_points_dir, pcd_save, R_ecef_enu, anchor_ecef_m))
-            {
-                save_grid2d_from_cloud_with_rays(
-                    pcl_wait_save, pcl_wait_ray_origins, all_points_dir, "enu", pcd_save_grid2d_resolution_m,
-                    3, -1e9, 1e9, true, R_ecef_enu, anchor_ecef_m, anchor_lla_deg_m,
-                    ligo_make_pcd_orig_path(all_points_dir));
-            }
+            ligo_save_enu_ecef_map_pair(all_points_dir, pcd_save, R_ecef_enu, anchor_ecef_m);
         }
         else
         {

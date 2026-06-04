@@ -34,6 +34,8 @@ _DEFAULT_MQTT: Dict[str, Any] = {
         "init_heading_icp": "{prefix}/init_heading_icp",
         "ligo_mode": "{prefix}/ligo_mode",
         "nav_prefix": "{prefix}/nav",
+        "task_goal": "{prefix}/task/goal",
+        "task_status": "{prefix}/task/status",
     },
 }
 
@@ -77,7 +79,7 @@ def _candidate_paths() -> list[Path]:
         paths.append(Path(env).expanduser())
     if get_package_share_directory:
         try:
-            paths.append(Path(get_package_share_directory("ligo")) / "config" / "mqtt_topics.yaml")
+            paths.append(Path(get_package_share_directory("navi")) / "config" / "mqtt_topics.yaml")
         except Exception:
             pass
     here = Path(__file__).resolve().parent
