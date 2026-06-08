@@ -131,7 +131,7 @@ class LigoMqttBridge(Node):
         self.declare_parameter("mqtt.username", str(_m.get("username", "") or ""))
         self.declare_parameter("mqtt.password", str(_m.get("password", "") or ""))
         self.declare_parameter("mqtt.nmea_enable", True)
-        # hdl_localization 등 local(x,y,z) 모드: position MQTT 최소 발행 간격(초). 1.0 ≈ 1Hz
+        # local(x,y,z) 모드: position·heading(yaw_deg) MQTT 최소 발행 간격(초). 1.0 ≈ 1Hz
         self.declare_parameter("mqtt.local_position_min_interval_sec", 1.0)
         # paho-mqtt connect()의 keepalive는 정수(초)만 허용 — float 전달 시 "required argument is not an integer"
         self.declare_parameter("mqtt.keepalive_sec", _ka_i)
@@ -168,6 +168,7 @@ class LigoMqttBridge(Node):
         _pos_iv = float(self.get_parameter("mqtt.local_position_min_interval_sec").value)
         self._local_position_min_interval_sec = _pos_iv if _pos_iv > 0.0 else 1.0
         self._last_local_position_publish_unix = 0.0
+        self._last_local_heading_publish_unix = 0.0
         ka = int(self.get_parameter("mqtt.keepalive_sec").value)
         self._mqtt_keepalive_sec = ka if ka >= 1 else 60
 
@@ -291,7 +292,7 @@ class LigoMqttBridge(Node):
             self.get_logger().info("MQTT connected")
             # 재연결 직후 현재 캐시 상태 1회 재발행.
             self._publish_position(force=True)
-            self._publish_heading()
+            self._publish_heading(force=True)
             self._publish_gps()
             self._publish_icp()
             self._publish_ligo_mode()
@@ -549,10 +550,19 @@ class LigoMqttBridge(Node):
             {"lat": self.lat, "lon": self.lon, "coordinate_type": "wgs84"},
         )
 
-    def _publish_heading(self) -> None:
+    def _publish_heading(self, *, force: bool = False) -> None:
         if not self.nmea_enable:
             if self.local_heading_deg is None:
                 return
+            if not force:
+                now = time.time()
+                if (
+                    self._last_local_heading_publish_unix > 0.0
+                    and (now - self._last_local_heading_publish_unix)
+                    < self._local_position_min_interval_sec
+                ):
+                    return
+                self._last_local_heading_publish_unix = now
             self._publish_json(
                 self.mqtt_topic_heading,
                 {"yaw_deg": round(self.local_heading_deg, 2)},

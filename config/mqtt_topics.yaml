@@ -2,12 +2,18 @@
 # prefix 는 mqtt.topic_prefix; 토픽 문자열의 {prefix} 가 치환된다.
 
 mqtt:
-  host: 192.168.50.24
-  port: 1883
-  use_websocket: false
-  ws_path: 
-  username: "maumai"
-  password: "mcl1234~"
+  host: rms.bottle-tak.com
+  port: 80
+  use_websocket: true
+  ws_path: /mqtt
+  username: ""
+  password: ""
+  # host: 192.168.50.24
+  # port: 1883
+  # use_websocket: false
+  # ws_path: 
+  # username: "maumai"
+  # password: "mcl1234~"
   keepalive_sec: 10
   topic_prefix: 80f7e77a602ea53d
   topics:

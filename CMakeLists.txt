@@ -223,6 +223,12 @@ foreach(script_path IN LISTS ligo_python_scripts)
   endif()
 endforeach()
 if(ligo_existing_python_scripts)
+  # --symlink-install 시 install 대상이 소스 scripts/ 를 가리키므로 실행 비트 필요 (ros2 launch).
+  foreach(script_path IN LISTS ligo_existing_python_scripts)
+    file(CHMOD "${CMAKE_CURRENT_SOURCE_DIR}/${script_path}"
+         PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                     GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+  endforeach()
   install(PROGRAMS
     ${ligo_existing_python_scripts}
     DESTINATION lib/${PROJECT_NAME}
